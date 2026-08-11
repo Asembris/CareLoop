@@ -477,6 +477,87 @@ Two decisions from the spike bind here: `Model.structured_output` is an async ge
 
 ---
 
+## Session 4 — 2026-08-11
+
+### Environment dependency — AVG intercepts TLS, and the exclusions are load-bearing
+
+**Read this before diagnosing any provider connection failure.** It cost most of an hour once and
+should cost nothing again.
+
+AVG Antivirus's Web/Mail Shield performs TLS interception on this development machine. It
+terminates HTTPS, re-signs the certificate with `CN=AVG Web/Mail Shield Root`, and presents that to
+the client. The root is installed in the **Windows ROOT store**, so anything verifying against the
+OS store — browsers, `ssl.create_default_context()` — is satisfied and shows no symptom.
+`botocore`, `requests` and `httpx` verify against **certifi's** bundle, which does not contain it.
+
+The symptom is therefore confusing: every AWS call fails identically, at every endpoint, with
+
+```
+botocore.exceptions.SSLError: SSL validation failed for https://sts.us-east-1.amazonaws.com/
+[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate
+```
+
+and it looks like a credentials or quota problem. It is neither. `sts:GetCallerIdentity` fails too,
+and that needs no Bedrock permission at all — **a failure this uniform means the request never left
+the machine**. The tell is that the error is `SSLError` and not `AccessDeniedException`,
+`ThrottlingException` or `ValidationException`, which are the three that would actually say
+something about AWS.
+
+**Resolution in force: per-host exclusions in AVG, not a disabled shield and not a patched trust
+store.** Configured under Général → Exceptions:
+
+| Exception |
+|---|
+| `http://*.amazonaws.com/*` and `https://*.amazonaws.com/*` |
+| `http://api.openai.com/*` and `https://api.openai.com/*` |
+| `http://integrate.api.nvidia.com/*` and `https://integrate.api.nvidia.com/*` |
+
+Verified after the change by a credential-free TLS handshake — `sts` and `bedrock` present
+`CN=Amazon RSA 2048 M01`/`M04`, `api.openai.com` presents `CN=WE1, O=Google Trust Services`, and no
+endpoint presents the AVG root. `integrate.api.nvidia.com` presents an Amazon-issued certificate
+because NVIDIA fronts it on AWS; that is genuine, not interception.
+
+Two alternatives were considered and **rejected**: appending the AVG root to certifi (works, but
+means every API key traverses AVG's process in plaintext, which is a trust decision this project
+should not make casually) and `verify=False` (never, in a codebase whose thesis is authority and
+provenance). If a new provider host is added later, it needs its own exclusion pair or it will fail
+exactly this way.
+
+The exclusions live in AVG's configuration, not in the repo. A different machine, or this one after
+an AVG reinstall, will reproduce the failure from scratch. That is the reason this note exists.
+
+### Step 0 — Bedrock reachability, before any harness was built
+
+Run against a dedicated IAM user `careloop-bench` (account `265243686715`, no console access,
+one inline policy granting `bedrock:InvokeModel`, `bedrock:InvokeModelWithResponseStream`,
+`bedrock:ListFoundationModels`, `bedrock:ListInferenceProfiles`, `sts:GetCallerIdentity`).
+
+**All seven checks pass. There is no zero-quota problem; no AWS support case is needed.**
+
+| Check | Result |
+|---|---|
+| `sts:GetCallerIdentity` | OK — `arn:aws:iam::265243686715:user/careloop-bench` |
+| `bedrock:ListFoundationModels` | OK — 119 models in `us-east-1`, 22 in the Nova family |
+| `bedrock:ListInferenceProfiles` | OK — 63 profiles, 6 Nova, all `ACTIVE` |
+| `Converse` (non-streaming) | OK — 1239 ms, 9 tokens |
+| `ConverseStream` (streaming) | OK — 625 ms total, first token 502 ms |
+| `BedrockModel.stream()` | OK — 891 ms |
+| `BedrockModel.structured_output()` | OK — 1196 ms, correct typed instance |
+
+The streaming path specifically works, which matters because Strands streams by default.
+`structured_output` works too, which is the benchmark's disqualifying metric — Nova Lite clears it.
+Latencies here are single cold samples and are not benchmark data.
+
+**Invariant confirmed, not assumed:** `us.amazon.nova-lite-v1:0` and `us.amazon.nova-micro-v1:0`
+are both `ACTIVE` inference profiles, so the spike's region-prefix finding holds against a real
+account.
+
+**New: `amazon.nova-2-lite-v1:0` exists**, with `us.` **and** `global.` profiles both `ACTIVE`. A
+`global.` prefix is not one of the three (`us`/`eu`/`apac`) the spike found in
+`prefix_inference_map`. Neither fact was known when the candidate list was drawn up.
+
+---
+
 ## Open decisions
 
 Carry these forward. Nothing here is blocking commit 5.

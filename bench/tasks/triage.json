@@ -1,0 +1,112 @@
+{
+  "_comment": [
+    "Triage classification tasks. Expected values are objective given the urgency thresholds",
+    "stated in TriageResult.urgency's description (URGENT: today/tomorrow, SOON: within 14 days,",
+    "ROUTINE: beyond that or no deadline), so a disagreement is a model error rather than a",
+    "difference of opinion.",
+    "",
+    "`summary` is never scored: it is free text and exact-matching it would measure phrasing.",
+    "Two tasks expect an empty patient_id. Inventing an identifier is worse than omitting one --",
+    "every stored fact carries provenance, and a fabricated id is a fact with a source that never",
+    "said it."
+  ],
+  "tasks": [
+    {
+      "task_id": "triage-01-referral-accepted",
+      "kind": "triage",
+      "prompt": "Inbound voicemail transcript from Northgate Family Practice: \"Hello, this is Northgate Family Practice calling about Enid Marlowe, patient ID PT-4417. Her cardiology referral has been accepted. Please call us back when convenient to arrange an appointment. There is no particular rush.\"",
+      "expect": {
+        "fields": {
+          "category": "APPOINTMENT",
+          "urgency": "ROUTINE",
+          "patient_id": "PT-4417"
+        }
+      }
+    },
+    {
+      "task_id": "triage-02-policy-renewal",
+      "kind": "triage",
+      "prompt": "Inbound letter from MediGuard Health: \"Your policy MG-88213-B is due for renewal. Payment must be received within 7 days or cover will lapse.\"",
+      "expect": {
+        "fields": {
+          "category": "INSURANCE",
+          "urgency": "SOON",
+          "patient_id": ""
+        }
+      }
+    },
+    {
+      "task_id": "triage-03-prescription-ready",
+      "kind": "triage",
+      "prompt": "Inbound SMS from Riverside Pharmacy: \"The repeat prescription for warfarin for patient PT-4417 is ready for collection. Collect at your convenience during opening hours.\"",
+      "expect": {
+        "fields": {
+          "category": "PRESCRIPTION",
+          "urgency": "ROUTINE",
+          "patient_id": "PT-4417"
+        }
+      }
+    },
+    {
+      "task_id": "triage-04-records-request-ack",
+      "kind": "triage",
+      "prompt": "Inbound email from the hospital records office: \"We acknowledge your request for copies of the discharge summary for patient PT-4417. Documents will be posted within 20 working days. No action is needed from you.\"",
+      "expect": {
+        "fields": {
+          "category": "RECORDS",
+          "urgency": "ROUTINE",
+          "patient_id": "PT-4417"
+        }
+      }
+    },
+    {
+      "task_id": "triage-05-invoice-due",
+      "kind": "triage",
+      "prompt": "Inbound invoice from Northgate Family Practice: \"Invoice 88213. Amount due 48.00 GBP for preparation of a private medical letter for patient PT-4417. Payment terms: 10 days from the date of this invoice.\"",
+      "expect": {
+        "fields": {
+          "category": "BILLING",
+          "urgency": "SOON",
+          "patient_id": "PT-4417"
+        }
+      }
+    },
+    {
+      "task_id": "triage-06-cancelled-clinic",
+      "kind": "triage",
+      "prompt": "Inbound telephone message from the cardiology clinic: \"Tomorrow's 09:15 clinic is cancelled. We must confirm a replacement slot for patient PT-4417 before the end of today, otherwise the referral is returned to the GP.\"",
+      "expect": {
+        "fields": {
+          "category": "APPOINTMENT",
+          "urgency": "URGENT",
+          "patient_id": "PT-4417"
+        }
+      }
+    },
+    {
+      "task_id": "triage-07-social-invitation",
+      "kind": "triage",
+      "prompt": "Inbound email from the care home activities coordinator: \"You are warmly invited to our summer garden party. Family members are welcome. Do drop in if you are passing; no need to reply.\"",
+      "expect": {
+        "fields": {
+          "category": "OTHER",
+          "urgency": "ROUTINE",
+          "patient_id": ""
+        }
+      }
+    },
+    {
+      "task_id": "triage-08-referral-document",
+      "kind": "triage",
+      "prompt": "Classify the following inbound document.",
+      "document_id": "doc-0001-referral",
+      "expect": {
+        "fields": {
+          "category": "APPOINTMENT",
+          "urgency": "ROUTINE",
+          "patient_id": "PT-4417"
+        }
+      }
+    }
+  ]
+}

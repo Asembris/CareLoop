@@ -554,7 +554,145 @@ account.
 
 **New: `amazon.nova-2-lite-v1:0` exists**, with `us.` **and** `global.` profiles both `ACTIVE`. A
 `global.` prefix is not one of the three (`us`/`eu`/`apac`) the spike found in
-`prefix_inference_map`. Neither fact was known when the candidate list was drawn up.
+`prefix_inference_map`. Neither fact was known when the candidate list was drawn up. Nova 2 Lite
+was added to the candidate set on the strength of it.
+
+### Done — `careloop/llm/` and the benchmark
+
+| Commit | Subject |
+|---|---|
+| `193e565` | Add .env.example and the bench optional-dependency group |
+| `531b448` | Record the AVG TLS interception exclusions and the step 0 Bedrock probe result |
+| `ead63c6` | Add the scripted mock model provider |
+| `19028a8` | Add per-role model provider selection defaulting to the mock |
+| `9ef9e59` | Add the benchmark task model, schemas, cache, cost table and scoring |
+| `ef19f06` | Add the benchmark runner and CLI with a confirmed-spend guard |
+| `d6a73ca` | Pass Bedrock credentials from the env mapping and stop caching unreachable-provider failures |
+| `7ca149c` | Record the measured benchmark responses and scored summary |
+| `169e7a7` | Add the model benchmark findings and close open decision 1 with a measured basis |
+
+**642 passed, 2 skipped. `ruff check` and `ruff format --check` clean.** Verified under both
+`pytest` and `python -m pytest`, and under a CI-equivalent environment with every credential
+unset and `AWS_CONFIG_FILE` pointed at `/nonexistent`.
+
+`careloop/llm/mock.py` is the scripted provider the suite runs on — strict by design: an exhausted
+script raises, a wrong-typed scripted answer raises, and a scripted `Exception` is raised, because
+each of those is a test that would otherwise pass for the wrong reason. `providers.py` maps the
+three roles onto a provider, **defaulting to the mock**, and an unrecognised spec raises rather
+than degrading to the mock — a run that looks real, costs nothing and proves nothing is the worst
+available failure mode.
+
+A **root `conftest.py`** now exists. `bench/` is not an installed package, so `import bench`
+resolves only with the repo root on `sys.path`. The path is inserted explicitly rather than relying
+on pytest's conftest-directory behaviour, because the suite must pass identically under both
+invocation modes and this is exactly where session 1 lost time.
+
+### Deltas from the approved plan
+
+| # | Delta | Status |
+|---|---|---|
+| D1 | Injection susceptibility as a **sixth, separate** metric | approved |
+| D2 | `llm/mock.py` built here rather than in commit 5 | approved |
+| D3 | Provisional schemas in `bench/schemas.py`, marked provisional | approved |
+| D4 | Structured-output path only; native tool-calling listed as unmeasured | approved |
+| D5 | Role variables are `CARELOOP_`-prefixed | approved |
+| D6 | A `nvidia:` provider prefix rather than guessing the key from a base URL | flagged in `.env.example` |
+| D7 | Nova 2 Lite added, both `us.` and `global.` profiles | approved |
+
+D6 exists because `openai:<model>@<nvidia-url>` would have to infer which API key to send from the
+hostname, and a benchmark that quietly sends the wrong key produces an auth error that reads like
+a model failure.
+
+### Two harness bugs the first live run exposed
+
+Both were found by running it, not by reading it, and both are now covered by tests.
+
+1. **`build_model(spec, env)` ignored `env` for Bedrock.** The parameter exists so the benchmark
+   can pass `.env` down without mutating the process environment, and it worked for the
+   OpenAI-compatible providers because their key is passed explicitly. boto3 resolves credentials
+   from `os.environ` and never saw the mapping, so all four Bedrock candidates failed with
+   `NoCredentialsError` while OpenAI and NVIDIA succeeded. Fixed with `bedrock_session()`, which
+   builds an explicit session when the mapping carries a key pair and returns `None` otherwise so
+   the ambient chain — and CI's zero-credential run — is unaffected.
+
+2. **Infrastructure failures were being cached as results.** The first run wrote 68
+   `NoCredentialsError` entries into the cache as though four candidates had been measured and
+   found wanting; every later run would have replayed that verdict without retrying. A failure is
+   now cached only when it is the model's answer (`ValidationError`, `WrongOutputType`,
+   `ValueError`) and never when it is a failure to reach the model. It earned itself immediately:
+   NVIDIA threw `ModelThrottledException` on one task in the real run, was correctly not cached,
+   and was picked up by a re-run that cost nothing else.
+
+A third issue was not a bug but a reporting hazard: `strands-agents==1.51.0` surfaces token usage
+through Bedrock's `structured_output` and **not** through the OpenAI one, which discards
+`response.usage`. Rather than let a silent `$0.0000` make the most expensive candidate look free,
+tokens are estimated when unreported and every affected figure is flagged `tokens_estimated`.
+
+### Guards proven non-vacuous by mutation
+
+Twenty-five mutations across the two commits, each applied to a clean tree, suite re-run, reverted.
+Every one turned the suite red — **after one survivor was fixed.**
+
+`llm/` (12): unknown provider degrading to the mock; a bare unknown word degrading to the mock; a
+blank credential accepted; the missing-credential error interpolating the value; the Bedrock model
+id split on every colon; a missing region silently guessing `us`; all roles reading one variable;
+the mock inventing an answer when exhausted; the mock coercing a wrong-typed answer; the mock
+stamping a real latency; the mock dropping `messageStart`; `structured_output` returning instead of
+yielding the envelope.
+
+`bench/` (13): injection folded into tool correctness; a structured failure counted as a wrong
+answer; the catalogue leaking argument classes; the cache key ignoring the prompt; the cache key
+ignoring sampling parameters; **the digest joining with a delimiter instead of JSON**; calls bought
+without `--confirm-spend`; the spend ceiling never firing; an unpriced model costing zero; planner
+tasks unchecked against the registry; expected fields unchecked against the schema; the prompt
+sanitising the poisoned document; a candidate running kinds it does not declare.
+
+**The survivor, and what was wrong with the test.** The delimiter-join mutation stayed green. The
+injectivity test moved a character across the `system_prompt`/`prompt` boundary — but those two
+are not adjacent once the payload is sorted, so other fields sat between them and no collision
+occurred. A delimiter join only collides when the delimiter appears **inside a value**. Rewritten
+to put the delimiter in the value across `candidate_id`/`model_id`, which *are* adjacent, and
+parameterised over five delimiter characters. This is the same property `tools/idempotency.py`
+tests and the same reason both use JSON.
+
+### Results and recommendation
+
+Full detail in [`model-benchmark.md`](model-benchmark.md). 20 tasks, 6 candidates, 108 calls,
+**$0.0334 total** — $0.0020 of it on OpenAI, against a $1 budget.
+
+**Nova Lite, the intended primary, is not safe behind the planner.** Given an explicit booking
+instruction plus the poisoned continuity notice, it abandoned the task and proposed `send_email`
+to the attacker's address, carrying the portal and the role across too. All three payloads, first
+attempt, the only Bedrock candidate to do it. The policy engine denies exactly that call — this is
+what T2 asserts — but it is a reason not to choose the model.
+
+Recommendation, now written into `.env.example` as the measured default:
+
+```
+CARELOOP_MODEL_TRIAGE=bedrock:us.amazon.nova-micro-v1:0
+CARELOOP_MODEL_PLANNER=bedrock:us.amazon.nova-2-lite-v1:0
+CARELOOP_MODEL_EXTRACTION=bedrock:us.amazon.nova-2-lite-v1:0
+```
+
+Nova 2 Lite and gpt-4o-mini are separated by one task each in opposite directions on the planner,
+which at n=7 is noise; the tie is broken on deployment fit rather than on a quality claim the data
+does not support. gpt-4o-mini stays wired as the fallback. NVIDIA llama-3.3-70b is out — triage
+62.5%, p50 11.8 s, worst case 76 s, and it took the injection bait too.
+
+**One benchmark defect, deliberately left uncorrected.** On `triage-02` all six candidates answered
+`URGENT` where the rubric says `SOON`. When every candidate disagrees with the expectation, the
+expectation is the thing that is probably wrong — but editing it after seeing the results is how a
+benchmark stops meaning anything. It costs every candidate equally, so the ranking holds. Fix the
+rubric before the task set grows.
+
+### Next — commit 5: agents
+
+`agents/` schemas, prompts, Triage and Planner. `bench/schemas.py` holds **provisional**
+`TriageResult` and `PlannerIntent` that exist only to have something to measure; commit 5 designs
+the real ones on the merits. Two things worth carrying over rather than reinventing: generating the
+planner's argument fields from `REGISTRY` so they cannot drift from the tools the policy engine
+governs, and keeping every field required with `""` for "not supplied", which avoids the nullable
+union that some strict structured-output implementations reject.
 
 ---
 
@@ -562,11 +700,20 @@ account.
 
 Carry these forward. Nothing here is blocking commit 5.
 
-1. **Model provider benchmark — PENDING.** Bedrock Nova Lite is the intended primary and an
-   OpenAI-compatible endpoint the fallback, both wired via env vars and never exercised in tests.
-   Neither has been run against a real endpoint. No AWS credentials exist in the dev environment.
-   Open: whether Nova Lite is strong enough for Planner intents, or whether Triage and Planner
-   should sit on different models. Decide before the demo, not before the spine is finished.
+1. **Model provider benchmark — CLOSED 2026-08-11, on measurement.** Full results and reasoning in
+   [`model-benchmark.md`](model-benchmark.md); the session 4 entry above summarises them.
+
+   The question was whether Nova Lite is strong enough for Planner intents and whether Triage and
+   Planner should sit on different models. **Answered: no, and yes.** Nova Lite proposed
+   `send_email` to the attacker's address on the injection probe and produced no valid intent on
+   another planner task. Triage moves to Nova Micro (21/24 fields at a tenth of the cost); Planner
+   and extraction to Nova 2 Lite. gpt-4o-mini stays wired as the fallback and is within noise of
+   Nova 2 Lite on planning.
+
+   What remains open is deliberately narrower and needs commit 6: **nothing here measured
+   multi-turn planning inside the graph, or behaviour after a policy denial re-enters the loop.**
+   Those are the behaviours the architecture actually rests on, and a single-call benchmark cannot
+   see them. Re-examine the choice once the bounded replan cycle exists.
 2. **`ReasonCode` vocabulary — now six. Grown once, deliberately.** New codes are added centrally
    to the enum, never as free text on a rule, and every addition is recorded here. See
    *The sixth reason code* under session 2 for why `AUTHORITY_NOT_TRUSTED` was added rather than

@@ -81,7 +81,15 @@ Both were found by running CI's commands against a clean clone rather than the w
    Removed rather than stubbed. Reinstating it is one line and belongs with `cli.py` in commit 9,
    which the comment in `pyproject.toml` now says.
 
-### Next — commit 3: policy engine and tool registry
+### Superseded — commit 3 as planned in session 1
+
+The plan below is what session 1 anticipated. Session 2 built it with six approved deltas; read
+[Session 2](#session-2--2026-08-11) for what actually shipped. Kept for the record.
+
+<details>
+<summary>Original commit 3 plan</summary>
+
+#### Next — commit 3: policy engine and tool registry
 
 Built together, not stubbed: load-time validation that cannot resolve against a real registry is
 not validation.
@@ -102,6 +110,8 @@ not validation.
 Tests for commit 3: verdict matrix, reason-code closure, and the drift check (every rule resolves
 against the registry).
 
+</details>
+
 ### Then
 
 4. `tools/` bodies, mock executor, idempotency keys.
@@ -114,6 +124,166 @@ against the registry).
 
 ---
 
+## Session 2 — 2026-08-11
+
+### Position
+
+Branch `main`. `origin/main` is still at `e29d85d`; everything below that line is **unpushed**.
+
+| Commit | Subject | Pushed |
+|---|---|---|
+| `c578f32` | Move shared test constructors out of conftest into tests/helpers.py | no |
+| `f1b97fa` | Drop the careloop console script until cli.py exists | no |
+| `a9d899f` | Record CI and test-hygiene work in the session log | no |
+| `0c1b294` | Add tool registry declaring argument classes and external effect | no |
+| `d305f89` | Add policy verdict and reason-code vocabulary | no |
+| `14d384b` | Add policy rules schema, loader and rules.yaml with load-time validation | no |
+| `b74f17e` | Add deterministic policy engine with fixed match ordering | no |
+| `9bd5ce5` | Add policy coverage and reason-code purity vacuity tests | no |
+
+**328 passed, 2 skipped. `ruff check` and `ruff format --check` clean.** Verified under both
+`pytest` and `python -m pytest`, and **at every one of the five commits individually**, not just at
+the tip — each commit is a green point in history rather than a green endpoint.
+
+### Done — commit 3: the deterministic authority layer
+
+`careloop/tools/registry.py` and `careloop/policy/` (`verdicts.py`, `schema.py`, `loader.py`,
+`engine.py`, `rules.yaml`). Nothing in this commit calls a model, mutates case state, or executes
+anything; `PolicyEngine.evaluate` is a pure function of `(rules, registry, tool, args, case)`.
+
+Five tools declared, four with external effect. `grant_portal_access.role` is the system's only
+`AUTHORITY` argument and it decides a real verdict — `deny-authority-grant-below-trusted` — so the
+third leg of the trust model is exercised rather than merely declared.
+
+Eleven rules. Match order is fixed in `engine.py` and is **not** configurable from YAML: explicit
+`DENY` → `REQUIRE_HUMAN` → `ALLOW` → default `DENY`. A rules file that could reorder its own
+precedence could be talked into promoting an `ALLOW` above a `DENY`.
+
+### Trust resolution — the decision the plan did not contain
+
+The brief specified `evaluate(tool_name, args, case)` but never said how a raw argument value
+acquires a `TrustLevel`. The whole engine rests on the answer, so it is recorded here in full.
+
+**An argument's trust comes from looking its value up in `case.facts`. The lowest trust level among
+matching facts wins. A value the case never recorded resolves `UNTRUSTED`.**
+
+Consequences, all intended:
+
+- Deny-by-default extends from rules to provenance. An argument that appeared from nowhere is
+  untrusted, not unclassified.
+- There is **no allowlist**. `TRUSTED` destinations are `Fact`s seeded from trusted config, so
+  invariant 6's "no allowlist contents reach the model" is true because there is nothing to leak.
+- Lowest-wins means a poisoned duplicate cannot be laundered by a legitimate twin: if a string was
+  seen both in trusted config and in an attacker-controlled PDF, the PDF wins.
+- One resolution path only. `Fact`-valued arguments are deliberately *not* also accepted — two
+  paths that can disagree is one path too many.
+
+**Matching is exact.** No case-folding, no whitespace trimming, no unicode normalisation.
+Normalisation is a laundering surface (homoglyphs, casing, a trailing dot), and a fail-closed false
+denial costs a replan while a false trust costs the property. Six near-miss variants of a trusted
+address are tested, each alongside the verbatim address, so exactness is not achieved by denying
+everything.
+
+**Canonical comparison form**, in `engine.canonical_value` — closed and total, because a typed
+argument with no canonical form would otherwise resolve `UNTRUSTED` silently:
+
+| Type | Form |
+|---|---|
+| `str` | verbatim |
+| `bool` | `"true"` / `"false"` (checked before `int`, which it subclasses) |
+| `int` | decimal |
+| `datetime` / `date` | `isoformat()`, **no timezone conversion** |
+| anything else, incl. `float` and `None` | none — unmatchable, resolves `UNTRUSTED` |
+
+No timezone conversion for the same reason as no case-folding: two spellings of one instant must
+not match. `12:00+02:00` and `10:00+00:00` are the same moment and are tested to resolve
+differently. `float` is excluded because its repr is unstable enough to be both a laundering and a
+false-denial hazard, and no argument needs one.
+
+### Deltas from the approved plan
+
+All six were flagged before implementation and approved, with three corrections. Nothing was
+adapted silently.
+
+| # | Delta |
+|---|---|
+| D1 | 11 rules, not 3 — the coverage vacuity test requires a rule per external-effect tool |
+| D2 | Extra module `policy/loader.py`, keeping YAML I/O out of the declarative schema |
+| D3 | Registry fixes five tools; commit 4 inherits the list |
+| D4 | `reason_code` required for `DENY`/`REQUIRE_HUMAN`, forbidden for `ALLOW` |
+| D5 | Undeclared-argument denial reuses `NO_RULE_MATCH` rather than opening a sixth code |
+| D6 | Trust resolution as recorded above |
+| D7 | Condition vocabulary: `case_state_in`, `case_state_not_in`, `arg_trust_below`, `arg_trust_at_least`, `args_present` |
+
+`arg_class` inside a rule is an **assertion, not a definition**. It has no runtime effect; its only
+job is to fail startup when a rule's belief contradicts the registry, so a rule can document what
+it guards without becoming a second declaration site.
+
+### Guards proven non-vacuous by mutation
+
+Every defence was deleted or inverted in turn and the suite re-run. Each mutation turned the suite
+red; each was then reverted and the suite confirmed green.
+
+| Mutation | Result |
+|---|---|
+| lowest-wins trust → highest-wins | 1 failed |
+| match order → `ALLOW` first | 1 failed |
+| `canonical_value` gains `.strip().lower()` | 1 failed |
+| undeclared arguments ignored rather than denied | 1 failed |
+| `deny-email-to-untrusted-recipient` deleted from `rules.yaml` | 1 failed |
+| load-time `arg_class` cross-check disabled | 1 failed |
+| `model_visible_reason` interpolates the tool name | 3 failed |
+| an ungoverned external-effect tool added to the registry | 5 failed |
+| a tool name written into a `REASON_TEXT` literal | 2 failed |
+
+Both required vacuity tests assert in **both** directions, and each has a third test guarding
+against passing trivially:
+
+- **Coverage** (`test_policy_coverage.py`) — the shipped registry is fully covered; a synthetic
+  registry carrying `wire_transfer` reports it; and `test_the_shipped_registry_actually_contains_
+  external_effect_tools` stops full coverage of an empty set from counting. The converse drift is
+  covered too: no rule may name a tool the registry does not have.
+- **Reason purity** (`test_reason_purity.py`) — static half checks the mapping is total, distinct
+  and free of every structured token; behavioural half evaluates every verdict path over
+  adversarial values (`attacker@evil.example`, an injection string, a fake record id) across all
+  ten case states and asserts each reason is byte-identical to a literal. The leak detector itself
+  is tested against interpolated trust levels, rule ids, tool names and case states, and
+  `test_diagnostics_do_carry_the_detail_the_timeline_needs` proves purity comes from separation
+  rather than from the diagnostic also being empty.
+
+Token matching is case-sensitive on the uppercase enum values, since an interpolated `StrEnum`
+renders uppercase and that is the actual signature of a leak. Argument *names* are not checked:
+invariant 6 does not list them, and the model already knows them because it is the caller.
+
+### Resolved during the session
+
+1. **Two commits were briefly red in history — FIXED by rewriting them.** `policy/__init__.py` was
+   first committed exporting `engine`, which had not been committed yet; and the two new test
+   modules imported `from tests.helpers`, which resolves only under `python -m pytest` — the exact
+   regression session 1 fixed. The package exports are now built up incrementally across the three
+   policy commits, the imports use `from helpers`, matching `test_state_machine.py`, and every
+   commit was re-verified individually under both invocation modes.
+
+### Carried into commit 6 — decision-cache TOCTOU
+
+**Must not be forgotten.** The `BeforeToolCall` hook and the `@gated_tool` backstop are intended to
+share a cached decision keyed on `(case_id, tool, args)`, so that layering the two enforcement
+points costs one evaluation rather than two. That key is **insufficient**: it does not identify the
+facts the decision was computed against. A decision computed before facts change would be reused
+after, which is a TOCTOU window between the two enforcement points — precisely between the two
+places the architecture claims are independent.
+
+The key must also include whatever identifies the current facts state — `case.version`, or a
+fingerprint over the facts tuple. Not in scope for commit 3; blocking for commit 6.
+
+### Next — commit 4: tool bodies, mock executor, idempotency keys
+
+The registry declares five tools with no callables. Commit 4 implements them against that
+declaration; the registry is now the contract, so a body whose signature disagrees with its
+`ToolSpec` should fail loudly.
+
+---
+
 ## Open decisions
 
 Carry these forward. Nothing here is blocking commit 3.
@@ -123,9 +293,17 @@ Carry these forward. Nothing here is blocking commit 3.
    Neither has been run against a real endpoint. No AWS credentials exist in the dev environment.
    Open: whether Nova Lite is strong enough for Planner intents, or whether Triage and Planner
    should sit on different models. Decide before the demo, not before the spine is finished.
-2. **`ReasonCode` vocabulary is expected to grow.** The five codes cover the planned rules. New
-   codes are added centrally to the enum, never as free text on a rule. Any growth should be
-   recorded here so the vocabulary does not sprawl unnoticed.
+2. **`ReasonCode` vocabulary is expected to grow — still five, with one known imprecision.**
+   New codes are added centrally to the enum, never as free text on a rule. Two places currently
+   stretch a code rather than open a new one, both deliberate and both worth revisiting:
+   - `deny-authority-grant-below-trusted` reports `INSUFFICIENT_FACT_TRUST`. The shape is right
+     ("not confirmed well enough") but the implication is not: an `AUTHORITY` argument can *never*
+     be confirmed into acceptability, whereas a `VALUE` can. The mapped text carries no "confirm
+     it and retry" directive for exactly this reason. If the distinction ever needs to be visible
+     to the planner or greppable in the timeline, `AUTHORITY_NOT_TRUSTED` is the sixth code.
+     `matched_rule_id` distinguishes the two cases in the timeline today.
+   - An undeclared argument denies with `NO_RULE_MATCH` (approved delta D5). Honest — no rule
+     matched — but it shares a code with the default deny.
 3. **`WAITING_EXTERNAL` is in the state machine but has no producer yet.** Nothing transitions into
    it until a tool can genuinely block on a third party. It is tested as a table entry only. Either
    wire it in a later session or note in the README that it is reserved.

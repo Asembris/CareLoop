@@ -21,8 +21,9 @@ dev = [
     "ruff>=0.6",
 ]
 
-[project.scripts]
-careloop = "careloop.cli:main"
+# No [project.scripts] yet. The `careloop` console script comes back with careloop/cli.py in
+# commit 9; declaring it now installs a launcher that fails on invocation for anyone following
+# the README.
 
 [build-system]
 requires = ["setuptools>=68"]

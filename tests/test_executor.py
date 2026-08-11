@@ -132,10 +132,12 @@ class TestReplay:
     def test_results_are_byte_identical_across_a_replay(
         self, executor: MockExternalExecutor
     ) -> None:
-        """No clock and no randomness, asserted rather than assumed.
+        """No clock and no randomness.
 
-        A timestamp or a random id in a result would make every replay differ from its original
-        and reduce T3 to "roughly the same effect".
+        A behavioural check, and on its own a weak one: on a platform whose clock ticks every
+        15ms, two results built microseconds apart carry the same timestamp and this passes with
+        the property gone. ``TestNoClockAndNoRandomness`` in ``test_tool_callables.py`` is the
+        guard that actually holds the line, on the source rather than on two samples of it.
         """
         key = email_key()
         first = executor.invoke("send_email", EMAIL_ARGS, key)

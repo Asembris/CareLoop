@@ -215,9 +215,26 @@ class TestPlannerIntentIsAProposalAndNothingMore:
 
 
 class TestPlannerIntentRejectsWhatTheRegistryDoesNotDeclare:
-    def test_an_unregistered_tool_is_rejected_at_the_schema_boundary(self):
+    def test_an_unregistered_tool_is_rejected(self):
         with pytest.raises(ValidationError):
             intent("wire_transfer")
+
+    def test_the_schema_the_provider_is_given_enumerates_the_registry_and_nothing_else(self):
+        """Rejection at the *schema* boundary, which is a different thing from rejection at all.
+
+        The JSON schema is what the provider is handed, so an enumerated ``tool_name`` constrains
+        what the model can emit rather than catching it afterwards. Constructing an intent with an
+        unregistered name is refused either way — the validator would catch it — so the assertion
+        above cannot tell the two apart, and a widened annotation costs a wasted call and a replan
+        without failing a single test. This is the one that notices.
+        """
+        field = PlannerIntent.model_json_schema()["properties"]["tool_name"]
+        assert set(field["enum"]) == set(TOOL_NAMES)
+
+    def test_a_tool_added_to_the_registry_widens_the_enumeration(self):
+        generated = build_planner_intent(synthetic_registry())
+        field = generated.model_json_schema()["properties"]["tool_name"]
+        assert set(field["enum"]) == set(TOOL_NAMES) | {"wire_transfer"}
 
     def test_an_undeclared_argument_is_rejected_at_the_construction_boundary(self):
         with pytest.raises(ValidationError):

@@ -571,9 +571,13 @@ was added to the candidate set on the strength of it.
 | `7ca149c` | Record the measured benchmark responses and scored summary |
 | `169e7a7` | Add the model benchmark findings and close open decision 1 with a measured basis |
 
-**642 passed, 2 skipped. `ruff check` and `ruff format --check` clean.** Verified under both
-`pytest` and `python -m pytest`, and under a CI-equivalent environment with every credential
-unset and `AWS_CONFIG_FILE` pointed at `/nonexistent`.
+**650 passed, 2 skipped locally; 648 passed, 4 skipped in a clean `.[dev]`-only virtualenv.**
+`ruff check` and `ruff format --check` clean in both. Verified under `pytest` and
+`python -m pytest`, with every credential unset and `AWS_CONFIG_FILE` pointed at `/nonexistent`.
+
+The two environments differ by exactly the two `pytest.importorskip` tests that need the `openai`
+package. That difference is now deliberate and asserted; it was not, and it broke CI once — see
+*CI went red on push* below.
 
 `careloop/llm/mock.py` is the scripted provider the suite runs on — strict by design: an exhausted
 script raises, a wrong-typed scripted answer raises, and a scripted `Exception` is raised, because
@@ -627,6 +631,36 @@ A third issue was not a bug but a reporting hazard: `strands-agents==1.51.0` sur
 through Bedrock's `structured_output` and **not** through the OpenAI one, which discards
 `response.usage`. Rather than let a silent `$0.0000` make the most expensive candidate look free,
 tokens are estimated when unreported and every affected figure is flagged `tokens_estimated`.
+
+### CI went red on push — and the local verification was the thing at fault
+
+Ten tests in `test_llm_providers.py` failed on CI with `ModuleNotFoundError: No module named
+'openai'`, all passing locally. **`openai` is in the `bench` extra and deliberately not in `dev`,
+which is what CI installs** — that separation is the point, so CI was right and the tests were
+wrong.
+
+The cause in the code: `build_model` imported `strands.models.openai` *before* checking
+credentials, so guards about **CareLoop's own decisions** — which key variable each provider uses,
+that a blank key counts as missing, that the error never echoes the value — could not run without
+a package they have nothing to do with.
+
+Fixed by extracting **`openai_client_args(spec, env)`**, a pure function that resolves key and
+endpoint and imports nothing. `build_model` now resolves first and imports second. The consequence
+is that *more* runs on CI than before, not fewer: every credential and endpoint guard now executes
+in a tree with no provider SDK, and only two assertions that genuinely need the SDK class are
+behind `pytest.importorskip`.
+
+**The real fault was in how "CI-equivalent" was verified.** The earlier check scrubbed environment
+variables but reused the local virtualenv, which had the `bench` extra installed — so it proved
+the zero-secret half of CI's contract and silently assumed the zero-provider-SDK half. Both halves
+are now checked, and the procedure is: build a fresh venv, install **`.[dev]` only**, run `ruff
+check`, `ruff format --check` and the suite under both invocation modes. Result: **648 passed,
+4 skipped** (the 2 terminal-state skips plus the 2 `importorskip` construction tests).
+
+`TestResolutionNeedsNoProviderPackage` is the regression guard. It blocks the `openai` import
+inside the test via `builtins.__import__`, reproducing CI's tree on a developer machine that has
+the extra installed, and it is proven non-vacuous: restoring the import-before-resolve ordering
+turns it red locally.
 
 ### Guards proven non-vacuous by mutation
 

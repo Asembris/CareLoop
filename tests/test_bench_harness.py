@@ -10,12 +10,14 @@ never merges into tool correctness, and that no call is bought without explicit 
 
 from __future__ import annotations
 
+import ast
 import json
 import pathlib
 from typing import ClassVar
 
 import pytest
 
+import bench.schemas as bench_schemas
 from bench.cache import CachedCall, ResponseCache, call_key
 from bench.candidates import BY_ID, CANDIDATES, resolve
 from bench.catalogue import render_catalogue
@@ -520,3 +522,52 @@ class TestTheShippedTaskSet:
             if value == ""
         ]
         assert len(empties) >= 3, "nothing tests that the model declines to invent a value"
+
+
+class TestTheBenchmarkIsADeadEndDependency:
+    """``bench/`` may import ``careloop``. ``careloop`` may never import ``bench``.
+
+    The schemas and catalogue under ``bench/`` are frozen historical artifacts — the exact shapes
+    the 2026-08-11 measurement was taken against. A library import of one would make a recorded
+    measurement into a live dependency, and the first edit to either would silently change both
+    what CareLoop runs and what the benchmark claims to have measured.
+    """
+
+    @staticmethod
+    def imported_modules(path: pathlib.Path) -> set[str]:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        found: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                found.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                found.add(node.module)
+        return found
+
+    def careloop_modules(self) -> list[pathlib.Path]:
+        import careloop
+
+        return sorted(pathlib.Path(careloop.__file__).parent.rglob("*.py"))
+
+    def test_no_module_under_careloop_imports_bench(self):
+        offenders = sorted(
+            path.name
+            for path in self.careloop_modules()
+            if any(
+                name == "bench" or name.startswith("bench.") for name in self.imported_modules(path)
+            )
+        )
+        assert offenders == []
+
+    def test_the_sweep_is_not_vacuous(self, tmp_path):
+        rogue = tmp_path / "rogue.py"
+        rogue.write_text("from bench.schemas import TriageResult\n", encoding="utf-8")
+        assert any(
+            name == "bench" or name.startswith("bench.") for name in self.imported_modules(rogue)
+        )
+
+    def test_the_dependency_runs_the_other_way(self):
+        """And that the sweep is not passing because the two packages never meet."""
+        assert "careloop.tools.registry" in self.imported_modules(
+            pathlib.Path(bench_schemas.__file__)
+        )

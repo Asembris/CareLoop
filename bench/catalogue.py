@@ -1,8 +1,16 @@
 """Rendering the tool catalogue the planner is shown.
 
+FROZEN, like ``bench.schemas``: this is the rendering the 2026-08-11 benchmark measured against.
+CareLoop's live renderer is :func:`careloop.agents.prompts.render_catalogue`, which sorts arguments
+by name where this one keeps declaration order. Kept separate for the same reason the schemas are —
+the rendered catalogue is part of the system prompt and therefore part of every cache key, so
+editing it here discards the recorded responses rather than updating them.
+
 Built from :data:`careloop.tools.registry.REGISTRY` rather than written out by hand. A hand-written
 catalogue drifts from the registry, and the moment it does the benchmark is scoring the model
-against tools the policy engine does not govern.
+against tools the policy engine does not govern. The live registry is also why the cache is only
+replayable while the registry is unchanged: add a tool and every key moves, whatever this module
+does.
 
 Argument **classes** are deliberately not rendered. The planner is told what arguments exist, not
 which of them are ``DESTINATION`` or ``AUTHORITY``: invariant 6 keeps the trust vocabulary out of

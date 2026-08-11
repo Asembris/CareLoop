@@ -21,6 +21,19 @@ dev = [
     "ruff>=0.6",
 ]
 
+# The model-provider benchmark under bench/ only. Deliberately not part of `dev`: CI installs
+# `.[dev]` and must stay able to run with zero secrets and no provider SDK reachable, so the
+# packages that can talk to a paid endpoint are not in the path the default suite installs.
+bench = [
+    # The `openai` extra of the same pinned release, not a looser range. Restating the exact pin
+    # means installing the extra can never quietly move strands-agents off the version the spike
+    # in docs/spike-findings.md was verified against.
+    "strands-agents[openai]==1.51.0",
+    # Reads .env into the environment for bench/run.py. Nothing under careloop/ or tests/ imports
+    # it — configuration reaches the library as environment variables, never as a file it loads.
+    "python-dotenv>=1.0",
+]
+
 # No [project.scripts] yet. The `careloop` console script comes back with careloop/cli.py in
 # commit 9; declaring it now installs a launcher that fails on invocation for anyone following
 # the README.

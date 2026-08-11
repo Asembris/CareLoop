@@ -1,0 +1,165 @@
+{
+  "calls": {
+    "10e8f14f7a0fc7a2021cdfbab251a9c7fc1e1eb4b51faf00770b724662c97ac9": {
+      "candidate_id": "nova-micro",
+      "error_message": "",
+      "error_type": "",
+      "input_tokens": 735,
+      "key": "10e8f14f7a0fc7a2021cdfbab251a9c7fc1e1eb4b51faf00770b724662c97ac9",
+      "latency_ms": 1284.0453999999681,
+      "model_id": "us.amazon.nova-micro-v1:0",
+      "ok": true,
+      "output": {
+        "category": "INSURANCE",
+        "patient_id": "",
+        "summary": "Policy renewal for MediGuard Health policy MG-88213-B is due within 7 days.",
+        "urgency": "URGENT"
+      },
+      "output_tokens": 53,
+      "provider_latency_ms": 692.0,
+      "task_id": "triage-02-policy-renewal",
+      "tokens_estimated": false
+    },
+    "1a87f408ff0bfa0b1cb7c6a4769fd5067a59d14d77dd6e57fa611b2394e8e8ab": {
+      "candidate_id": "nova-micro",
+      "error_message": "",
+      "error_type": "",
+      "input_tokens": 744,
+      "key": "1a87f408ff0bfa0b1cb7c6a4769fd5067a59d14d77dd6e57fa611b2394e8e8ab",
+      "latency_ms": 1103.7944999998217,
+      "model_id": "us.amazon.nova-micro-v1:0",
+      "ok": true,
+      "output": {
+        "category": "RECORDS",
+        "patient_id": "PT-4417",
+        "summary": "Request for copies of discharge summary acknowledged by hospital records office.",
+        "urgency": "ROUTINE"
+      },
+      "output_tokens": 49,
+      "provider_latency_ms": 462.0,
+      "task_id": "triage-04-records-request-ack",
+      "tokens_estimated": false
+    },
+    "29a873c5d4fe990b78ea8d5304485042cb89797344beffbbc910b72d5e3669b1": {
+      "candidate_id": "nova-micro",
+      "error_message": "",
+      "error_type": "",
+      "input_tokens": 749,
+      "key": "29a873c5d4fe990b78ea8d5304485042cb89797344beffbbc910b72d5e3669b1",
+      "latency_ms": 1042.8021000000172,
+      "model_id": "us.amazon.nova-micro-v1:0",
+      "ok": true,
+      "output": {
+        "category": "APPOINTMENT",
+        "patient_id": "PT-4417",
+        "summary": "Confirm a replacement slot for cancelled 09:15 clinic appointment tomorrow.",
+        "urgency": "URGENT"
+      },
+      "output_tokens": 53,
+      "provider_latency_ms": 493.0,
+      "task_id": "triage-06-cancelled-clinic",
+      "tokens_estimated": false
+    },
+    "4050e915107fd95f036ea391547f761697b66f664295702f2a494ffe443b62b7": {
+      "candidate_id": "nova-micro",
+      "error_message": "",
+      "error_type": "",
+      "input_tokens": 736,
+      "key": "4050e915107fd95f036ea391547f761697b66f664295702f2a494ffe443b62b7",
+      "latency_ms": 1313.6873999999352,
+      "model_id": "us.amazon.nova-micro-v1:0",
+      "ok": true,
+      "output": {
+        "category": "OTHER",
+        "patient_id": "",
+        "summary": "Invitation to summer garden party from care home activities coordinator.",
+        "urgency": "ROUTINE"
+      },
+      "output_tokens": 42,
+      "provider_latency_ms": 615.0,
+      "task_id": "triage-07-social-invitation",
+      "tokens_estimated": false
+    },
+    "47d6a0c1041e42a3fb53b173d8aff4e8ec3498322545406b917c4f616518c7a4": {
+      "candidate_id": "nova-micro",
+      "error_message": "",
+      "error_type": "",
+      "input_tokens": 754,
+      "key": "47d6a0c1041e42a3fb53b173d8aff4e8ec3498322545406b917c4f616518c7a4",
+      "latency_ms": 1132.4311000000762,
+      "model_id": "us.amazon.nova-micro-v1:0",
+      "ok": true,
+      "output": {
+        "category": "BILLING",
+        "patient_id": "PT-4417",
+        "summary": "Payment due for preparation of a private medical letter.",
+        "urgency": "SOON"
+      },
+      "output_tokens": 46,
+      "provider_latency_ms": 496.0,
+      "task_id": "triage-05-invoice-due",
+      "tokens_estimated": false
+    },
+    "4f90ce5f6f09cb27204bc6b3fe448924747181f3a63433e79a965e7cde32169b": {
+      "candidate_id": "nova-micro",
+      "error_message": "",
+      "error_type": "",
+      "input_tokens": 731,
+      "key": "4f90ce5f6f09cb27204bc6b3fe448924747181f3a63433e79a965e7cde32169b",
+      "latency_ms": 1202.4541000000681,
+      "model_id": "us.amazon.nova-micro-v1:0",
+      "ok": true,
+      "output": {
+        "category": "PRESCRIPTION",
+        "patient_id": "PT-4417",
+        "summary": "The repeat prescription for warfarin for patient PT-4417 is ready for collection.",
+        "urgency": "ROUTINE"
+      },
+      "output_tokens": 55,
+      "provider_latency_ms": 536.0,
+      "task_id": "triage-03-prescription-ready",
+      "tokens_estimated": false
+    },
+    "a8ccaaed98fcd72cc5090a27334b66daefc343c0210b3ec86acd3e0db4bcaba9": {
+      "candidate_id": "nova-micro",
+      "error_message": "",
+      "error_type": "",
+      "input_tokens": 755,
+      "key": "a8ccaaed98fcd72cc5090a27334b66daefc343c0210b3ec86acd3e0db4bcaba9",
+      "latency_ms": 1713.622100000066,
+      "model_id": "us.amazon.nova-micro-v1:0",
+      "ok": true,
+      "output": {
+        "category": "OTHER",
+        "patient_id": "PT-4417",
+        "summary": "Northgate Family Practice accepted Enid Marlowe's cardiology referral and wants to arrange an appointment.",
+        "urgency": "ROUTINE"
+      },
+      "output_tokens": 55,
+      "provider_latency_ms": 960.0,
+      "task_id": "triage-01-referral-accepted",
+      "tokens_estimated": false
+    },
+    "e853ce22a2bf3390a1de02a44d316811b425a7256e834dd4ed1d1098fd470eab": {
+      "candidate_id": "nova-micro",
+      "error_message": "",
+      "error_type": "",
+      "input_tokens": 837,
+      "key": "e853ce22a2bf3390a1de02a44d316811b425a7256e834dd4ed1d1098fd470eab",
+      "latency_ms": 1120.369799999935,
+      "model_id": "us.amazon.nova-micro-v1:0",
+      "ok": true,
+      "output": {
+        "category": "APPOINTMENT",
+        "patient_id": "PT-4417",
+        "summary": "Referral for specialist assessment for cardiology review.",
+        "urgency": "SOON"
+      },
+      "output_tokens": 46,
+      "provider_latency_ms": 452.0,
+      "task_id": "triage-08-referral-document",
+      "tokens_estimated": false
+    }
+  },
+  "candidate_id": "nova-micro"
+}

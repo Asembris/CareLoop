@@ -1,0 +1,53 @@
+{
+  "_comment": [
+    "Published token prices, USD per 1,000,000 tokens. Data, not code, so a price change is a",
+    "data edit and shows up in a diff.",
+    "",
+    "Every entry carries where the number came from and when it was read. Bedrock prices are",
+    "region-specific: these are us-east-1, which is the region the benchmark runs in. us-west-1",
+    "is materially more expensive for Nova 2 Lite ($0.39 / $3.21), so a rerun in another region",
+    "must not reuse this table."
+  ],
+  "currency": "USD",
+  "unit": "per_1m_tokens",
+  "as_of": "2026-08-11",
+  "region": "us-east-1",
+  "rates": {
+    "us.amazon.nova-lite-v1:0": {
+      "input": 0.06,
+      "output": 0.24,
+      "source": "https://www.cloudzero.com/blog/amazon-bedrock-pricing/",
+      "confidence": "third-party; cross-checked against the stated 5.0x ratio to Nova 2 Lite on https://aws-bedrock-explorer.com/models/amazon/nova-2-lite-v1-0"
+    },
+    "us.amazon.nova-micro-v1:0": {
+      "input": 0.035,
+      "output": 0.14,
+      "source": "https://www.cloudzero.com/blog/amazon-bedrock-pricing/",
+      "confidence": "third-party; cross-checked against the stated 8.6x ratio to Nova 2 Lite (0.30/8.6 = 0.0349)"
+    },
+    "us.amazon.nova-2-lite-v1:0": {
+      "input": 0.3,
+      "output": 2.5,
+      "source": "https://openrouter.ai/amazon/nova-2-lite-v1",
+      "confidence": "third-party, two independent sources agree (OpenRouter and aws-bedrock-explorer.com, us-east-1 baseline)"
+    },
+    "global.amazon.nova-2-lite-v1:0": {
+      "input": 0.3,
+      "output": 2.5,
+      "source": "https://openrouter.ai/amazon/nova-2-lite-v1",
+      "confidence": "assumed equal to the us. profile; the global profile's price was not separately published and this is flagged as an assumption in docs/model-benchmark.md"
+    },
+    "gpt-4o-mini": {
+      "input": 0.15,
+      "output": 0.6,
+      "source": "https://developers.openai.com/api/docs/pricing",
+      "confidence": "first-party (OpenAI's own pricing page)"
+    },
+    "meta/llama-3.3-70b-instruct": {
+      "input": 0.0,
+      "output": 0.0,
+      "source": "https://build.nvidia.com",
+      "confidence": "the build.nvidia.com developer endpoint is credit-metered rather than billed per token, so a dollar cost per task is not meaningful for this candidate; recorded as zero and called out explicitly in the findings rather than silently making NVIDIA look free"
+    }
+  }
+}

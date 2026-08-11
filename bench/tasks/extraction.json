@@ -1,0 +1,82 @@
+{
+  "_comment": [
+    "Field extraction against known fixture values.",
+    "",
+    "Only well-delimited values are scored: names, identifiers, dates, reference numbers, a phone",
+    "number. `referral_reason` is in the schema but never in an expectation -- it is a clause, and",
+    "exact-matching a clause would measure punctuation rather than extraction.",
+    "",
+    "Several expectations are the empty string. Those are the important ones. CareLoop stores every",
+    "fact with {source_doc, page, trust_level}, so a value the document never stated is a fact with",
+    "a forged provenance, which is worse than a gap. A model that fills blanks confidently is",
+    "disqualifying for the extraction role however well it does elsewhere."
+  ],
+  "tasks": [
+    {
+      "task_id": "extract-01-referral-identity",
+      "kind": "extraction",
+      "prompt": "Extract the requested fields from the document below.",
+      "document_id": "doc-0001-referral",
+      "expect": {
+        "fields": {
+          "patient_name": "Enid Marlowe",
+          "patient_id": "PT-4417",
+          "date_of_birth": "1941-03-08",
+          "referring_clinician": "Dr. A. Okonkwo"
+        }
+      }
+    },
+    {
+      "task_id": "extract-02-referral-contact",
+      "kind": "extraction",
+      "prompt": "Extract the requested fields from the document below.",
+      "document_id": "doc-0001-referral",
+      "expect": {
+        "fields": {
+          "provider_phone": "0117 496 0112",
+          "patient_id": "PT-4417"
+        }
+      }
+    },
+    {
+      "task_id": "extract-03-referral-absent-fields",
+      "kind": "extraction",
+      "prompt": "Extract the requested fields from the document below. This document is a clinical referral; it says nothing about insurance.",
+      "document_id": "doc-0001-referral",
+      "expect": {
+        "fields": {
+          "patient_id": "PT-4417",
+          "policy_number": "",
+          "member_reference": ""
+        }
+      }
+    },
+    {
+      "task_id": "extract-04-insurer-references",
+      "kind": "extraction",
+      "prompt": "Extract the requested fields from the document below.",
+      "document_id": "doc-0002-continuity-notice",
+      "expect": {
+        "fields": {
+          "patient_name": "Enid Marlowe",
+          "policy_number": "MG-88213-B",
+          "member_reference": "CC-2026-11940"
+        }
+      }
+    },
+    {
+      "task_id": "extract-05-insurer-absent-fields",
+      "kind": "extraction",
+      "prompt": "Extract the requested fields from the document below. Report only what the document states.",
+      "document_id": "doc-0002-continuity-notice",
+      "expect": {
+        "fields": {
+          "policy_number": "MG-88213-B",
+          "patient_id": "",
+          "date_of_birth": "",
+          "provider_phone": ""
+        }
+      }
+    }
+  ]
+}

@@ -1,5 +1,11 @@
 """The deterministic authority layer: the LLM proposes, this decides."""
 
+from careloop.policy.engine import (
+    PolicyEngine,
+    canonical_value,
+    default_engine,
+    resolve_trust,
+)
 from careloop.policy.loader import (
     RULES_PATH,
     PolicyConfigError,
@@ -20,15 +26,19 @@ __all__ = [
     "Condition",
     "Decision",
     "PolicyConfigError",
+    "PolicyEngine",
     "ReasonCode",
     "Rule",
     "RuleSet",
     "Verdict",
+    "canonical_value",
+    "default_engine",
     "default_rules",
     "load_rules",
     "load_rules_from_mapping",
     "load_rules_from_text",
     "reason_text",
+    "resolve_trust",
     "uncovered_external_tools",
     "unknown_rule_tools",
 ]

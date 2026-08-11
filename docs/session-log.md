@@ -9,18 +9,28 @@ rules; this file holds the position. Update it at the end of every session.
 
 ### Position
 
-Branch `main`, pushed and in sync with `origin/main`.
+Branch `main`. `origin/main` is at `e29d85d`; everything below that line is **unpushed**.
 
-| Commit | Subject |
-|---|---|
-| `a4ada01` | Add CLAUDE.md with standing project context |
-| `ddca021` | Restore natural comparison order in set assertions |
-| `1499db4` | Add case state machine, trust model, and case stores |
-| `db3b797` | Scaffold project and pin Strands SDK surfaces |
+| Commit | Subject | Pushed |
+|---|---|---|
+| `db3b797` | Scaffold project and pin Strands SDK surfaces | yes |
+| `1499db4` | Add case state machine, trust model, and case stores | yes |
+| `ddca021` | Restore natural comparison order in set assertions | yes |
+| `a4ada01` | Add CLAUDE.md with standing project context | yes |
+| `6eace34` | Pin strands-agents and add session log | yes |
+| `a8cb417` | Pin pytest timeout method to thread so hangs fail identically on Windows and Linux | yes |
+| `9cf338f` | Add GitHub Actions CI running ruff check, ruff format --check and pytest on Python 3.12 | yes |
+| `e29d85d` | Add CI status badge to README | yes |
+| — | Move shared test constructors out of conftest into tests/helpers.py | **no** |
+| — | Drop the careloop console script until cli.py exists | **no** |
+| — | Record CI and test-hygiene work in the session log | **no** |
 
 **183 passed, 2 skipped. `ruff check` and `ruff format --check` clean.** The 2 skips are terminal
 states in `test_failed_is_reachable_from_every_non_terminal_state` — correctly skipped, not
 silently passing.
+
+The suite is verified green under **both** `pytest` and `python -m pytest`, from a clean clone with
+a fresh virtualenv. Both modes matter: see the resolved items below.
 
 ### Done
 
@@ -34,6 +44,42 @@ silently passing.
 Two invariants added during commit 2 that were **not** in the approved plan, both now covered by
 tests: promotion is non-idempotent (otherwise trust launders by validating twice), and `Case`
 collections are tuples so the freeze is deep rather than shallow.
+
+### Out of band — CI and test hygiene
+
+Not part of the numbered commit plan; the plan numbering below is unchanged.
+
+- **CI.** `.github/workflows/ci.yml` — push and PR on `main`, Ubuntu, Python 3.12 only, no matrix.
+  Installs `-e ".[dev]"`, then `ruff check`, `ruff format --check`, `python -m pytest -q`.
+  **Runs with zero secrets configured**, which is checkable rather than aspirational: nothing in
+  `careloop/` or `tests/` touches boto3, `os.environ`, or a provider SDK. `AWS_CONFIG_FILE` and
+  `AWS_SHARED_CREDENTIALS_FILE` point at `/nonexistent` and metadata lookup is disabled, so a
+  future test that quietly starts reaching for real credentials fails fast instead of passing on
+  a developer's configured machine.
+- **`timeout_method = "thread"` pinned** in `pyproject.toml` alongside the existing `timeout = 60`.
+  The default is platform-dependent — SIGALRM on Linux, threads on Windows — so pinning is what
+  makes a local Windows run and a CI Linux run agree. `thread` over `signal` because a signal
+  timeout raises an ordinary exception *inside the test*, which a broad `except Exception` in the
+  code under test can swallow; `sqlite_store.py` has two such handlers. **This is what has to hold
+  for T4**: the loop-bound test must fail loudly rather than hang. Verified by execution — a
+  synthetic unbounded loop dumps every thread's stack and exits 1 — and the ini key is confirmed
+  live, since an invalid value fails startup.
+
+### Resolved
+
+Both were found by running CI's commands against a clean clone rather than the working tree.
+
+1. **Test suite depended on the pytest invocation mode — FIXED.**
+   `tests/test_state_machine.py` imported `tests.conftest`, which resolves only because
+   `python -m pytest` puts the working directory on `sys.path`; under a bare `pytest` the suite
+   failed at collection with `ModuleNotFoundError: No module named 'tests'`. Fixed at the cause:
+   `make_case` and `FIXED_NOW` now live in `tests/helpers.py`, and `conftest.py` is fixtures only —
+   pytest loads it, test modules do not import it. Verified under both invocation modes.
+2. **Dead `careloop` console script — REMOVED.**
+   `[project.scripts]` declared `careloop = "careloop.cli:main"` against a `careloop/cli.py` that
+   does not exist, so the installed launcher failed on invocation for anyone following the README.
+   Removed rather than stubbed. Reinstating it is one line and belongs with `cli.py` in commit 9,
+   which the comment in `pyproject.toml` now says.
 
 ### Next — commit 3: policy engine and tool registry
 
@@ -63,7 +109,8 @@ against the registry).
 6. `graph/` nodes, conditions, GraphBuilder wiring, `BeforeToolCall` policy hook.
 7. `events/` simulator and fixtures, then **T1** (happy path).
 8. **T2** (injection), **T3** (idempotency), **T4** (loop bound).
-9. `cli.py`, README, final ruff pass.
+9. `cli.py`, README, final ruff pass. Restore `[project.scripts]` in `pyproject.toml` in this
+   commit — it was removed rather than left pointing at a module that does not exist.
 
 ---
 

@@ -49,7 +49,7 @@ def test_done_is_reachable_only_from_verifying() -> None:
 
 
 def test_terminal_states_are_exactly_done_and_failed() -> None:
-    assert frozenset({CaseState.DONE, CaseState.FAILED}) == TERMINAL_STATES
+    assert sorted(TERMINAL_STATES) == [CaseState.DONE, CaseState.FAILED]
 
 
 @pytest.mark.parametrize("frm", ALL_STATES)

@@ -1,11 +1,38 @@
-"""PROVISIONAL output schemas for the benchmark.
+"""FROZEN output schemas — the exact shapes the benchmark of 2026-08-11 was measured on.
 
-**These are not CareLoop's agent schemas.** ``TriageResult`` and ``PlannerIntent`` are commit 5's
-deliverables and belong in ``careloop/agents/``. The versions here exist so this session can
-measure structured-output success before those schemas are designed, and commit 5 should design
-them on the merits rather than inherit whatever the benchmark found convenient.
+**These are not CareLoop's agent schemas.** The real ones live in ``careloop/agents/schemas.py``,
+designed in commit 5 on the merits. This file was provisional when it was written and is now a
+historical artifact: it records what was put in front of six candidate models, so that the numbers
+in ``docs/model-benchmark.md`` remain attributable to something specific.
 
-What the real schemas *should* take from this file is the measurement, not the shape.
+**It is deliberately not re-pointed at the real schemas, and it must not be.**
+``bench.cache.call_key`` hashes ``schema_name`` and ``schema_fields`` into every cache key, so
+importing the real schemas here would miss all 108 cached responses at once and make the recorded
+measurement unreplayable without spending again. Freezing costs one duplicated definition;
+re-pointing costs the evidence.
+
+The two pairs therefore diverge, on purpose and on record:
+
+===================  ======================================  ===================================
+Field                ``bench`` (frozen)                      ``careloop.agents`` (live)
+===================  ======================================  ===================================
+``category``         ``Literal[...]``                        ``TriageCategory`` enum
+``urgency``          ``Literal[...]``                        ``Urgency`` enum
+``patient_id``       present                                 present
+``summary``          present                                 present
+destination fields   none                                    none, and now for a stated reason
+``PlannerIntent``    flat, generated from ``REGISTRY``       flat, generated from ``REGISTRY``
+undeclared args      dropped by ``intent_args``              rejected at construction
+===================  ======================================  ===================================
+
+Two constraints the real schemas kept, because the benchmark is what established they work:
+every field required and ``str``-typed with ``""`` for "not supplied", and ``PlannerIntent``
+generated from the tool registry.
+
+**One caveat about replay.** The cache key also covers the rendered system prompt, and
+``bench.catalogue`` renders from the live ``REGISTRY``. Adding a tool therefore invalidates the
+cache whatever this file does. The durable record is ``docs/model-benchmark.md``; the cache is a
+convenience that survives only while the registry is unchanged.
 
 Two deliberate constraints, both about not letting the harness cause failures it then blames on
 the model:
@@ -40,7 +67,7 @@ NOT_SUPPLIED: Final[str] = ""
 
 
 class TriageResult(BaseModel):
-    """PROVISIONAL. Classification of an inbound event into typed case fields."""
+    """FROZEN as measured. See ``careloop.agents.schemas.TriageResult`` for the live schema."""
 
     category: Literal[
         "APPOINTMENT",
@@ -65,7 +92,7 @@ class TriageResult(BaseModel):
 
 
 class ExtractionResult(BaseModel):
-    """PROVISIONAL. Field values pulled out of document text.
+    """FROZEN as measured. Field values pulled out of document text.
 
     Every field is a verbatim copy from the source, or the empty string when the source does not
     state it. Verbatim matters: the policy engine matches facts by exact canonical value, so a
@@ -108,7 +135,7 @@ def _build_planner_intent() -> type[BaseModel]:
     return create_model(
         "PlannerIntent",
         __doc__=(
-            "PROVISIONAL. One proposed next action as a typed tool intent.\n\n"
+            "FROZEN as measured. One proposed next action as a typed tool intent.\n\n"
             "Generated from careloop.tools.registry.REGISTRY: the tool names and argument fields "
             "are exactly the ones the policy engine governs."
         ),

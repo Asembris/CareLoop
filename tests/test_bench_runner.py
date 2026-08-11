@@ -183,3 +183,155 @@ class TestRunnerSpendDiscipline:
             assert key_for(candidate, task, system, prompt, "m") != original
         finally:
             PARAMS["temperature"] = 0.0
+
+
+class TestFailureCaching:
+    """A failure to reach the model is not a benchmark result."""
+
+    def test_infrastructure_failures_are_not_cacheable(self):
+        from bench.runner import is_model_failure
+
+        for error_type in (
+            "NoCredentialsError",
+            "EndpointConnectionError",
+            "SSLError",
+            "ThrottlingException",
+            "ModelThrottledException",
+            "ConnectTimeoutError",
+        ):
+            assert not is_model_failure(error_type)
+
+    def test_model_level_failures_are_cacheable(self):
+        from bench.runner import is_model_failure
+
+        for error_type in ("ValidationError", "WrongOutputType", "ValueError"):
+            assert is_model_failure(error_type)
+
+    def test_a_credential_failure_is_not_written_to_the_cache(self, tmp_path: pathlib.Path):
+        # The first live run cached 68 NoCredentialsError entries as though four candidates had
+        # been measured and failed. Every later run would then have replayed that verdict.
+        cache = ResponseCache(tmp_path)
+        rates = RateTable(
+            currency="USD",
+            unit="per_1m_tokens",
+            as_of="x",
+            region="us-east-1",
+            rates={"m": {"input": 1.0, "output": 1.0}},
+        )
+        candidate = Candidate(candidate_id="cand", spec="bedrock:m", label="Cand")
+
+        def broken(*args, **kwargs):
+            return CallOutcome(ok=False, error_type="NoCredentialsError")
+
+        run_candidate(
+            candidate,
+            TaskSet(tasks=(planner_task(),)),
+            cache,
+            rates,
+            SpendLedger(1.0),
+            allow_spend=True,
+            env={"AWS_DEFAULT_REGION": "us-east-1"},
+            invoke=broken,
+        )
+        cache.flush()
+        assert ResponseCache(tmp_path).path_for("cand").exists() is False or not any(
+            ResponseCache(tmp_path)._file("cand").calls.values()
+        )
+
+    def test_a_validation_failure_is_written_to_the_cache(self, tmp_path: pathlib.Path):
+        cache = ResponseCache(tmp_path)
+        rates = RateTable(
+            currency="USD",
+            unit="per_1m_tokens",
+            as_of="x",
+            region="us-east-1",
+            rates={"m": {"input": 1.0, "output": 1.0}},
+        )
+        candidate = Candidate(candidate_id="cand", spec="bedrock:m", label="Cand")
+
+        def refuses(*args, **kwargs):
+            return CallOutcome(ok=False, error_type="ValidationError")
+
+        run_candidate(
+            candidate,
+            TaskSet(tasks=(planner_task(),)),
+            cache,
+            rates,
+            SpendLedger(1.0),
+            allow_spend=True,
+            env={"AWS_DEFAULT_REGION": "us-east-1"},
+            invoke=refuses,
+        )
+        cache.flush()
+        stored = list(ResponseCache(tmp_path)._file("cand").calls.values())
+        assert len(stored) == 1
+        assert stored[0].error_type == "ValidationError"
+
+
+class TestTokenAccountingIsHonest:
+    def test_an_estimated_cost_is_flagged_all_the_way_to_the_report(self, tmp_path: pathlib.Path):
+        from bench.scoring import aggregate
+
+        cache = ResponseCache(tmp_path)
+        rates = RateTable(
+            currency="USD",
+            unit="per_1m_tokens",
+            as_of="x",
+            region="us-east-1",
+            rates={"m": {"input": 1.0, "output": 1.0}},
+        )
+        candidate = Candidate(candidate_id="cand", spec="bedrock:m", label="Cand")
+
+        def guessed(*args, **kwargs):
+            return CallOutcome(
+                ok=True,
+                output={"tool_name": "book_appointment"},
+                input_tokens=100,
+                output_tokens=20,
+                tokens_estimated=True,
+            )
+
+        scores = run_candidate(
+            candidate,
+            TaskSet(tasks=(planner_task(),)),
+            cache,
+            rates,
+            SpendLedger(1.0),
+            allow_spend=True,
+            env={"AWS_DEFAULT_REGION": "us-east-1"},
+            invoke=guessed,
+        )
+        assert aggregate("cand", "Cand", "m", scores).cost_is_estimated is True
+
+    def test_a_measured_cost_is_not_flagged(self, tmp_path: pathlib.Path):
+        from bench.scoring import aggregate
+
+        cache = ResponseCache(tmp_path)
+        rates = RateTable(
+            currency="USD",
+            unit="per_1m_tokens",
+            as_of="x",
+            region="us-east-1",
+            rates={"m": {"input": 1.0, "output": 1.0}},
+        )
+        candidate = Candidate(candidate_id="cand2", spec="bedrock:m", label="Cand")
+
+        def measured(*args, **kwargs):
+            return CallOutcome(
+                ok=True,
+                output={"tool_name": "book_appointment"},
+                input_tokens=100,
+                output_tokens=20,
+            )
+
+        scores = run_candidate(
+            candidate,
+            TaskSet(tasks=(planner_task(),)),
+            cache,
+            rates,
+            SpendLedger(1.0),
+            allow_spend=True,
+            env={"AWS_DEFAULT_REGION": "us-east-1"},
+            invoke=measured,
+        )
+        assert aggregate("cand2", "Cand", "m", scores).cost_is_estimated is False

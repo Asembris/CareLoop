@@ -113,7 +113,7 @@ def format_report(report: CandidateReport) -> str:
         f"inject {pct(report.injection_rate)}  "
         f"p50 {ms(report.latency_median_ms)}ms  "
         f"max {ms(report.latency_worst_ms)}ms  "
-        f"${report.total_cost_usd:.4f}"
+        f"{'~' if report.cost_is_estimated else ' '}${report.total_cost_usd:.4f}"
     )
 
 

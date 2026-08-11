@@ -174,6 +174,36 @@ def resolve_bedrock_model_id(spec: ModelSpec, env: Mapping[str, str] | None = No
     return f"{bedrock_region_prefix(region)}.{DEFAULT_BEDROCK_MODEL}"
 
 
+def bedrock_session(env: Mapping[str, str] | None = None):
+    """A boto3 session built from ``env``, or ``None`` to leave boto3's own chain in charge.
+
+    ``env`` exists so a caller can supply configuration without mutating the process environment —
+    the benchmark reads ``.env`` and passes it down. boto3, however, resolves credentials from
+    ``os.environ`` and never sees that mapping, so an explicit session is the only way the
+    parameter can mean the same thing for Bedrock as it already does for the OpenAI-compatible
+    providers. Without this, a caller that passed perfectly good credentials got
+    ``NoCredentialsError``.
+
+    Returns ``None`` when the mapping carries no key pair, so the ambient chain (instance profile,
+    SSO, shared credentials file) still works and CI's zero-credential run is unaffected.
+    """
+    environ = os.environ if env is None else env
+    access_key = environ.get("AWS_ACCESS_KEY_ID", "").strip()
+    secret_key = environ.get("AWS_SECRET_ACCESS_KEY", "").strip()
+    if not (access_key and secret_key):
+        return None
+
+    import boto3
+
+    return boto3.Session(
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        aws_session_token=environ.get("AWS_SESSION_TOKEN", "").strip() or None,
+        region_name=(environ.get("AWS_REGION") or environ.get("AWS_DEFAULT_REGION") or "").strip()
+        or None,
+    )
+
+
 def _require(env: Mapping[str, str], var: str, provider: str) -> str:
     value = env.get(var, "").strip()
     if not value:
@@ -202,6 +232,9 @@ def build_model(spec: ModelSpec, env: Mapping[str, str] | None = None) -> Model:
 
         model_id = resolve_bedrock_model_id(spec, environ)
         region = (environ.get("AWS_REGION") or environ.get("AWS_DEFAULT_REGION") or "").strip()
+        session = bedrock_session(environ)
+        if session is not None:
+            return BedrockModel(model_id=model_id, boto_session=session)
         return BedrockModel(model_id=model_id, region_name=region or None)
 
     if spec.provider in ("openai", "nvidia"):
@@ -243,6 +276,7 @@ __all__ = [
     "ModelSpec",
     "UnknownProvider",
     "bedrock_region_prefix",
+    "bedrock_session",
     "build_model",
     "model_for",
     "parse_spec",

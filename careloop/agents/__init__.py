@@ -9,6 +9,12 @@ model and a system prompt, and nothing else. No tool is registered against eithe
 there is no call path from an agent to an effect, and no event loop in which one could appear.
 """
 
+from careloop.agents.invoke import (
+    NoStructuredOutput,
+    WrongStructuredOutputType,
+    structured_call,
+)
+from careloop.agents.planner import PlannerAgent
 from careloop.agents.prompts import (
     EVIDENCE_BEGIN,
     EVIDENCE_END,
@@ -40,6 +46,7 @@ from careloop.agents.schemas import (
     build_planner_intent,
     tool_names,
 )
+from careloop.agents.triage import TriageAgent
 
 __all__ = [
     "ARG_NAMES",
@@ -53,12 +60,16 @@ __all__ = [
     "TOOL_NAMES",
     "TRIAGE_SYSTEM",
     "EmptyRegistry",
+    "NoStructuredOutput",
+    "PlannerAgent",
     "PlannerIntent",
     "PlannerIntentBase",
     "ReservedArgumentName",
+    "TriageAgent",
     "TriageCategory",
     "TriageResult",
     "Urgency",
+    "WrongStructuredOutputType",
     "argument_names",
     "build_planner_intent",
     "frame_untrusted",
@@ -66,6 +77,7 @@ __all__ = [
     "planner_user_prompt",
     "render_catalogue",
     "render_denials",
+    "structured_call",
     "tool_names",
     "triage_system_prompt",
     "triage_user_prompt",

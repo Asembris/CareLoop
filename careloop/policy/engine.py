@@ -12,6 +12,11 @@ up in the case's recorded facts. The lowest trust level among matching facts win
 case has never recorded resolves ``UNTRUSTED``. Deny-by-default therefore extends from rules to
 provenance: an argument that appeared from nowhere is untrusted, not unclassified.
 
+The text an argument is reduced to before that lookup comes from
+:func:`careloop.provenance.canonical.canonical_value`, re-exported here for the callers that have
+always read it from this module. It lives in ``provenance`` because tool idempotency keys derive
+from the same reduction, and one value must not have two spellings.
+
 **Match ordering**, fixed here and not configurable from YAML: explicit ``DENY``, then
 ``REQUIRE_HUMAN``, then ``ALLOW``, then a default ``DENY``. A rules file that could reorder its own
 precedence could be talked into promoting an ``ALLOW`` above a ``DENY``.
@@ -20,48 +25,15 @@ precedence could be talked into promoting an ``ALLOW`` above a ``DENY``.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import date, datetime
 from functools import lru_cache
 
 from careloop.policy.loader import default_rules
 from careloop.policy.schema import Condition, RuleSet
 from careloop.policy.verdicts import Decision, ReasonCode, Verdict
+from careloop.provenance.canonical import canonical_value
 from careloop.provenance.trust import TrustLevel, at_least
 from careloop.state.case import Case
 from careloop.tools.registry import REGISTRY, ToolRegistry
-
-
-def canonical_value(value: object) -> str | None:
-    """Return the comparison form of an argument value, or ``None`` if it has none.
-
-    Facts store values as text, so an argument must be reduced to text before it can be matched
-    against one. The reduction is closed and deliberately unforgiving:
-
-    ``str``
-        Used verbatim. No case-folding, no whitespace trimming, no unicode normalisation.
-        Normalisation is a laundering surface — homoglyphs, casing, a trailing dot — and a
-        fail-closed false denial costs a replan, while a false trust costs the whole property.
-    ``bool``
-        ``"true"`` / ``"false"``. Checked before ``int``, which it subclasses.
-    ``int``
-        Decimal, no separators.
-    ``datetime`` / ``date``
-        ISO 8601, **without timezone conversion**. Two spellings of one instant do not match, for
-        the same reason two spellings of one address do not.
-    anything else
-        ``None``. The value has no comparison form, so it matches no fact and resolves
-        ``UNTRUSTED``. ``float`` is excluded on purpose: its repr is unstable enough to be both a
-        laundering hazard and a false-denial hazard, and no argument needs one.
-    """
-    if isinstance(value, str):
-        return value
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, datetime | date):
-        return value.isoformat()
-    return None
 
 
 def resolve_trust(value: object, case: Case) -> TrustLevel:

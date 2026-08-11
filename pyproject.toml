@@ -36,7 +36,18 @@ careloop = ["policy/*.yaml", "events/fixtures/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# A hung test must fail the run, not burn the CI budget. The whole suite finishes in under a
+# second, so 60s is a runaway detector rather than a performance budget — the loop-bound test
+# (T4) has to fail loudly if the graph primitives ever stop bounding the loop.
 timeout = 60
+# Pinned, not left to the default, because the default is platform-dependent: pytest-timeout uses
+# SIGALRM where it exists (Linux) and threads where it does not (Windows). Two reasons to pin to
+# thread. It makes a local Windows run and a CI Linux run behave identically, and a thread-based
+# timeout cannot be swallowed — the signal method raises an ordinary exception inside the test,
+# which a broad `except Exception` in the code under test can catch and turn into a bland failure
+# or a retry. Thread dumps every thread's stack and kills the process, which is also what you want
+# when diagnosing a deadlock in async graph execution.
+timeout_method = "thread"
 filterwarnings = ["error::DeprecationWarning:careloop.*"]
 
 [tool.ruff]

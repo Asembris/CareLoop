@@ -8,6 +8,7 @@ than the ambient one, so the result does not depend on whose machine the suite r
 from __future__ import annotations
 
 import socket
+import sys
 
 import pytest
 from strands.models import Model
@@ -25,6 +26,7 @@ from careloop.llm.providers import (
     bedrock_region_prefix,
     build_model,
     model_for,
+    openai_client_args,
     parse_spec,
     resolve_bedrock_model_id,
     spec_for_role,
@@ -201,28 +203,134 @@ class TestBedrockModelId:
 
 
 class TestCredentialsAreRequiredAndNeverEchoed:
+    """Asserted against ``openai_client_args``, not ``build_model``.
+
+    These are decisions CareLoop makes, not things the OpenAI SDK does, and they must hold on a
+    machine with no provider package installed — which is the machine CI runs on, since `openai`
+    lives in the ``bench`` extra and not in ``dev``. Testing them through ``build_model`` made them
+    depend on an import that CI does not have, and they failed there for a reason that had nothing
+    to do with what they assert.
+    """
+
     def test_openai_without_a_key_raises(self):
         with pytest.raises(MissingCredential, match="OPENAI_API_KEY"):
-            build_model(ModelSpec(provider="openai", model_id="gpt-4o-mini"), EMPTY)
+            openai_client_args(ModelSpec(provider="openai", model_id="gpt-4o-mini"), EMPTY)
 
     def test_nvidia_without_a_key_raises(self):
         with pytest.raises(MissingCredential, match="NVIDIA_API_KEY"):
-            build_model(ModelSpec(provider="nvidia", model_id="meta/llama-3.3-70b-instruct"), EMPTY)
+            openai_client_args(ModelSpec(provider="nvidia", model_id="meta/llama-3.3-70b"), EMPTY)
 
     @pytest.mark.parametrize("var", ["OPENAI_API_KEY", "NVIDIA_API_KEY"])
     def test_a_blank_key_counts_as_missing(self, var: str):
         provider = "openai" if var == "OPENAI_API_KEY" else "nvidia"
         with pytest.raises(MissingCredential):
-            build_model(ModelSpec(provider=provider, model_id="m"), {var: "   "})
+            openai_client_args(ModelSpec(provider=provider, model_id="m"), {var: "   "})
 
     def test_the_error_names_the_variable_not_the_value(self):
         # Same discipline as policy reason purity: a message that echoes a secret ends up in a
         # log, a terminal, and quite possibly a bug report.
         secret = "sk-do-not-leak-me-0123456789"
         with pytest.raises(MissingCredential) as excinfo:
-            build_model(ModelSpec(provider="nvidia", model_id="m"), {"OPENAI_API_KEY": secret})
+            openai_client_args(
+                ModelSpec(provider="nvidia", model_id="m"), {"OPENAI_API_KEY": secret}
+            )
         assert secret not in str(excinfo.value)
         assert "NVIDIA_API_KEY" in str(excinfo.value)
+
+    def test_each_provider_reads_its_own_key_variable(self):
+        # Sending OpenAI's key to NVIDIA would produce an auth error that reads like a model
+        # failure, which is the whole reason `nvidia:` is a provider rather than a base URL.
+        env = {"OPENAI_API_KEY": "sk-openai", "NVIDIA_API_KEY": "nvapi-nvidia"}
+        assert openai_client_args(ModelSpec(provider="openai", model_id="m"), env)["api_key"] == (
+            "sk-openai"
+        )
+        assert openai_client_args(ModelSpec(provider="nvidia", model_id="m"), env)["api_key"] == (
+            "nvapi-nvidia"
+        )
+
+
+class TestEndpointSelection:
+    """Also on ``openai_client_args``, for the same reason: no provider package required."""
+
+    def test_nvidia_defaults_to_the_nvidia_endpoint(self):
+        args = openai_client_args(
+            ModelSpec(provider="nvidia", model_id="meta/llama-3.3-70b"), {"NVIDIA_API_KEY": "k"}
+        )
+        assert args["base_url"] == DEFAULT_NVIDIA_BASE_URL
+
+    def test_nvidia_base_url_is_overridable_by_environment(self):
+        env = {"NVIDIA_API_KEY": "k", "NVIDIA_BASE_URL": "https://alt.example/v1"}
+        args = openai_client_args(ModelSpec(provider="nvidia", model_id="m"), env)
+        assert args["base_url"] == "https://alt.example/v1"
+
+    def test_a_spec_base_url_beats_the_environment(self):
+        env = {"NVIDIA_API_KEY": "k", "NVIDIA_BASE_URL": "https://alt.example/v1"}
+        spec = ModelSpec(provider="nvidia", model_id="m", base_url="https://spec.example/v1")
+        assert openai_client_args(spec, env)["base_url"] == "https://spec.example/v1"
+
+    def test_plain_openai_gets_no_base_url(self):
+        args = openai_client_args(
+            ModelSpec(provider="openai", model_id="gpt-4o-mini"), {"OPENAI_API_KEY": "k"}
+        )
+        assert "base_url" not in args
+
+    def test_a_non_openai_provider_is_rejected(self):
+        with pytest.raises(UnknownProvider):
+            openai_client_args(ModelSpec(provider="bedrock", model_id="m"), EMPTY)
+
+
+class TestResolutionNeedsNoProviderPackage:
+    """The regression guard for the CI failure this class was written after.
+
+    `openai` is in the ``bench`` extra, never in ``dev``, so CI installs a tree without it. Ten
+    tests failed there with ``ModuleNotFoundError`` while passing locally, because the local
+    environment had the extra installed. Blocking the import here reproduces CI's tree inside a
+    test, so the difference cannot go unnoticed again on a developer machine.
+    """
+
+    @staticmethod
+    def _without_openai(monkeypatch):
+        import builtins
+
+        real_import = builtins.__import__
+
+        def blocked(name, *args, **kwargs):
+            if name == "openai" or name.startswith("openai."):
+                raise ModuleNotFoundError("No module named 'openai'")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", blocked)
+        for module in [m for m in sys.modules if m == "openai" or m.startswith("openai.")]:
+            monkeypatch.delitem(sys.modules, module, raising=False)
+        for module in [m for m in sys.modules if m.startswith("strands.models.openai")]:
+            monkeypatch.delitem(sys.modules, module, raising=False)
+
+    def test_the_block_itself_works(self, monkeypatch):
+        self._without_openai(monkeypatch)
+        with pytest.raises(ModuleNotFoundError):
+            import openai  # noqa: F401
+
+    def test_a_missing_key_still_raises_missing_credential(self, monkeypatch):
+        self._without_openai(monkeypatch)
+        with pytest.raises(MissingCredential, match="OPENAI_API_KEY"):
+            build_model(ModelSpec(provider="openai", model_id="gpt-4o-mini"), EMPTY)
+
+    def test_endpoint_selection_still_works(self, monkeypatch):
+        self._without_openai(monkeypatch)
+        args = openai_client_args(
+            ModelSpec(provider="nvidia", model_id="m"), {"NVIDIA_API_KEY": "k"}
+        )
+        assert args["base_url"] == DEFAULT_NVIDIA_BASE_URL
+
+    def test_the_mock_default_still_resolves(self, monkeypatch):
+        self._without_openai(monkeypatch)
+        for role in ModelRole:
+            assert isinstance(model_for(role, EMPTY), MockModel)
+
+    def test_bedrock_still_resolves(self, monkeypatch):
+        self._without_openai(monkeypatch)
+        model = build_model(ModelSpec(provider="bedrock"), {"AWS_DEFAULT_REGION": "us-east-1"})
+        assert model.get_config()["model_id"] == "us.amazon.nova-lite-v1:0"
 
 
 class TestRealProviderConstruction:
@@ -234,29 +342,19 @@ class TestRealProviderConstruction:
         assert model.get_config()["model_id"] == "us.amazon.nova-lite-v1:0"
 
     def test_openai_builds_with_the_named_model(self):
+        # The only assertion that genuinely needs the SDK class, so it is the only one that skips
+        # where the `bench` extra is not installed.
+        pytest.importorskip("openai", reason="provider SDK lives in the bench extra, not dev")
         env = {"OPENAI_API_KEY": "sk-test"}
         model = build_model(ModelSpec(provider="openai", model_id="gpt-4o-mini"), env)
         assert model.get_config()["model_id"] == "gpt-4o-mini"
+        assert model.client_args["api_key"] == "sk-test"
 
-    def test_nvidia_defaults_to_the_nvidia_endpoint(self):
+    def test_nvidia_builds_against_its_endpoint(self):
+        pytest.importorskip("openai", reason="provider SDK lives in the bench extra, not dev")
         env = {"NVIDIA_API_KEY": "nvapi-test"}
         model = build_model(ModelSpec(provider="nvidia", model_id="meta/llama-3.3-70b"), env)
         assert model.client_args["base_url"] == DEFAULT_NVIDIA_BASE_URL
-
-    def test_nvidia_base_url_is_overridable_by_environment(self):
-        env = {"NVIDIA_API_KEY": "nvapi-test", "NVIDIA_BASE_URL": "https://alt.example/v1"}
-        model = build_model(ModelSpec(provider="nvidia", model_id="m"), env)
-        assert model.client_args["base_url"] == "https://alt.example/v1"
-
-    def test_a_spec_base_url_beats_the_environment(self):
-        env = {"NVIDIA_API_KEY": "nvapi-test", "NVIDIA_BASE_URL": "https://alt.example/v1"}
-        spec = ModelSpec(provider="nvidia", model_id="m", base_url="https://spec.example/v1")
-        assert build_model(spec, env).client_args["base_url"] == "https://spec.example/v1"
-
-    def test_plain_openai_gets_no_base_url(self):
-        env = {"OPENAI_API_KEY": "sk-test"}
-        model = build_model(ModelSpec(provider="openai", model_id="gpt-4o-mini"), env)
-        assert "base_url" not in model.client_args
 
 
 class TestTheSuiteItselfUsesNoRealProvider:

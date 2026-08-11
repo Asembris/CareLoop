@@ -214,6 +214,36 @@ def _require(env: Mapping[str, str], var: str, provider: str) -> str:
     return value
 
 
+def openai_client_args(spec: ModelSpec, env: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Client arguments for an OpenAI-compatible provider: which key, and which endpoint.
+
+    A pure function of the spec and the environment. It imports no SDK, opens no socket and
+    constructs nothing, so the decisions it encodes — which credential variable each provider
+    uses, where the base URL comes from, and that a missing key raises rather than proceeding —
+    are testable with no provider package installed.
+
+    Raises:
+        MissingCredential: if the selected provider's key variable is unset or blank.
+    """
+    environ = os.environ if env is None else env
+
+    if spec.provider == "nvidia":
+        api_key = _require(environ, "NVIDIA_API_KEY", "nvidia")
+        base_url = (
+            spec.base_url or environ.get("NVIDIA_BASE_URL", "").strip() or DEFAULT_NVIDIA_BASE_URL
+        )
+    elif spec.provider == "openai":
+        api_key = _require(environ, "OPENAI_API_KEY", "openai")
+        base_url = spec.base_url
+    else:
+        raise UnknownProvider(f"provider {spec.provider!r} is not OpenAI-compatible")
+
+    client_args = {"api_key": api_key}
+    if base_url:
+        client_args["base_url"] = base_url
+    return client_args
+
+
 def build_model(spec: ModelSpec, env: Mapping[str, str] | None = None) -> Model:
     """Construct the provider named by ``spec``.
 
@@ -238,22 +268,15 @@ def build_model(spec: ModelSpec, env: Mapping[str, str] | None = None) -> Model:
         return BedrockModel(model_id=model_id, region_name=region or None)
 
     if spec.provider in ("openai", "nvidia"):
+        # Resolve first, import second. The credential and endpoint decisions are ours and are
+        # worth testing on their own; `strands.models.openai` needs the `openai` package, which is
+        # in the `bench` extra and deliberately absent from `dev`. Importing before deciding made
+        # every one of those decisions untestable wherever the extra is not installed — which is
+        # exactly where CI runs.
+        client_args = openai_client_args(spec, environ)
+
         from strands.models.openai import OpenAIModel
 
-        if spec.provider == "nvidia":
-            api_key = _require(environ, "NVIDIA_API_KEY", "nvidia")
-            base_url = (
-                spec.base_url
-                or environ.get("NVIDIA_BASE_URL", "").strip()
-                or DEFAULT_NVIDIA_BASE_URL
-            )
-        else:
-            api_key = _require(environ, "OPENAI_API_KEY", "openai")
-            base_url = spec.base_url
-
-        client_args: dict[str, str] = {"api_key": api_key}
-        if base_url:
-            client_args["base_url"] = base_url
         return OpenAIModel(client_args=client_args, model_id=spec.model_id)
 
     raise UnknownProvider(f"no constructor for provider {spec.provider!r}")
@@ -279,6 +302,7 @@ __all__ = [
     "bedrock_session",
     "build_model",
     "model_for",
+    "openai_client_args",
     "parse_spec",
     "resolve_bedrock_model_id",
     "spec_for_role",

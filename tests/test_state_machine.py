@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from helpers import make_case
 
 from careloop.state import (
     TERMINAL_STATES,
@@ -15,7 +16,6 @@ from careloop.state import (
     is_legal,
     transition,
 )
-from tests.conftest import make_case
 
 ALL_STATES = list(CaseState)
 

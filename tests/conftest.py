@@ -1,16 +1,19 @@
-"""Shared fixtures."""
+"""Shared fixtures.
+
+Fixtures only. Constructors that test modules import live in :mod:`tests.helpers` — see the note
+there on why importing this module by name is a trap.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import datetime
 
 import pytest
+from helpers import FIXED_NOW
 
 from careloop.provenance import Fact, Provenance, TrustLevel
-from careloop.state import Case, CaseState, InMemoryCaseStore, SqliteCaseStore
-
-FIXED_NOW = datetime(2026, 8, 11, 12, 0, 0, tzinfo=UTC)
+from careloop.state import Case, InMemoryCaseStore, SqliteCaseStore
 
 
 @pytest.fixture
@@ -55,17 +58,6 @@ def advance() -> object:
 
     def _next() -> datetime:
         counter["n"] += 1
-        return datetime(2026, 8, 11, 12, counter["n"] % 60, 0, tzinfo=UTC)
+        return FIXED_NOW.replace(minute=counter["n"] % 60)
 
     return _next
-
-
-def make_case(case_id: str = "case-0001", state: CaseState = CaseState.NEW) -> Case:
-    """Build a case directly in ``state`` for table-driven tests."""
-    return Case(
-        case_id=case_id,
-        event_id="evt-0001",
-        state=state,
-        created_at=FIXED_NOW,
-        updated_at=FIXED_NOW,
-    )

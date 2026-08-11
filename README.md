@@ -1,5 +1,7 @@
 # CareLoop
 
+[![CI](https://github.com/Asembris/CareLoop/actions/workflows/ci.yml/badge.svg)](https://github.com/Asembris/CareLoop/actions/workflows/ci.yml)
+
 An autonomous administrative agent for family caregivers, built on the
 [Strands Agents SDK](https://github.com/strands-agents/sdk-python).
 

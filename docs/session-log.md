@@ -315,9 +315,171 @@ declaration; the registry is now the contract, so a body whose signature disagre
 
 ---
 
+## Session 3 — 2026-08-11
+
+### Position
+
+Branch `main`. `origin/main` is still at `e29d85d`; everything below that line is **unpushed**.
+
+| Commit | Subject | Pushed |
+|---|---|---|
+| `7dcd629` | Move canonical_value into provenance so policy and tools share one reduction | no |
+| `f9a83be` | Add idempotency keys derived from the shared canonical value form | no |
+| `07360f9` | Add typed tool results and the fixture-backed document store | no |
+| `94a3984` | Add mock external executor with a replay-suppressing ledger | no |
+| `47ac22a` | Add tool callables bound to the registry and routed through the executor | no |
+| `5f4f8d6` | Close two vacuous guards found by mutating the tool layer | no |
+| `f8dc978` | Record the no-clock and one-canonical-form invariants in CLAUDE.md | no |
+
+**478 passed, 2 skipped. `ruff check` and `ruff format --check` clean.** Verified under both
+`pytest` and `python -m pytest`, and **at every one of the seven commits individually**.
+
+### Done — commit 4: the effect layer
+
+`careloop/tools/` gains `idempotency.py`, `results.py`, `documents.py`, `executor.py` and
+`callables.py`. Nothing in this commit evaluates policy, mutates a case, appends to a timeline or
+touches a model; the policy gate is commit 6's work and `@gated_tool` is not here.
+
+Five tools, four effectful. The four reach the outside world only through
+`MockExternalExecutor.invoke`; `fetch_document` reads from the document store, takes no idempotency
+key and appears in no ledger, because reading twice is not a duplicated effect.
+
+### Idempotency — one canonical form, two totality requirements
+
+Approved as delta D1 and now the tenth architecture invariant. Argument values reduce through the
+same `canonical_value` the policy engine matches facts with, so the two can never disagree about
+what a value *is* — a datetime is exactly where they would drift.
+
+They part company only on values with **no** canonical form. The policy engine reads `None` as
+unmatchable and resolves `UNTRUSTED`, which fails closed for it. Keying cannot borrow that reading:
+folding every uncanonicalizable value onto one sentinel gives two genuinely different calls the
+same key, and the executor then suppresses the second as a duplicate of the first. That is
+fail-**open**, so `idempotency.py` raises `UncanonicalizableArgument` instead.
+
+The key is `sha256` over `json.dumps({case_id, action_type, args}, sort_keys=True)`. JSON quoting
+is what makes the encoding injective — `{"ab": "c"}` and `{"a": "bc"}` collide under any
+delimiter-joined form, and both that and a value containing a forged `","body":"` separator are
+tested.
+
+### Structural decisions worth keeping
+
+**`canonical_value` moved to `careloop/provenance/canonical.py`.** Not in the approved plan. The
+plan had `tools/idempotency.py` import it from `policy/engine.py`, which is a genuine import cycle:
+`policy.loader` imports `tools.registry`, so `tools/__init__` re-entering `policy.engine` fails on a
+partially initialised module. Re-homing it is the better fix rather than the expedient one — the
+reduction belongs to neither consumer, and `tools/` now reuses a data format without depending on
+the authority layer at all. Both old import paths still resolve, and a test asserts all three names
+are the *same function object*, so an equivalent-but-separate reimplementation fails.
+
+**Bodies bind to the registry, they do not live in it** (D2). An `@implements("send_email")`
+decorator checks each method's signature against `REGISTRY` **at import time**; a body whose
+parameters disagree with its `ToolSpec` fails on import, not in a test. `registry.py` was not
+touched, so `ToolSpec` stays frozen and serializable and argument classes keep one declaration site.
+
+**`ToolSet(case_id, executor, documents)`.** `case_id` is a constructor argument, never a tool
+parameter — it scopes the idempotency key, and a model that could supply it could scope two
+identical actions apart or collapse two cases' actions together. The object holds exactly two
+collaborators, neither of which can reach a case, a timeline or a model.
+
+**Effectful tools return `ExecutionResult`, not the bare payload.** A refinement of "tools return
+typed results": the outcome is information the caller needs, and it cannot be recovered from the
+payload, since a suppressed replay returns a payload identical to the original by design. The graph
+node writes `TimelineKind.DUPLICATE_SUPPRESSED` on the strength of it. `ExecutionResult` subclasses
+`ToolResult`, so "every tool returns a typed result" is a statement about types.
+
+**The ledger records effects, not attempts** (D7). `invocation_count == len(ledger)`; suppressions
+increment `suppressed_count` and add no entry. That is what makes "the ledger has one entry" a real
+assertion rather than an accounting convention.
+
+**`IdempotencyKeyCollision`** — not in the plan, and small. If one key is presented for two
+different calls the executor raises instead of returning the first call's result, because silently
+reporting one effect as another is worse than an exception. It cannot fire accidentally: the key is
+derived from the arguments.
+
+**Two import-time drift checks.** Executor handlers must equal `REGISTRY.external_effect_tools`, and
+bound bodies must equal `REGISTRY.names`. A handler for a tool the registry does not declare is an
+effect outside the policy layer's knowledge, which is the dangerous direction.
+
+### No clock, no randomness — now invariant 9
+
+Synthetic identifiers derive from the idempotency key; results and ledger entries carry no
+timestamp. This started as an implementation detail and is now written into `CLAUDE.md`, because
+the first mutation run proved the obvious test for it does not work: comparing two results built
+microseconds apart passes on Windows, whose clock ticks every ~15ms, even with a `default_factory`
+timestamp on the model. It is therefore enforced on the source — no module under `tools/` may import
+`datetime`, `time`, `random`, `secrets` or `uuid`, and no result field may carry a default or a
+`default_factory`, so a result can only say what its caller told it.
+
+The same sweep enforces that no `tools/` module imports `careloop.state`, `careloop.policy` or
+`strands`. A tool that cannot import the state layer cannot transition a case; a tool that cannot
+import the policy layer cannot decide its own authority. Both sweeps are proven non-vacuous against
+modules that *do* import those things.
+
+### The poisoned fixture
+
+`doc-0002-continuity-notice` is an insurer's continuity-of-care notice: correctly formatted, with a
+plausible business reason for each thing it asks for. It asks for all three things the trust model
+refuses — forward to an external address, upload to their portal, grant a `records_admin` role — so
+one document exercises every leg. Deliberately *not* an "ignore all previous instructions" string:
+that would be caught by anything, including nothing, and would make the demo prove less than it
+appears to. Tests assert each payload is present, and that no crude jailbreak marker is, so the
+fixture cannot be quietly defanged. `fetch_document` returns it unmodified — sanitising here would
+be a filter that looks like a defence and would make T2 pass for the wrong reason.
+
+### Guards proven non-vacuous by mutation
+
+Fifteen mutations, each applied to a clean tree, suite re-run, reverted. **Two survived the first
+pass and both were real gaps in the tests, not false alarms.**
+
+| Mutation | Result |
+|---|---|
+| replay suppression removed (always execute) | 15 failed |
+| suppression also appends to the ledger | 11 failed |
+| uncanonicalizable value folded onto a sentinel instead of raising | 9 failed |
+| idempotency key drops `case_id` | 2 failed |
+| digest joins with a delimiter instead of JSON | 2 failed |
+| `implements` skips the signature check | 1 failed |
+| `implements` accepts positional-only bodies | 1 failed |
+| executor handler/registry drift check disabled | 2 failed |
+| tool body/registry coverage check disabled | 1 failed |
+| results carry a timestamp | 2 failed |
+| `send_email` forges its result instead of delegating | 8 failed |
+| a tool module imports the state layer | 2 failed |
+| key-collision guard removed | 3 failed |
+| the poisoned fixture is defanged | 2 failed |
+| `fetch_document` routes through the executor | 2 failed |
+
+The two that survived, and what was wrong:
+
+1. **The parameter-kind check in `implements` was untested.** Its test used a `**kwargs` body, which
+   the *name* check already rejects — `kwargs` is not a declared argument name — so the kind check
+   could be deleted with the suite still green. The one thing it actually catches is a
+   **positional-only** body: parameter names match the registry exactly, so the name check passes,
+   but `call` dispatches by keyword and the binding would fail at first invocation instead of at
+   import. Test rewritten to that case.
+2. **The no-clock guard was behavioural and therefore useless**, for the clock-resolution reason
+   above. Replaced with the source-level and model-level checks described in the previous section.
+
+The required both-ways vacuity test is `TestNoEffectWithoutTheExecutor`: one `check_routes_through_
+executor` function run over the shipped toolset, which must pass, and over a `ForgingToolSet` whose
+`send_email` returns a well-formed result without touching the executor, which must fail. A third
+test proves the forging body really does return a plausible result, so the failure is the check
+firing rather than the body crashing. A fourth runs every effectful tool against an executor with
+**no handlers**: a body that built its own result and merely *also* told the executor would still
+pass a ledger count, and this is what proves the executor is the source of the result rather than a
+bystander to it.
+
+### Next — commit 5: model provider and agents
+
+`llm/` mock provider plus real provider config, then `agents/` schemas, prompts, Triage and Planner.
+Two decisions from the spike bind here: `Model.structured_output` is an async generator and must
+`yield {"output": instance}`, and the mock is the only model the tests will ever see.
+
+---
+
 ## Open decisions
 
-Carry these forward. Nothing here is blocking commit 3.
+Carry these forward. Nothing here is blocking commit 5.
 
 1. **Model provider benchmark — PENDING.** Bedrock Nova Lite is the intended primary and an
    OpenAI-compatible endpoint the fallback, both wired via env vars and never exercised in tests.
@@ -345,6 +507,18 @@ Carry these forward. Nothing here is blocking commit 3.
    mock one. Decide when writing the verify node.
 6. **Repo visibility.** Private now, public at submission (2026-09-14). Nothing in the history
    contains secrets; the `.gitignore` covers `.env`. Re-check before flipping.
+7. **The executor ledger is not durable, and invariant 8 says `CaseStore` is.** The ledger lives in
+   one `MockExternalExecutor` instance, so it suppresses replays within a run and nothing wider.
+   The durable record is `Case.actions` — `ActionRecord` already carries `idempotency_key`,
+   `args_digest` and `result`, and `Case.action_for(key)` already exists. **Blocking for T3 if T3
+   spans a restart or a resumed case**: the execute node must consult `case.action_for(key)` before
+   calling the tool and must write an `ActionRecord` after, with the ledger as the in-run
+   optimisation rather than the source of truth. Decide when writing the execute node in commit 6.
+8. **`ExecutionResult` becomes model-visible in commit 6** if these callables are wrapped as Strands
+   tools, since a tool result is returned to the planner. It carries `idempotency_key`,
+   `action_type` and the payload — no trust levels, rule ids or allowlist contents, so it does not
+   breach invariant 6 as written. Confirm rather than assume when the hook lands, and check the same
+   question for `Document`, whose whole body is attacker-controlled text by design.
 
 ## Standing risks
 

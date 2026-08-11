@@ -48,10 +48,33 @@ holds even if the hook is never registered. The decision is computed once per
 `(case_id, tool, args)` and cached for the duration of the call, so layering costs no double
 evaluation.
 
-## 3. `Agent.structured_output` — CONFIRMED
+## 3. `Agent.structured_output` — CONFIRMED, then CORRECTED in commit 5
 
-`Agent.structured_output(output_model: type[T], prompt=None) -> T`. Synchronous wrapper available;
-`structured_output_async` also exists. This is the path for `TriageResult` and `PlannerIntent`.
+The method exists as recorded: `Agent.structured_output(output_model: type[T], prompt=None) -> T`,
+with `structured_output_async` alongside it. **What the spike missed is that both are deprecated in
+`strands-agents==1.51.0`, and that the replacement is not equivalent.** CareLoop does not use
+either; `careloop/agents/invoke.py` drives `Model.structured_output` directly.
+
+Two independent reasons, the second the more serious:
+
+**The deprecation is enforced against us.** Both methods `warnings.warn(..., DeprecationWarning,
+stacklevel=2)`, so the warning is attributed to the *caller* — a module under `careloop.` — and
+`pyproject.toml` carries `filterwarnings = ["error::DeprecationWarning:careloop.*"]`. Calling
+either from library code raises.
+
+**The non-deprecated replacement routes structured output through a tool call.** Passing
+`structured_output_model=` to an agent invocation builds a `StructuredOutputContext`, which
+registers an internal `StructuredOutputTool` and forces the model to call it. That tool would then
+arrive at the `BeforeToolCall` policy hook of finding 2 — a deny-by-default engine that has never
+heard of it, holds no rule naming it, and would refuse it. An SDK-internal tool tripping CareLoop's
+own gate is a failure that surfaces deep inside graph execution looking like nothing in particular.
+It would also require `MockModel` to emit `toolUse` stream events, and would move CareLoop off the
+path the model benchmark measured.
+
+What survives unchanged is finding 4: `Agent.structured_output_async` reaches the provider by
+calling `self.model.structured_output(output_model, messages, system_prompt=...)`, which is exactly
+the async-generator contract below and exactly what `MockModel` implements. Driving it directly
+loses nothing, and leaves both agents with no tools and no event loop.
 
 ## 4. Custom model provider — CONFIRMED, with one correction to the plan
 

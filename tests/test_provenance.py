@@ -45,7 +45,7 @@ def test_destination_and_authority_can_never_be_promoted(
 
 def test_promotable_set_contains_only_value() -> None:
     """Guards against a future widening that would quietly defeat the trust model."""
-    assert frozenset({ArgClass.VALUE}) == PROMOTABLE_ARG_CLASSES
+    assert set(PROMOTABLE_ARG_CLASSES) == {ArgClass.VALUE}
 
 
 def test_validation_cannot_manufacture_trusted(untrusted_fact: Fact) -> None:

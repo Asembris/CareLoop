@@ -89,10 +89,13 @@ rules:
         - arg: role
           level: TRUSTED
           arg_class: AUTHORITY
-    reason_code: INSUFFICIENT_FACT_TRUST
+    reason_code: AUTHORITY_NOT_TRUSTED
     diagnostic: >-
-      grant_portal_access.role resolved below TRUSTED. AUTHORITY-class arguments are never
-      promotable; what powers a grant confers must come from trusted config or a human decision.
+      grant_portal_access.role resolved below TRUSTED. This is NOT the not-yet-validated case that
+      INSUFFICIENT_FACT_TRUST covers: AUTHORITY-class arguments are absent from
+      PROMOTABLE_ARG_CLASSES, so no validator can ever raise one, and revalidating this value would
+      change nothing. What powers a grant confers must come from trusted config or a human
+      decision. Contrast deny-booking-on-unvalidated-slot, where validation is the remedy.
 
   - id: deny-booking-on-unvalidated-slot
     effect: DENY
@@ -104,8 +107,9 @@ rules:
           arg_class: VALUE
     reason_code: INSUFFICIENT_FACT_TRUST
     diagnostic: >-
-      book_appointment.slot_start resolved below CONTROLLED. A time lifted from a document must
-      pass a deterministic validator before it can be booked against.
+      book_appointment.slot_start resolved below CONTROLLED. Unlike the AUTHORITY case above, this
+      is remediable: slot_start is VALUE-class and therefore promotable, so a time lifted from a
+      document becomes usable once a deterministic validator has passed it.
 
   # ---------------------------------------------------------------------------------------------
   # REQUIRE_HUMAN — evaluated only when no DENY matched.

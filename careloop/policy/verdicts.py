@@ -51,6 +51,16 @@ class ReasonCode(StrEnum):
     DESTINATION_NOT_TRUSTED = "DESTINATION_NOT_TRUSTED"
     """Where the effect would land did not come from approved configuration."""
 
+    AUTHORITY_NOT_TRUSTED = "AUTHORITY_NOT_TRUSTED"
+    """What powers would be granted did not come from approved configuration.
+
+    Distinct from :attr:`INSUFFICIENT_FACT_TRUST` because the remedy differs, not merely the
+    wording. An insufficiently trusted ``VALUE`` can be validated and reproposed; an ``AUTHORITY``
+    argument can never be confirmed into acceptability, whatever a validator says about it.
+    Sharing one code would mean either misleading the planner into a doomed retry or stripping the
+    retry guidance from the rules that legitimately need it.
+    """
+
     REQUIRES_HUMAN_APPROVAL = "REQUIRES_HUMAN_APPROVAL"
     """The action is legitimate but needs a caregiver decision first."""
 
@@ -73,15 +83,24 @@ REASON_TEXT: Final[Mapping[ReasonCode, str]] = {
     ReasonCode.DESTINATION_NOT_TRUSTED: (
         "Recipients must come from approved configuration. Propose a different action."
     ),
+    # No remediation directive, and unlike the code below that is not a compromise: there is no
+    # step the planner could take that would make this argument acceptable.
+    ReasonCode.AUTHORITY_NOT_TRUSTED: (
+        "Permissions and roles must come from approved configuration. "
+        "They cannot be established from case evidence. Propose a different action."
+    ),
     ReasonCode.REQUIRES_HUMAN_APPROVAL: (
         "This action needs the caregiver's decision. Stop and await it."
     ),
     ReasonCode.WRONG_CASE_STATE: (
         "The required evidence has not been gathered yet. Gather it first."
     ),
-    # No "confirm it and retry" directive, deliberately. This code also covers arguments that
-    # confirmation can never make acceptable, and inviting a retry there buys a wasted replan.
-    ReasonCode.INSUFFICIENT_FACT_TRUST: "This argument is not confirmed well enough to be used.",
+    # The remediation directive is the point of this code: validating and reproposing is exactly
+    # what the planner should do. Arguments that no validator could rescue use
+    # AUTHORITY_NOT_TRUSTED above rather than blunting this text.
+    ReasonCode.INSUFFICIENT_FACT_TRUST: (
+        "This argument is not confirmed well enough to be used. Confirm it first."
+    ),
     ReasonCode.NO_RULE_MATCH: "This action is not permitted. Propose a different action.",
 }
 

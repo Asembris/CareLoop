@@ -48,8 +48,8 @@ jobs:
       - name: Format
         run: ruff format --check .
 
-      # `python -m pytest`, not bare `pytest`: tests/test_state_machine.py imports
-      # `tests.conftest`, which only resolves because the -m form puts the working directory on
-      # sys.path. This is the command CLAUDE.md documents; the bare form fails at collection.
+      # The form CLAUDE.md documents. The suite collects under bare `pytest` too — no test module
+      # imports conftest, so nothing depends on the working directory being on sys.path — but the
+      # two are kept identical so a CI failure always reproduces with the documented command.
       - name: Test
         run: python -m pytest -q

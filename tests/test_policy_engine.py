@@ -279,7 +279,7 @@ class TestAuthorityTrust:
             case,
         )
         assert decision.verdict is Verdict.DENY
-        assert decision.reason_code is ReasonCode.INSUFFICIENT_FACT_TRUST
+        assert decision.reason_code is ReasonCode.AUTHORITY_NOT_TRUSTED
         assert decision.matched_rule_id == "deny-authority-grant-below-trusted"
 
     def test_validation_cannot_launder_an_authority(self, engine: PolicyEngine) -> None:
@@ -295,9 +295,57 @@ class TestAuthorityTrust:
             case,
         )
         assert decision.verdict is Verdict.DENY
-        assert decision.reason_code is ReasonCode.INSUFFICIENT_FACT_TRUST
+        assert decision.reason_code is ReasonCode.AUTHORITY_NOT_TRUSTED
         assert decision.matched_rule_id == "deny-authority-grant-below-trusted"
         assert decision.arg_trust["role"] is TrustLevel.CONTROLLED
+
+    def test_the_irremediable_denial_is_distinguishable_from_the_remediable_one(
+        self, engine: PolicyEngine
+    ) -> None:
+        """Two denials at the same trust level, different remedies, therefore different codes.
+
+        ``role`` is AUTHORITY-class and no validator can rescue it. ``slot_start`` is VALUE-class
+        and validation is exactly the remedy. Collapsing these into one code would either send the
+        planner into a doomed retry or strip the retry guidance from the case that needs it.
+        """
+        authority = engine.evaluate(
+            "grant_portal_access",
+            {"grantee": "carer@family.example", "role": "administrator", "portal_id": "portal-1"},
+            _ready(
+                trusted_fact("carer_email", "carer@family.example"),
+                trusted_fact("portal", "portal-1"),
+                make_fact("role", "administrator", TrustLevel.CONTROLLED),
+            ),
+        )
+        value = engine.evaluate(
+            "book_appointment",
+            {"provider_id": "prov-1", "patient_id": "pat-1", "slot_start": SLOT},
+            _ready(
+                trusted_fact("provider", "prov-1"),
+                make_fact("slot", SLOT, TrustLevel.UNTRUSTED),
+            ),
+        )
+        assert authority.verdict is value.verdict is Verdict.DENY
+        assert authority.reason_code is ReasonCode.AUTHORITY_NOT_TRUSTED
+        assert value.reason_code is ReasonCode.INSUFFICIENT_FACT_TRUST
+        assert authority.model_visible_reason != value.model_visible_reason
+
+    def test_the_timeline_records_why_the_authority_denial_is_irremediable(
+        self, engine: PolicyEngine
+    ) -> None:
+        """The semantic difference is invisible to the model, so the diagnostic must carry it."""
+        decision = engine.evaluate(
+            "grant_portal_access",
+            {"grantee": "carer@family.example", "role": "administrator", "portal_id": "portal-1"},
+            _ready(
+                trusted_fact("carer_email", "carer@family.example"),
+                trusted_fact("portal", "portal-1"),
+                make_fact("role", "administrator", TrustLevel.CONTROLLED),
+            ),
+        )
+        assert "PROMOTABLE_ARG_CLASSES" in decision.diagnostic
+        assert "no validator can ever raise one" in decision.diagnostic
+        assert "deny-booking-on-unvalidated-slot" in decision.diagnostic
 
     def test_an_authority_from_trusted_config_still_needs_a_human(
         self, engine: PolicyEngine

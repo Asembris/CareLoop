@@ -140,8 +140,10 @@ Branch `main`. `origin/main` is still at `e29d85d`; everything below that line i
 | `14d384b` | Add policy rules schema, loader and rules.yaml with load-time validation | no |
 | `b74f17e` | Add deterministic policy engine with fixed match ordering | no |
 | `9bd5ce5` | Add policy coverage and reason-code purity vacuity tests | no |
+| `8ee36dc` | Record commit 3 in the session log | no |
+| — | Add AUTHORITY_NOT_TRUSTED as a distinct reason code | **no** |
 
-**328 passed, 2 skipped. `ruff check` and `ruff format --check` clean.** Verified under both
+**332 passed, 2 skipped. `ruff check` and `ruff format --check` clean.** Verified under both
 `pytest` and `python -m pytest`, and **at every one of the five commits individually**, not just at
 the tip — each commit is a green point in history rather than a green endpoint.
 
@@ -155,9 +157,9 @@ Five tools declared, four with external effect. `grant_portal_access.role` is th
 `AUTHORITY` argument and it decides a real verdict — `deny-authority-grant-below-trusted` — so the
 third leg of the trust model is exercised rather than merely declared.
 
-Eleven rules. Match order is fixed in `engine.py` and is **not** configurable from YAML: explicit
-`DENY` → `REQUIRE_HUMAN` → `ALLOW` → default `DENY`. A rules file that could reorder its own
-precedence could be talked into promoting an `ALLOW` above a `DENY`.
+Eleven rules, six reason codes. Match order is fixed in `engine.py` and is **not** configurable
+from YAML: explicit `DENY` → `REQUIRE_HUMAN` → `ALLOW` → default `DENY`. A rules file that could
+reorder its own precedence could be talked into promoting an `ALLOW` above a `DENY`.
 
 ### Trust resolution — the decision the plan did not contain
 
@@ -264,6 +266,35 @@ invariant 6 does not list them, and the model already knows them because it is t
    policy commits, the imports use `from helpers`, matching `test_state_machine.py`, and every
    commit was re-verified individually under both invocation modes.
 
+### The sixth reason code — `AUTHORITY_NOT_TRUSTED`
+
+Added at the end of session 2, after review rejected the compromise that shipped in `d305f89`.
+Recorded in full because the enum is closed and every future addition should have to clear this bar.
+
+**What was wrong.** `deny-authority-grant-below-trusted` originally reported
+`INSUFFICIENT_FACT_TRUST`, and to stop that misleading the planner the code's text was stripped of
+its "confirm it and retry" directive. That fixed the authority case by **degrading a shared code**:
+`deny-booking-on-unvalidated-slot` uses the same code, and there validate-and-retry is exactly the
+guidance the planner needs. One rule's bad fit was paid for by every other user of the code.
+
+**The real distinction is the remedy, not the wording.** An `INSUFFICIENT_FACT_TRUST` denial is
+*remediable* — the argument is `VALUE`-class, therefore in `PROMOTABLE_ARG_CLASSES`, so validating
+and reproposing works. An `AUTHORITY_NOT_TRUSTED` denial is *irremediable* — `AUTHORITY` is absent
+from `PROMOTABLE_ARG_CLASSES`, so no validator can ever raise the value and revalidating changes
+nothing. Two different actions for the planner cannot share one code without either sending it into
+a doomed retry or removing the guidance the other case depends on.
+
+**What changed.** `AUTHORITY_NOT_TRUSTED` added to the enum and to `REASON_TEXT`, with no retry
+directive — and here that is not a compromise, since no step the planner could take would make the
+argument acceptable. `INSUFFICIENT_FACT_TRUST` restored to its full text, directive intact.
+`deny-authority-grant-below-trusted` repointed. Both rules' diagnostics now state the contrast
+explicitly and name each other, because the distinction is deliberately invisible to the model and
+the timeline is the only place it can live.
+
+Covered by four mutations, each turning the suite red: repointing the rule back at the shared code
+(4 failures), giving the two codes identical text (2), weakening the authority diagnostic (1), and
+adding a seventh code without a decision (3).
+
 ### Carried into commit 6 — decision-cache TOCTOU
 
 **Must not be forgotten.** The `BeforeToolCall` hook and the `@gated_tool` backstop are intended to
@@ -293,17 +324,16 @@ Carry these forward. Nothing here is blocking commit 3.
    Neither has been run against a real endpoint. No AWS credentials exist in the dev environment.
    Open: whether Nova Lite is strong enough for Planner intents, or whether Triage and Planner
    should sit on different models. Decide before the demo, not before the spine is finished.
-2. **`ReasonCode` vocabulary is expected to grow — still five, with one known imprecision.**
-   New codes are added centrally to the enum, never as free text on a rule. Two places currently
-   stretch a code rather than open a new one, both deliberate and both worth revisiting:
-   - `deny-authority-grant-below-trusted` reports `INSUFFICIENT_FACT_TRUST`. The shape is right
-     ("not confirmed well enough") but the implication is not: an `AUTHORITY` argument can *never*
-     be confirmed into acceptability, whereas a `VALUE` can. The mapped text carries no "confirm
-     it and retry" directive for exactly this reason. If the distinction ever needs to be visible
-     to the planner or greppable in the timeline, `AUTHORITY_NOT_TRUSTED` is the sixth code.
-     `matched_rule_id` distinguishes the two cases in the timeline today.
-   - An undeclared argument denies with `NO_RULE_MATCH` (approved delta D5). Honest — no rule
-     matched — but it shares a code with the default deny.
+2. **`ReasonCode` vocabulary — now six. Grown once, deliberately.** New codes are added centrally
+   to the enum, never as free text on a rule, and every addition is recorded here. See
+   *The sixth reason code* under session 2 for why `AUTHORITY_NOT_TRUSTED` was added rather than
+   stretching an existing code. `tests/test_reason_purity.py` asserts `len(ReasonCode) == 6`, so
+   the next addition has to be a decision rather than a drift.
+
+   One stretch remains, and it is the approved delta D5: an undeclared argument denies with
+   `NO_RULE_MATCH`. Honest — no rule did match — but it shares a code with the default deny.
+   Unlike the authority case, both denials are irremediable in the same way and want the same
+   guidance, so one code serves them; `matched_rule_id is None` separates them in the timeline.
 3. **`WAITING_EXTERNAL` is in the state machine but has no producer yet.** Nothing transitions into
    it until a tool can genuinely block on a third party. It is tested as a table entry only. Either
    wire it in a later session or note in the README that it is reserved.

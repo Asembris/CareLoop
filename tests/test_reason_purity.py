@@ -105,15 +105,31 @@ class TestTheMappingIsTotalAndClosed:
     def test_the_mapping_has_no_entries_outside_the_enum(self) -> None:
         assert all(isinstance(key, ReasonCode) for key in REASON_TEXT)
 
-    def test_the_vocabulary_is_the_five_agreed_codes(self) -> None:
+    def test_the_vocabulary_is_the_six_agreed_codes(self) -> None:
         """Growth is a deliberate decision recorded in the session log, not a drive-by addition."""
         assert {code.value for code in ReasonCode} == {
             "DESTINATION_NOT_TRUSTED",
+            "AUTHORITY_NOT_TRUSTED",
             "REQUIRES_HUMAN_APPROVAL",
             "WRONG_CASE_STATE",
             "INSUFFICIENT_FACT_TRUST",
             "NO_RULE_MATCH",
         }
+
+    def test_the_vocabulary_has_not_grown(self) -> None:
+        """A tripwire on the size alone, separate from the membership test above.
+
+        The vocabulary is closed on purpose: a coarse set limits how much of the policy surface
+        the planner can map by probing it, and every code is text an attacker-influenced planner
+        gets to read. It has grown once, from five to six, when ``AUTHORITY_NOT_TRUSTED`` was
+        added because sharing ``INSUFFICIENT_FACT_TRUST`` meant either misleading the planner into
+        a doomed retry or stripping the retry guidance from the rules that need it.
+
+        Changing this number is a deliberate decision that requires an entry in
+        ``docs/session-log.md`` saying which code was added and what would not work without it.
+        Editing the literal to make a red suite green is the drift this test exists to catch.
+        """
+        assert len(ReasonCode) == 6
 
     def test_texts_are_distinct(self) -> None:
         """Two codes rendering identically would be indistinguishable to the planner."""
@@ -163,6 +179,14 @@ class TestEvaluationLeaksNothing:
                 "grant_portal_access",
                 {"grantee": ATTACKER, "role": INJECTION, "portal_id": SECRET},
                 make_case(state=state, facts=poisoned),
+            )
+            # Grantee and portal from trusted config so the destination rules stand aside and the
+            # AUTHORITY rule is the one that decides. Without this the matrix never reaches
+            # AUTHORITY_NOT_TRUSTED, and the code would go unchecked by the leak tests below.
+            yield (
+                "grant_portal_access",
+                {"grantee": ATTACKER, "role": INJECTION, "portal_id": SECRET},
+                make_case(state=state, facts=trusted),
             )
             yield (
                 "book_appointment",

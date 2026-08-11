@@ -41,6 +41,15 @@ class CachedCall(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
 
+    tokens_estimated: bool = False
+    """True when the provider reported no usage and the counts are a character-based estimate.
+
+    ``strands-agents==1.51.0`` surfaces usage through Bedrock's ``structured_output`` but not
+    through the OpenAI-compatible one, which calls ``beta.chat.completions.parse`` and discards
+    ``response.usage``. Recording which is which keeps a measured cost and a guessed one from
+    being read off the same column.
+    """
+
     latency_ms: float = 0.0
     """Wall-clock, measured here. What a caregiver would actually wait."""
 

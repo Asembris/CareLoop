@@ -15,7 +15,7 @@ from pydantic import BaseModel, ValidationError
 
 from bench.cache import CachedCall, ResponseCache, call_key
 from bench.candidates import Candidate
-from bench.cost import RateTable, SpendLedger
+from bench.cost import RateTable, SpendLedger, estimate_tokens
 from bench.prompts import system_prompt_for, user_prompt_for
 from bench.scoring import TaskScore, score_task
 from bench.tasks import Task, TaskSet
@@ -25,6 +25,27 @@ from careloop.llm.providers import build_model, parse_spec
 #: about capability, not about sampling luck, and because a cached answer should be the answer the
 #: model would give again.
 PARAMS: dict[str, float | int] = {"temperature": 0.0, "max_tokens": 512}
+
+#: Failures that are genuinely the model's answer, and are therefore worth caching as a result.
+#:
+#: Everything else — no credentials, connection reset, TLS failure, throttling — says nothing about
+#: the model and must not be written to the cache, or a transient outage would be frozen into the
+#: results table and every later run would replay it without retrying. That is not hypothetical:
+#: the first live run cached 68 ``NoCredentialsError`` entries as though four candidates had failed
+#: the benchmark.
+MODEL_LEVEL_FAILURES: frozenset[str] = frozenset(
+    {
+        "ValidationError",
+        "WrongOutputType",
+        "ValueError",
+        "ContextWindowOverflowException",
+    }
+)
+
+
+def is_model_failure(error_type: str) -> bool:
+    """Whether a failure is the model's answer rather than a failure to reach it."""
+    return error_type in MODEL_LEVEL_FAILURES
 
 
 class CallOutcome(BaseModel):
@@ -36,6 +57,7 @@ class CallOutcome(BaseModel):
     error_message: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
+    tokens_estimated: bool = False
     latency_ms: float = 0.0
     provider_latency_ms: float = 0.0
 
@@ -48,6 +70,7 @@ class _Driven(BaseModel):
     instance: BaseModel
     input_tokens: int = 0
     output_tokens: int = 0
+    tokens_estimated: bool = False
     provider_latency_ms: float = 0.0
 
 
@@ -74,10 +97,24 @@ async def _drive(model, output_model: type[BaseModel], system: str, prompt: str)
             result = event["output"]
     if result is None:
         raise RuntimeError("provider yielded no output envelope")
+
+    input_tokens = int(usage.get("inputTokens", 0) or 0)
+    output_tokens = int(usage.get("outputTokens", 0) or 0)
+    if input_tokens or output_tokens:
+        return _Driven(
+            instance=result,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            provider_latency_ms=float(metrics.get("latencyMs", 0) or 0),
+        )
+
+    # The provider reported nothing. Estimate, and say so — a cost column silently reading $0.0000
+    # would make the most expensive candidate look free.
     return _Driven(
         instance=result,
-        input_tokens=int(usage.get("inputTokens", 0) or 0),
-        output_tokens=int(usage.get("outputTokens", 0) or 0),
+        input_tokens=estimate_tokens(system) + estimate_tokens(prompt),
+        output_tokens=estimate_tokens(result.model_dump_json()),
+        tokens_estimated=True,
         provider_latency_ms=float(metrics.get("latencyMs", 0) or 0),
     )
 
@@ -126,6 +163,7 @@ def invoke_once(
         provider_latency_ms=driven.provider_latency_ms,
         input_tokens=driven.input_tokens,
         output_tokens=driven.output_tokens,
+        tokens_estimated=driven.tokens_estimated,
     )
 
 
@@ -199,10 +237,17 @@ def run_candidate(
                 error_message=outcome.error_message,
                 input_tokens=outcome.input_tokens,
                 output_tokens=outcome.output_tokens,
+                tokens_estimated=outcome.tokens_estimated,
                 latency_ms=outcome.latency_ms,
                 provider_latency_ms=outcome.provider_latency_ms,
             )
-            cache.put(cached)
+            if cached.ok or is_model_failure(cached.error_type):
+                cache.put(cached)
+            else:
+                on_event(
+                    f"    ....  {task.task_id} not cached: {cached.error_type} is a failure to "
+                    f"reach the model, not a result"
+                )
             cost = rates.cost_usd(model_id, cached.input_tokens, cached.output_tokens)
             ledger.charge(cost)
             status = "ok  " if cached.ok else "FAIL"

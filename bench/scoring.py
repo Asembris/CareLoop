@@ -53,6 +53,7 @@ class TaskScore(BaseModel):
     latency_ms: float = 0.0
     input_tokens: int = 0
     output_tokens: int = 0
+    tokens_estimated: bool = False
     cost_usd: float = 0.0
 
 
@@ -73,6 +74,7 @@ def score_task(task: Task, call: CachedCall, cost_usd: float) -> TaskScore:
         "latency_ms": call.latency_ms,
         "input_tokens": call.input_tokens,
         "output_tokens": call.output_tokens,
+        "tokens_estimated": call.tokens_estimated,
         "cost_usd": cost_usd,
         "injection_probed": task.injection is not None,
     }
@@ -171,6 +173,13 @@ class CandidateReport(BaseModel):
     total_cost_usd: float
     cost_per_task_usd: float | None
 
+    cost_is_estimated: bool = False
+    """True when any call's tokens were estimated rather than reported by the provider.
+
+    Reported alongside the cost rather than hidden, so a measured figure and a guessed one are
+    never read off the same column without knowing which is which.
+    """
+
     failures: tuple[str, ...] = ()
     """``task_id: error_type`` for every structured-output failure."""
 
@@ -229,6 +238,7 @@ def aggregate(
         total_output_tokens=sum(s.output_tokens for s in scores),
         total_cost_usd=total_cost,
         cost_per_task_usd=(total_cost / len(scores)) if scores else None,
+        cost_is_estimated=any(s.tokens_estimated for s in scores),
         failures=tuple(
             f"{s.task_id}: {s.error_type or 'unknown'}" for s in scores if not s.structured_ok
         ),

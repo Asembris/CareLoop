@@ -274,3 +274,62 @@ class TestTheSuiteItselfUsesNoRealProvider:
             f"role variables select a real provider in this environment: {sorted(configured)}. "
             "The suite must run on the mock."
         )
+
+
+class TestBedrockCredentialsComeFromTheMapping:
+    """``env`` must mean the same thing for Bedrock as it does for the OpenAI providers.
+
+    boto3 resolves credentials from ``os.environ`` and never sees a mapping passed in Python, so
+    without an explicit session a caller that supplied perfectly good keys gets
+    ``NoCredentialsError``. The benchmark reads ``.env`` into a mapping precisely to avoid
+    mutating the process environment, so this is the difference between working and not.
+    """
+
+    def test_a_key_pair_in_the_mapping_produces_a_session_carrying_it(self):
+        from careloop.llm.providers import bedrock_session
+
+        session = bedrock_session(
+            {
+                "AWS_ACCESS_KEY_ID": "AKIAEXAMPLE",
+                "AWS_SECRET_ACCESS_KEY": "secret",
+                "AWS_DEFAULT_REGION": "us-east-1",
+            }
+        )
+        assert session is not None
+        credentials = session.get_credentials()
+        assert credentials.access_key == "AKIAEXAMPLE"
+        assert session.region_name == "us-east-1"
+
+    def test_a_session_token_is_carried_when_present(self):
+        from careloop.llm.providers import bedrock_session
+
+        session = bedrock_session(
+            {
+                "AWS_ACCESS_KEY_ID": "AKIAEXAMPLE",
+                "AWS_SECRET_ACCESS_KEY": "secret",
+                "AWS_SESSION_TOKEN": "token",
+                "AWS_DEFAULT_REGION": "us-east-1",
+            }
+        )
+        assert session.get_credentials().token == "token"
+
+    def test_no_key_pair_leaves_boto3s_own_chain_in_charge(self):
+        # Returning a credential-less session would break instance profiles and SSO, and would
+        # break CI, which runs with no credentials at all and must not start failing differently.
+        from careloop.llm.providers import bedrock_session
+
+        assert bedrock_session({"AWS_DEFAULT_REGION": "us-east-1"}) is None
+
+    def test_a_blank_key_pair_is_treated_as_absent(self):
+        from careloop.llm.providers import bedrock_session
+
+        assert bedrock_session({"AWS_ACCESS_KEY_ID": "  ", "AWS_SECRET_ACCESS_KEY": "  "}) is None
+
+    def test_build_model_uses_the_mapping_credentials(self):
+        env = {
+            "AWS_ACCESS_KEY_ID": "AKIAEXAMPLE",
+            "AWS_SECRET_ACCESS_KEY": "secret",
+            "AWS_DEFAULT_REGION": "us-east-1",
+        }
+        model = build_model(ModelSpec(provider="bedrock"), env)
+        assert model.get_config()["model_id"] == "us.amazon.nova-lite-v1:0"

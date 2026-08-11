@@ -7,6 +7,14 @@ from careloop.tools.documents import (
     DocumentStore,
     default_document_store,
 )
+from careloop.tools.executor import (
+    ExecutionOutcome,
+    ExecutionResult,
+    IdempotencyKeyCollision,
+    LedgerEntry,
+    MockExternalExecutor,
+    UnknownActionType,
+)
 from careloop.tools.idempotency import (
     UncanonicalizableArgument,
     args_digest,
@@ -44,10 +52,16 @@ __all__ = [
     "DocumentUploaded",
     "DuplicateToolName",
     "EmailSent",
+    "ExecutionOutcome",
+    "ExecutionResult",
+    "IdempotencyKeyCollision",
+    "LedgerEntry",
+    "MockExternalExecutor",
     "ToolRegistry",
     "ToolResult",
     "ToolSpec",
     "UncanonicalizableArgument",
+    "UnknownActionType",
     "args_digest",
     "canonical_args",
     "default_document_store",

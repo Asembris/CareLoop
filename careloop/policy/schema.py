@@ -1,0 +1,149 @@
+"""The shape of ``rules.yaml``.
+
+Strictly declarative. Nothing here evaluates a condition, reads a case or touches the registry —
+matching lives in :mod:`careloop.policy.engine` so that "what the engine does" is readable in one
+file rather than spread across the data model.
+
+Every model forbids unknown keys. A misspelt condition key is a rule that silently never fires,
+which is the most dangerous kind of policy bug: the suite stays green and the guard is gone. Here
+it fails at load instead.
+"""
+
+from __future__ import annotations
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from careloop.policy.verdicts import ReasonCode, Verdict
+from careloop.provenance.trust import ArgClass, TrustLevel
+from careloop.state.case import CaseState
+
+_STRICT = ConfigDict(frozen=True, extra="forbid")
+
+
+class ArgTrust(BaseModel):
+    """A predicate about the trust resolved for one argument."""
+
+    model_config = _STRICT
+
+    arg: str
+    level: TrustLevel
+
+    arg_class: ArgClass | None = None
+    """An assertion about the argument's class, not a definition of it.
+
+    It has no effect at evaluation time. Its only job is to fail startup when a rule's belief
+    about an argument contradicts the registry — so a rule can document what it is guarding
+    without becoming a second declaration site for argument classes.
+    """
+
+
+class Condition(BaseModel):
+    """When a rule fires. Every populated clause must hold; an empty condition always holds.
+
+    Clause names read the way they fire. A ``DENY`` rule's condition describes the circumstances
+    of the *denial*, so ``arg_trust_below`` on a ``DENY`` rule means "deny when the trust is below
+    this", not "require this much trust".
+    """
+
+    model_config = _STRICT
+
+    case_state_in: tuple[CaseState, ...] = ()
+    """Holds when the case is in one of these states."""
+
+    case_state_not_in: tuple[CaseState, ...] = ()
+    """Holds when the case is in none of these states."""
+
+    arg_trust_below: tuple[ArgTrust, ...] = ()
+    """Holds when every named argument resolves *below* its level.
+
+    An argument the call omits resolves ``UNTRUSTED``, so it is below anything higher — a missing
+    destination denies rather than slipping past the guard.
+    """
+
+    arg_trust_at_least: tuple[ArgTrust, ...] = ()
+    """Holds when every named argument resolves at or above its level."""
+
+    args_present: tuple[str, ...] = ()
+    """Holds when the call supplies every named argument with a non-empty value."""
+
+    @property
+    def referenced_args(self) -> frozenset[str]:
+        """Every argument name this condition mentions, whatever the clause."""
+        return frozenset(
+            [predicate.arg for predicate in (*self.arg_trust_below, *self.arg_trust_at_least)]
+            + list(self.args_present)
+        )
+
+    @property
+    def arg_class_assertions(self) -> tuple[ArgTrust, ...]:
+        """Every predicate that asserts an argument class, for load-time cross-checking."""
+        return tuple(
+            predicate
+            for predicate in (*self.arg_trust_below, *self.arg_trust_at_least)
+            if predicate.arg_class is not None
+        )
+
+
+class Rule(BaseModel):
+    """One policy rule."""
+
+    model_config = _STRICT
+
+    id: str
+    effect: Verdict
+    tools: tuple[str, ...] = Field(min_length=1)
+    """Which tools this rule speaks about. Always a list, even for one tool: uniform to read and
+    uniform for the coverage check to enumerate."""
+
+    when: Condition = Field(default_factory=Condition)
+    diagnostic: str
+    """Timeline-only free text. May name anything; it never reaches a model."""
+
+    reason_code: ReasonCode | None = None
+    """Model-visible code. Required for a refusal, forbidden for an ``ALLOW``."""
+
+    @model_validator(mode="after")
+    def _reason_code_iff_refusal(self) -> Rule:
+        if self.effect is Verdict.ALLOW and self.reason_code is not None:
+            raise ValueError(
+                f"rule {self.id!r} is an ALLOW and must not carry a reason_code; "
+                f"an allowed call has nothing to explain to the model"
+            )
+        if self.effect is not Verdict.ALLOW and self.reason_code is None:
+            raise ValueError(f"rule {self.id!r} is a {self.effect} and must carry a reason_code")
+        return self
+
+
+class RuleSet(BaseModel):
+    """A whole rules file, in file order."""
+
+    model_config = _STRICT
+
+    version: int
+    rules: tuple[Rule, ...]
+
+    @model_validator(mode="after")
+    def _reject_duplicate_ids(self) -> RuleSet:
+        seen: set[str] = set()
+        for rule in self.rules:
+            if rule.id in seen:
+                raise ValueError(f"rule id {rule.id!r} is declared twice")
+            seen.add(rule.id)
+        return self
+
+    def by_effect(self, effect: Verdict) -> tuple[Rule, ...]:
+        """Every rule with this effect, in file order."""
+        return tuple(rule for rule in self.rules if rule.effect is effect)
+
+    @property
+    def tools_named(self) -> frozenset[str]:
+        """Every tool name mentioned by any rule."""
+        return frozenset(tool for rule in self.rules for tool in rule.tools)
+
+    @property
+    def rule_ids(self) -> frozenset[str]:
+        """Every rule id."""
+        return frozenset(rule.id for rule in self.rules)
+
+
+__all__ = ["ArgTrust", "Condition", "Rule", "RuleSet"]

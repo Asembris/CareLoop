@@ -1,0 +1,175 @@
+# CareLoop policy rules.
+#
+# The engine, not this file, fixes the match order: explicit DENY, then REQUIRE_HUMAN, then
+# ALLOW, then a default DENY. Ordering is not configurable here because a rules file that can
+# reorder its own precedence can be talked into promoting an ALLOW above a DENY.
+#
+# Within one effect, the first matching rule wins, so file order matters among rules of the same
+# effect and nowhere else.
+#
+# `diagnostic` is timeline-only and may say anything. `reason_code` is the only thing the planner
+# ever sees, it must be a member of careloop.policy.verdicts.ReasonCode, and it is never
+# interpolated. Argument classes are asserted here and owned by careloop/tools/registry.py; a rule
+# that contradicts the registry fails at load.
+
+version: 1
+
+rules:
+  # ---------------------------------------------------------------------------------------------
+  # DENY — evaluated first, in this order.
+  # ---------------------------------------------------------------------------------------------
+
+  # The state gate goes first: "you should not be doing this yet" is a more fundamental objection
+  # than anything about the arguments, and it keeps argument-level diagnostics out of the timeline
+  # for calls that were never going to be considered.
+  #
+  # PLANNING is included in the permitted set because the planner proposes from there and must be
+  # able to receive REQUIRE_HUMAN rather than a state denial. AWAITING_HUMAN is excluded: while a
+  # decision is outstanding, no further external effect may be proposed.
+  - id: deny-external-effect-outside-execution-states
+    effect: DENY
+    tools: [send_email, book_appointment, upload_document, grant_portal_access]
+    when:
+      case_state_not_in: [PLANNING, READY_TO_EXECUTE, EXECUTING]
+    reason_code: WRONG_CASE_STATE
+    diagnostic: >-
+      External effect proposed from a case state that does not permit one. Legitimate states are
+      PLANNING (proposal), READY_TO_EXECUTE and EXECUTING.
+
+  # The injection case. `to` is DESTINATION-class, so no amount of validation can raise a
+  # document-sourced address to TRUSTED; a recipient that did not come from trusted configuration
+  # is denied whether it reads as plausible or not.
+  - id: deny-email-to-untrusted-recipient
+    effect: DENY
+    tools: [send_email]
+    when:
+      arg_trust_below:
+        - arg: to
+          level: TRUSTED
+          arg_class: DESTINATION
+    reason_code: DESTINATION_NOT_TRUSTED
+    diagnostic: >-
+      send_email.to resolved below TRUSTED. DESTINATION-class arguments are not promotable by
+      validation; the address must come from trusted config or an explicit human decision.
+
+  - id: deny-upload-to-untrusted-portal
+    effect: DENY
+    tools: [upload_document]
+    when:
+      arg_trust_below:
+        - arg: portal_id
+          level: TRUSTED
+          arg_class: DESTINATION
+    reason_code: DESTINATION_NOT_TRUSTED
+    diagnostic: >-
+      upload_document.portal_id resolved below TRUSTED. A portal named by document content is not
+      a legitimate upload target however well-formed the identifier looks.
+
+  - id: deny-portal-access-to-untrusted-grantee
+    effect: DENY
+    tools: [grant_portal_access]
+    when:
+      arg_trust_below:
+        - arg: grantee
+          level: TRUSTED
+          arg_class: DESTINATION
+    reason_code: DESTINATION_NOT_TRUSTED
+    diagnostic: >-
+      grant_portal_access.grantee resolved below TRUSTED. Who receives access is DESTINATION-class
+      and must come from trusted config or a human decision.
+
+  # The only rule keyed on the system's only AUTHORITY argument. It is the mirror of the
+  # destination rules: a role lifted out of a document and then validated is still CONTROLLED, and
+  # CONTROLLED is below TRUSTED, so the grant is denied. Validation cannot manufacture authority.
+  - id: deny-authority-grant-below-trusted
+    effect: DENY
+    tools: [grant_portal_access]
+    when:
+      arg_trust_below:
+        - arg: role
+          level: TRUSTED
+          arg_class: AUTHORITY
+    reason_code: INSUFFICIENT_FACT_TRUST
+    diagnostic: >-
+      grant_portal_access.role resolved below TRUSTED. AUTHORITY-class arguments are never
+      promotable; what powers a grant confers must come from trusted config or a human decision.
+
+  - id: deny-booking-on-unvalidated-slot
+    effect: DENY
+    tools: [book_appointment]
+    when:
+      arg_trust_below:
+        - arg: slot_start
+          level: CONTROLLED
+          arg_class: VALUE
+    reason_code: INSUFFICIENT_FACT_TRUST
+    diagnostic: >-
+      book_appointment.slot_start resolved below CONTROLLED. A time lifted from a document must
+      pass a deterministic validator before it can be booked against.
+
+  # ---------------------------------------------------------------------------------------------
+  # REQUIRE_HUMAN — evaluated only when no DENY matched.
+  # ---------------------------------------------------------------------------------------------
+
+  # Unconditional. Every outbound email is a caregiver decision, even to an address that came from
+  # trusted configuration: the recipient being approved says nothing about the body being right.
+  - id: require-human-for-outbound-email
+    effect: REQUIRE_HUMAN
+    tools: [send_email]
+    reason_code: REQUIRES_HUMAN_APPROVAL
+    diagnostic: >-
+      Outbound email always requires an explicit caregiver decision. A TRUSTED recipient bounds who
+      can be reached, not what is said to them.
+
+  - id: require-human-for-authority-grant
+    effect: REQUIRE_HUMAN
+    tools: [grant_portal_access]
+    reason_code: REQUIRES_HUMAN_APPROVAL
+    diagnostic: >-
+      Granting portal access is an authority change and is never autonomous, whatever the grantee
+      and role resolved to.
+
+  # ---------------------------------------------------------------------------------------------
+  # ALLOW — the autonomous path. Reached only when nothing above matched.
+  # ---------------------------------------------------------------------------------------------
+
+  - id: allow-booking-on-validated-slot
+    effect: ALLOW
+    tools: [book_appointment]
+    when:
+      case_state_in: [READY_TO_EXECUTE, EXECUTING]
+      arg_trust_at_least:
+        - arg: provider_id
+          level: TRUSTED
+          arg_class: DESTINATION
+        - arg: slot_start
+          level: CONTROLLED
+          arg_class: VALUE
+      args_present: [patient_id]
+    diagnostic: >-
+      Booking against a provider from trusted config, at a validated time, with the case cleared
+      for execution. This is the autonomous path.
+
+  - id: allow-upload-to-trusted-portal
+    effect: ALLOW
+    tools: [upload_document]
+    when:
+      case_state_in: [READY_TO_EXECUTE, EXECUTING]
+      arg_trust_at_least:
+        - arg: portal_id
+          level: TRUSTED
+          arg_class: DESTINATION
+        - arg: document_id
+          level: CONTROLLED
+          arg_class: VALUE
+    diagnostic: >-
+      Upload to a portal from trusted config, of a document whose identifier has been validated.
+
+  # fetch_document has no external effect, but deny-by-default applies to every tool call, so the
+  # read path needs a rule of its own or the planner can never gather evidence.
+  - id: allow-document-fetch
+    effect: ALLOW
+    tools: [fetch_document]
+    when:
+      args_present: [document_id]
+    diagnostic: Reading a document CareLoop already holds has no effect outside the system.

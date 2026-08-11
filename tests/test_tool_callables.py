@@ -259,11 +259,28 @@ class TestBindings:
                 raise AssertionError  # pragma: no cover
 
     def test_binding_a_body_that_swallows_arguments_fails(self) -> None:
-        """``**kwargs`` would accept arguments the registry never classified."""
+        """``**kwargs`` would accept arguments the registry never classified.
+
+        Caught by the name check rather than the kind check — ``kwargs`` is not a declared
+        argument name. The kind check earns its place on the case below.
+        """
         with pytest.raises(ToolBindingError):
 
             @implements("send_email")
             def send_email(self, **kwargs: str) -> ToolResult:
+                raise AssertionError  # pragma: no cover
+
+    def test_binding_a_positional_only_body_fails(self) -> None:
+        """The one thing the parameter-kind check catches that the name check does not.
+
+        These parameter names match the registry exactly, so the name check passes. But
+        ``call`` dispatches by keyword, and a positional-only body cannot be called that way —
+        without the kind check this binds cleanly at import and fails at the first invocation.
+        """
+        with pytest.raises(ToolBindingError, match="POSITIONAL_ONLY"):
+
+            @implements("send_email")
+            def send_email(self, to: str, subject: str, body: str, /) -> ToolResult:
                 raise AssertionError  # pragma: no cover
 
     def test_binding_the_same_tool_twice_fails(self) -> None:
@@ -352,6 +369,32 @@ class TestNoEffectWithoutTheExecutor:
             blind.call(tool_name, EFFECT_CALLS[tool_name])
 
 
+def imported_modules(path: Path) -> set[str]:
+    """Every module name ``path`` imports, read from its syntax tree."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            found.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            found.add(node.module)
+    return found
+
+
+def imports_matching(path: Path, banned: tuple[str, ...]) -> set[str]:
+    """The imports of ``path`` that are, or sit under, one of ``banned``."""
+    return {
+        imported
+        for imported in imported_modules(path)
+        for prefix in banned
+        if imported == prefix or imported.startswith(f"{prefix}.")
+    }
+
+
+def tool_modules() -> list[Path]:
+    return sorted(Path(callables_module.__file__).parent.glob("*.py"))
+
+
 class TestToolsStayOutOfTheRestOfTheSystem:
     """Tools do not mutate case state, evaluate policy, or touch a model.
 
@@ -362,33 +405,9 @@ class TestToolsStayOutOfTheRestOfTheSystem:
 
     FORBIDDEN = ("careloop.state", "careloop.policy", "strands")
 
-    @staticmethod
-    def imported_modules(path: Path) -> set[str]:
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        found: set[str] = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                found.update(alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                found.add(node.module)
-        return found
-
-    def forbidden_imports(self, path: Path) -> set[str]:
-        return {
-            imported
-            for imported in self.imported_modules(path)
-            for banned in self.FORBIDDEN
-            if imported == banned or imported.startswith(f"{banned}.")
-        }
-
-    @property
-    def tool_modules(self) -> list[Path]:
-        package = Path(callables_module.__file__).parent
-        return sorted(package.glob("*.py"))
-
     def test_the_package_has_the_modules_this_test_expects(self) -> None:
         """Otherwise the sweep below runs over nothing."""
-        assert {path.name for path in self.tool_modules} >= {
+        assert {path.name for path in tool_modules()} >= {
             "callables.py",
             "documents.py",
             "executor.py",
@@ -400,19 +419,83 @@ class TestToolsStayOutOfTheRestOfTheSystem:
     def test_no_tool_module_imports_state_policy_or_a_model(self) -> None:
         offenders = {
             path.name: sorted(found)
-            for path in self.tool_modules
-            if (found := self.forbidden_imports(path))
+            for path in tool_modules()
+            if (found := imports_matching(path, self.FORBIDDEN))
         }
         assert offenders == {}
 
     def test_the_detector_finds_a_forbidden_import_where_one_exists(self) -> None:
         """Vacuity: ``policy/engine.py`` imports the state layer, so the sweep must flag it."""
         engine = Path(callables_module.__file__).parent.parent / "policy" / "engine.py"
-        assert "careloop.state.case" in self.forbidden_imports(engine)
+        assert "careloop.state.case" in imports_matching(engine, self.FORBIDDEN)
 
     def test_the_detector_does_not_flag_an_unrelated_import(self) -> None:
         """A prefix match on ``careloop.state`` must not catch, say, ``careloop.statistics``."""
-        assert self.forbidden_imports(Path(callables_module.__file__)) == set()
-        assert "careloop.provenance.canonical" in self.imported_modules(
+        assert imports_matching(Path(callables_module.__file__), self.FORBIDDEN) == set()
+        assert "careloop.provenance.canonical" in imported_modules(
             Path(callables_module.__file__).parent / "idempotency.py"
         )
+
+
+class TestNoClockAndNoRandomness:
+    """Nothing in ``careloop/tools/`` may read the time or a random source.
+
+    Byte-identical replay is what makes T3 an assertion rather than an approximation, and it is
+    exactly the property that dies quietly the first time somebody adds a ``sent_at`` for
+    convenience. Asserting it by comparing two results is not enough — on a platform whose clock
+    ticks every 15ms, two results built microseconds apart compare equal and the test passes while
+    the property is gone. So it is enforced on the source instead.
+    """
+
+    FORBIDDEN = ("datetime", "time", "random", "secrets", "uuid")
+
+    def test_no_tool_module_imports_a_clock_or_a_random_source(self) -> None:
+        offenders = {
+            path.name: sorted(found)
+            for path in tool_modules()
+            if (found := imports_matching(path, self.FORBIDDEN))
+        }
+        assert offenders == {}
+
+    def test_the_detector_finds_a_clock_where_one_exists(self) -> None:
+        """Vacuity: ``state/case.py`` stamps times, so the sweep must flag it."""
+        case = Path(callables_module.__file__).parent.parent / "state" / "case.py"
+        assert imports_matching(case, self.FORBIDDEN) == {"datetime"}
+
+    def test_no_result_field_is_filled_in_from_ambient_state(self) -> None:
+        """A default or a factory is where a timestamp or a random id would enter.
+
+        Every field of every result is required, so a result can only say what its caller told
+        it — there is nowhere for the current time to arrive from.
+        """
+        subclasses = _all_subclasses(ToolResult)
+        assert len(subclasses) >= 6
+
+        offenders = {
+            f"{model.__name__}.{name}"
+            for model in subclasses
+            for name, field in model.model_fields.items()
+            if field.default_factory is not None or not field.is_required()
+        }
+        assert offenders == set()
+
+    def test_the_field_check_would_notice_a_default_factory(self) -> None:
+        """Vacuity: a synthetic result with a clock must be caught by the same rule."""
+        from datetime import UTC, datetime
+
+        from pydantic import Field
+
+        class Stamped(ToolResult):
+            at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+        offenders = {
+            name
+            for name, field in Stamped.model_fields.items()
+            if field.default_factory is not None or not field.is_required()
+        }
+        assert offenders == {"at"}
+
+
+def _all_subclasses(root: type) -> set[type]:
+    found = set(root.__subclasses__())
+    return found | {nested for child in found for nested in _all_subclasses(child)}

@@ -42,6 +42,30 @@ jobs:
       - name: Install
         run: pip install -e ".[dev]"
 
+      # Enforces what the env block above only sets up: this job must run with no provider SDK
+      # reachable, so "offline, $0, no secrets" is checked rather than assumed.
+      #
+      # This is a workflow step and not a pytest test on purpose. The property is about the
+      # *installed tree*, and a test asserting `openai` is absent would fail on every developer
+      # machine that has the `bench` extra — which is every machine that can run the benchmark.
+      # Only CI can assert it, so only CI does.
+      #
+      # What it protects: `openai` belongs to `bench`, never to `dev`. If it ever leaks into `dev`,
+      # the two pytest.importorskip tests in tests/test_llm_providers.py would quietly start
+      # running here and this job would stay green while no longer proving anything about
+      # reaching a provider. That is a property dying silently on a pyproject.toml edit, which is
+      # the same failure mode the no-clock guard was moved to source-level enforcement to avoid.
+      #
+      # Only `openai` is checked. boto3 arrives as a strands-agents dependency and cannot be
+      # excluded; it is also inert without credentials, which the env block above denies it.
+      - name: Assert no provider SDK is installed
+        run: |
+          if python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('openai') else 1)"; then
+            echo "::error::'openai' is importable in CI's environment. It belongs to the 'bench' extra, not 'dev'. CI must run with no provider SDK reachable. If this was deliberate, move this assertion rather than deleting it."
+            exit 1
+          fi
+          echo "No provider SDK installed - correct."
+
       - name: Lint
         run: ruff check .
 

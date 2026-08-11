@@ -662,6 +662,17 @@ inside the test via `builtins.__import__`, reproducing CI's tree on a developer 
 the extra installed, and it is proven non-vacuous: restoring the import-before-resolve ordering
 turns it red locally.
 
+**And a CI step, because the remaining hole could not be a test.** The workflow now asserts
+`openai` is unimportable after `pip install -e ".[dev]"`. The property is about the *installed
+tree*, so pytest cannot hold it: a test asserting the package is absent would fail on every
+machine that can run the benchmark. Without the step, adding `openai` to `dev` would make the two
+`importorskip` tests start running in CI and the job would stay green while no longer proving
+anything about reaching a provider — a property dying silently on a `pyproject.toml` edit, which
+is the same failure mode that moved the no-clock guard to source-level enforcement. Verified in
+both directions: it passes against a `.[dev]`-only virtualenv and fails against the local tree
+with the extra installed. Only `openai` is checked; boto3 arrives as a `strands-agents` dependency
+and cannot be excluded, and the job already denies it credentials.
+
 ### Guards proven non-vacuous by mutation
 
 Twenty-five mutations across the two commits, each applied to a clean tree, suite re-run, reverted.

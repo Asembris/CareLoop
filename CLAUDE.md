@@ -41,10 +41,24 @@ working around it.
    diagnostics go to the timeline only. Denial text is echoed into the planner's context, so an
    interpolated reason would be a self-inflicted injection channel.
 7. **Every external-effect tool call carries an idempotency key** derived from
-   `(case_id, action_type, canonical args)`.
+   `(case_id, action_type, canonical args)`. `case_id` is bound when the toolset is constructed and
+   is never a tool argument — a model that could supply it could scope two identical actions apart,
+   or collapse two cases' actions together.
 8. **`CaseStore` is the durable source of truth** — state, evidence and provenance, approvals,
    action history, pending work, append-only timeline. Strands session persistence holds execution
    context only and is never consulted for business facts.
+9. **No clock and no randomness anywhere in `careloop/tools/`.** Synthetic identifiers derive from
+   the idempotency key; results and ledger entries carry no timestamp; time is stamped by whoever
+   writes the timeline. A replayed action must return a *byte-identical* result, which is what
+   makes T3 an assertion rather than an approximation — and the property dies the first time
+   someone adds a `sent_at` for convenience. Enforced structurally: no module under `tools/` may
+   import `datetime`, `time`, `random`, `secrets` or `uuid`, and no result field may carry a
+   default or a `default_factory`.
+10. **One canonical value form**, `provenance.canonical.canonical_value`, shared by the policy
+    engine and by idempotency keys. The consumers differ only in totality: a value with no
+    canonical form resolves `UNTRUSTED` for policy (fail closed) and *raises* for keying, since
+    folding it onto a sentinel would collide two distinct actions into one suppressed duplicate
+    (fail open).
 
 ## Working agreement
 

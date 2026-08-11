@@ -38,6 +38,7 @@ from careloop.tools.results import (
     AppointmentBooked,
     DocumentUploaded,
     EmailSent,
+    ToolResult,
 )
 
 
@@ -83,10 +84,15 @@ class LedgerEntry(BaseModel):
     result: ActionResult
 
 
-class ExecutionResult(BaseModel):
-    """What :meth:`MockExternalExecutor.invoke` returns."""
+class ExecutionResult(ToolResult):
+    """What :meth:`MockExternalExecutor.invoke` returns, and what an effectful tool returns.
 
-    model_config = ConfigDict(frozen=True)
+    A :class:`ToolResult`, so "every tool returns a typed result" is a statement about types. It
+    wraps the payload rather than being it, because the outcome is information the caller needs:
+    a graph node writes :attr:`careloop.state.case.TimelineKind.DUPLICATE_SUPPRESSED` on the
+    strength of it, and it cannot recover it from the payload alone — a suppressed replay returns
+    a payload identical to the original by design.
+    """
 
     outcome: ExecutionOutcome
     idempotency_key: str

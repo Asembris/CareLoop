@@ -128,9 +128,35 @@ VERIFIERS: Final[Mapping[str, Verifier]] = {
     "grant_portal_access": _verify_grant,
 }
 
+#: The typed result each action type produces.
+#:
+#: :class:`~careloop.state.case.ActionRecord` stores its result as JSON text, because the store is
+#: a key-value document store and a durable record has to survive as bytes. Rehydrating it needs
+#: the type back, and reading the type name *out of* the stored document would let the document
+#: choose which class to instantiate. This table is the trusted side of that decision: the action
+#: type comes from the case's own record of what was authorised.
+RESULT_TYPES: Final[Mapping[str, type[ActionResult]]] = {
+    "send_email": EmailSent,
+    "book_appointment": AppointmentBooked,
+    "upload_document": DocumentUploaded,
+    "grant_portal_access": AccessGranted,
+}
+
 
 class UnverifiableAction(Exception):
-    """Raised at import when an external-effect tool has no verifier."""
+    """Raised at import when an external-effect tool has no verifier or no result type."""
+
+
+def rehydrate(action_type: str, recorded: str) -> ActionResult:
+    """Rebuild the typed result an :class:`~careloop.state.case.ActionRecord` holds as JSON.
+
+    Raises:
+        UnverifiableAction: if the action type has no declared result type.
+    """
+    result_type = RESULT_TYPES.get(action_type)
+    if result_type is None:  # pragma: no cover - the import-time check keeps this unreachable
+        raise UnverifiableAction(f"no result type for action type {action_type!r}")
+    return result_type.model_validate_json(recorded)
 
 
 def check_verifiers_cover_the_registry() -> None:
@@ -148,6 +174,14 @@ def check_verifiers_cover_the_registry() -> None:
             f"verifiers disagree with the registry: "
             f"declared but unverifiable {sorted(declared - verified)}, "
             f"verifiable but undeclared {sorted(verified - declared)}"
+        )
+
+    typed = frozenset(RESULT_TYPES)
+    if typed != declared:
+        raise UnverifiableAction(
+            f"result types disagree with the registry: "
+            f"declared but untyped {sorted(declared - typed)}, "
+            f"typed but undeclared {sorted(typed - declared)}"
         )
 
 
@@ -209,10 +243,12 @@ def verify_action(
 
 
 __all__ = [
+    "RESULT_TYPES",
     "VERIFIERS",
     "UnverifiableAction",
     "Verification",
     "Verifier",
     "check_verifiers_cover_the_registry",
+    "rehydrate",
     "verify_action",
 ]

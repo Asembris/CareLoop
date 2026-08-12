@@ -31,25 +31,15 @@ therefore laid out with single-space separators and no extraction pattern depend
 
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import Final
 
 from pydantic import BaseModel, ConfigDict
 
+from careloop.tools.results import DocumentKind
+
 #: Prefix marking a line that renders in bold. Stripped before the text reaches the page, so the
 #: marker is a rendering instruction and never document content.
 BOLD_MARKER: Final[str] = "# "
-
-
-class DocumentKind(StrEnum):
-    """What a document is, which decides the schema its structured fields are validated against."""
-
-    REFERRAL = "REFERRAL"
-    CONTINUITY_NOTICE = "CONTINUITY_NOTICE"
-    APPOINTMENT_INSTRUCTIONS = "APPOINTMENT_INSTRUCTIONS"
-    EXPLANATION_OF_BENEFITS = "EXPLANATION_OF_BENEFITS"
-    CLAIM_REJECTION = "CLAIM_REJECTION"
-    RECEIPT = "RECEIPT"
 
 
 class DocumentSource(BaseModel):

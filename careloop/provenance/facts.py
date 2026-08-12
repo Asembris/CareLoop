@@ -37,6 +37,17 @@ class Provenance(BaseModel):
     extractor: str = "unknown"
     """Name of the extraction step that produced the value."""
 
+    @property
+    def citation(self) -> str:
+        """Where this came from, as a caregiver reads it: ``referral.pdf p.2``.
+
+        Carries no value and no trust level, so it is safe anywhere a summary is — which is the
+        point: the timeline says *which page of which document* a fact came from, and that line is
+        the visible form of invariant 3's provenance requirement. Documents without pagination
+        cite the source alone rather than inventing a page number.
+        """
+        return f"{self.source_doc} p.{self.page}" if self.page is not None else self.source_doc
+
 
 class Fact(BaseModel):
     """A single extracted value, its provenance, and its trust level.
@@ -59,6 +70,11 @@ class Fact(BaseModel):
 
     validated_by: str | None = None
     """Name of the validator that justified the current trust level, if any."""
+
+    @property
+    def citation(self) -> str:
+        """Where the value came from, as a caregiver reads it: ``referral.pdf p.2``."""
+        return self.provenance.citation
 
     def __str__(self) -> str:
         """Render without the value, so facts are safe to log."""

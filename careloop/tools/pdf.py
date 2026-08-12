@@ -31,7 +31,7 @@ import io
 from importlib import resources
 from typing import Final
 
-from careloop.tools.results import Document
+from careloop.tools.results import Document, DocumentKind
 
 #: Package owning the fixture directory, and the directory's name within it.
 #:
@@ -92,12 +92,18 @@ def read_fixture(source_doc: str) -> tuple[str, ...]:
     return extract_pages(data)
 
 
-def read_document(document_id: str, title: str, source_doc: str) -> Document:
-    """Read one packaged fixture into a :class:`~careloop.tools.results.Document`."""
+def read_document(document_id: str, title: str, source_doc: str, kind: DocumentKind) -> Document:
+    """Read one packaged fixture into a :class:`~careloop.tools.results.Document`.
+
+    ``kind`` is passed in rather than inferred from the text: it decides which schema the
+    extracted fields are validated against, and a document that could choose its own schema is a
+    document that could choose the weakest one.
+    """
     return Document(
         document_id=document_id,
         title=title,
         source_doc=source_doc,
+        kind=kind,
         pages=read_fixture(source_doc),
     )
 

@@ -92,6 +92,7 @@ def fixture_documents() -> tuple[Document, ...]:
             document_id=declared.document_id,
             title=declared.title,
             source_doc=declared.source_doc,
+            kind=declared.kind,
         )
         for declared in DOCUMENT_SOURCES
     )

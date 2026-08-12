@@ -8,14 +8,22 @@ from the bug — see :class:`TestTheAssertionThatWouldNotHaveCaught` for the pro
 from __future__ import annotations
 
 import pytest
-from helpers import FIXED_NOW, make_case, make_fact
+from helpers import FIXED_NOW, make_case, make_fact, trusted_fact
 
 from careloop.policy.engine import resolve_trust
-from careloop.provenance import ArgClass, PromotionForbidden, TrustLevel, promote
+from careloop.provenance import (
+    ArgClass,
+    Fact,
+    PromotionForbidden,
+    Provenance,
+    TrustLevel,
+    promote,
+)
 from careloop.state import TimelineKind
 from careloop.state.evidence import (
     FactNotOnCase,
     PromotionIneffective,
+    already_recorded,
     promote_fact,
     record_fact,
 )
@@ -167,6 +175,138 @@ class TestPromotionRefusesWhatItCannotMakeTrue:
                 validator="v",
                 now=FIXED_NOW,
             )
+
+
+class TestARepeatedValueIsNotRecordedTwice:
+    """Open decision 9's third face.
+
+    The first was append-versus-replace on promotion; the second was triage emitting a duplicate
+    of a value the evidence node would later promote. This is the third: a *second document*
+    legitimately restating a value the case already carries. All three are the same hazard —
+    under lowest-wins, any path that can add a second fact at an existing ``(key, value)`` can
+    silently downgrade trust — and all three are now closed at the writer rather than at each
+    caller.
+
+    The resume makes it concrete rather than hypothetical: the claim rejection arriving weeks
+    later restates ``Patient ID: PT-4417``, which the referral supplied and validation promoted.
+    """
+
+    @staticmethod
+    def _promoted_case() -> tuple[object, object]:
+        case, raw = case_with_raw_slot()
+        return (
+            promote_fact(
+                case, raw, arg_class=ArgClass.VALUE, validator="iso_datetime", now=FIXED_NOW
+            ),
+            raw,
+        )
+
+    def test_the_duplicate_is_not_added_to_the_facts(self) -> None:
+        case, _raw = self._promoted_case()
+
+        again = record_fact(case, make_fact("slot_start", SLOT), now=FIXED_NOW)
+
+        assert len(again.facts) == len(case.facts)
+
+    def test_and_the_promoted_value_still_resolves_controlled(self) -> None:
+        """The assertion that matters, at the engine. Without the guard this reads UNTRUSTED."""
+        case, _raw = self._promoted_case()
+
+        again = record_fact(case, make_fact("slot_start", SLOT), now=FIXED_NOW)
+
+        assert resolve_trust(SLOT, again) is TrustLevel.CONTROLLED
+
+    def test_recording_the_duplicate_without_the_guard_would_downgrade_it(self) -> None:
+        """Vacuity: the same case built by appending the duplicate directly does read UNTRUSTED.
+
+        This is what the guard prevents, demonstrated rather than asserted — the plausible test
+        ("a CONTROLLED fact is on the case") passes in both worlds and can tell them apart in
+        neither.
+        """
+        case, _raw = self._promoted_case()
+
+        appended = case.model_copy(update={"facts": (*case.facts, make_fact("slot_start", SLOT))})
+
+        assert any(fact.trust_level is TrustLevel.CONTROLLED for fact in appended.facts)
+        assert resolve_trust(SLOT, appended) is TrustLevel.UNTRUSTED
+
+    def test_the_skip_is_on_the_timeline_rather_than_silent(self) -> None:
+        """An invisible trust-safety mechanism is the same hazard somewhere else."""
+        case, _raw = self._promoted_case()
+
+        again = record_fact(case, make_fact("slot_start", SLOT), now=FIXED_NOW)
+
+        entry = again.timeline[-1]
+        assert entry.kind is TimelineKind.EVIDENCE_DUPLICATE_SKIPPED
+        assert entry.payload["held_trust_level"] == "CONTROLLED"
+        assert "lowest level" in (entry.diagnostic or "")
+
+    def test_the_same_key_with_a_different_value_is_still_recorded(self) -> None:
+        """Deduplication is on ``(key, value)``. Two documents disagreeing is not a duplicate —
+        it is a conflict, and both facts have to be on the case for anything to notice it."""
+        case, _raw = self._promoted_case()
+
+        other = record_fact(case, make_fact("slot_start", "2026-10-01T09:00:00"), now=FIXED_NOW)
+
+        assert len(other.facts) == len(case.facts) + 1
+
+    def test_a_different_key_with_the_same_value_is_still_recorded(self) -> None:
+        case, _raw = self._promoted_case()
+
+        other = record_fact(case, make_fact("rescheduled_slot", SLOT), now=FIXED_NOW)
+
+        assert len(other.facts) == len(case.facts) + 1
+
+    def test_already_recorded_reports_the_fact_that_is_in_the_way(self) -> None:
+        case, _raw = self._promoted_case()
+
+        held = already_recorded(case, make_fact("slot_start", SLOT))
+
+        assert held is not None
+        assert held.trust_level is TrustLevel.CONTROLLED
+        assert already_recorded(case, make_fact("slot_start", "something else")) is None
+
+
+class TestTheCitation:
+    """``source: referral.pdf p.2`` — invariant 3's provenance made visible in the timeline."""
+
+    def test_a_paginated_fact_cites_its_page(self) -> None:
+        fact = Fact(
+            key="slot_start",
+            value=SLOT,
+            provenance=Provenance(source_doc="referral.pdf", page=2, extractor="test"),
+            extracted_at=FIXED_NOW,
+        )
+
+        assert fact.citation == "referral.pdf p.2"
+
+    def test_an_unpaginated_fact_cites_the_source_alone(self) -> None:
+        """Trusted configuration has no page, and inventing one would be a lie in the audit."""
+        assert trusted_fact("caregiver_email", "rosa@example.test").citation == "trusted-config"
+
+    def test_the_timeline_summary_carries_the_citation(self) -> None:
+        fact = Fact(
+            key="slot_start",
+            value=SLOT,
+            provenance=Provenance(source_doc="referral.pdf", page=2, extractor="test"),
+            extracted_at=FIXED_NOW,
+        )
+
+        recorded = record_fact(make_case(), fact, now=FIXED_NOW)
+
+        assert "source: referral.pdf p.2" in recorded.timeline[-1].summary
+
+    def test_the_citation_leaks_neither_the_value_nor_the_trust_level(self) -> None:
+        """It goes in a summary, so it has to be safe there."""
+        fact = Fact(
+            key="slot_start",
+            value=SLOT,
+            provenance=Provenance(source_doc="referral.pdf", page=2, extractor="test"),
+            extracted_at=FIXED_NOW,
+        )
+
+        assert SLOT not in fact.citation
+        assert str(fact.trust_level) not in fact.citation
 
 
 class TestTheTimeline:

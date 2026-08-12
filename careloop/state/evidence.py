@@ -80,6 +80,14 @@ def _index_of(case: Case, fact: Fact) -> int:
     )
 
 
+def already_recorded(case: Case, fact: Fact) -> Fact | None:
+    """The fact already on ``case`` carrying this ``(key, value)``, if there is one."""
+    for candidate in case.facts:
+        if candidate.key == fact.key and candidate.value == fact.value:
+            return candidate
+    return None
+
+
 def record_fact(
     case: Case,
     fact: Fact,
@@ -89,16 +97,55 @@ def record_fact(
 ) -> Case:
     """Return a copy of ``case`` carrying ``fact``, with an ``EVIDENCE_RECORDED`` entry.
 
-    The summary renders through ``Fact.__str__``, which omits the value; the value goes to the
+    The summary renders through ``Fact.__str__``, which omits the value, plus the fact's
+    :attr:`~careloop.provenance.facts.Fact.citation` — ``source: referral.pdf p.2``. That citation
+    is invariant 3's provenance requirement made visible: an audit trail that says a value was
+    recorded but not where it came from is not an audit trail. The value itself goes to the
     diagnostic, which is timeline-only and is where raw content belongs.
+
+    **A fact the case already holds at this exact ``(key, value)`` is not recorded twice.** This is
+    open decision 9's third face, after append-versus-replace and triage-emitted duplicates, and it
+    is guarded here rather than at the caller so that no second call site can forget it. Under
+    lowest-wins, a second ``UNTRUSTED`` copy of a value the case already carries at ``CONTROLLED``
+    silently downgrades it, and every action depending on that value is then denied for a reason no
+    diagnostic explains. The follow-up documents in the resume make this concrete: a claim
+    rejection legitimately restates ``Patient ID: PT-4417``, which the referral already supplied
+    and validation already promoted.
+
+    The skip is written to the timeline rather than performed quietly, because an invisible
+    trust-safety mechanism is the same hazard in a different place.
     """
     at = now or _utcnow()
+
+    duplicate = already_recorded(case, fact)
+    if duplicate is not None:
+        return append_event(
+            case,
+            kind=TimelineKind.EVIDENCE_DUPLICATE_SKIPPED,
+            actor=actor,
+            summary=f"{fact.key} already recorded — source: {fact.citation}",
+            diagnostic=(
+                f"{fact.key}={fact.value!r} from {fact.citation} was not recorded a second time: "
+                f"the case already carries it at {duplicate.trust_level} from "
+                f"{duplicate.citation}. Recording it again would add a fact at "
+                f"{fact.trust_level}, and trust resolution takes the lowest level among facts "
+                f"whose value matches — so the duplicate would silently downgrade the original."
+            ),
+            payload={
+                "key": fact.key,
+                "source_doc": fact.provenance.source_doc,
+                "page": fact.provenance.page,
+                "held_trust_level": str(duplicate.trust_level),
+            },
+            now=at,
+        )
+
     with_fact = case.model_copy(update={"facts": (*case.facts, fact)})
     return append_event(
         with_fact,
         kind=TimelineKind.EVIDENCE_RECORDED,
         actor=actor,
-        summary=f"recorded {fact}",
+        summary=f"recorded {fact} — source: {fact.citation}",
         diagnostic=(
             f"{fact.key}={fact.value!r} at {fact.trust_level} from "
             f"{fact.provenance.source_doc} page {fact.provenance.page} "
@@ -180,4 +227,10 @@ def promote_fact(
     )
 
 
-__all__ = ["FactNotOnCase", "PromotionIneffective", "promote_fact", "record_fact"]
+__all__ = [
+    "FactNotOnCase",
+    "PromotionIneffective",
+    "already_recorded",
+    "promote_fact",
+    "record_fact",
+]

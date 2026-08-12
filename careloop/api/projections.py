@@ -57,8 +57,10 @@ from careloop.api.models import (
     DecisionView,
     FactView,
     ResponseModel,
+    RunView,
     TimelineEventView,
 )
+from careloop.api.runs import RunRecord
 from careloop.graph.context import proposal_for
 from careloop.policy.verdicts import ReasonCode, reason_text
 from careloop.provenance.facts import Fact, Provenance
@@ -324,6 +326,7 @@ SOURCES: Final[Mapping[type[ResponseModel], Mapping[str, str]]] = MappingProxyTy
             }
         ),
         CaseSections: MappingProxyType({}),
+        RunView: MappingProxyType({}),
     }
 )
 
@@ -364,6 +367,18 @@ DERIVED: Final[Mapping[type[ResponseModel], Mapping[str, str]]] = MappingProxyTy
                 "needs_you": "cases whose state is in SECTIONS['needs_you']",
                 "working": "cases whose state is in SECTIONS['working']",
                 "completed": "cases whose state is in SECTIONS['completed']",
+            }
+        ),
+        # Not a projection of the store at all. A run is execution context — see careloop.api.runs
+        # for why that is consistent with invariant 8 rather than a hole in it — so every field is
+        # declared derived, and the table says so out loud rather than by omission.
+        RunView: MappingProxyType(
+            {
+                "run_id": "RunRecord.run_id, from the in-process run registry",
+                "case_id": "RunRecord.case_id, from the in-process run registry",
+                "state": "RunRecord.state, from the in-process run registry",
+                "executed_nodes": "RunRecord.executed_nodes, from the in-process run registry",
+                "error": "RunRecord.error, the raised type's name and never its message",
             }
         ),
     }
@@ -652,6 +667,17 @@ def case_sections(cases: dict[str, list[Case]]) -> CaseSections:
     )
 
 
+def run_view(record: RunRecord) -> RunView:
+    """One scheduled run, as the under-the-hood panel reads it."""
+    return RunView(
+        run_id=record.run_id,
+        case_id=record.case_id,
+        state=str(record.state),
+        executed_nodes=list(record.executed_nodes),
+        error=record.error,
+    )
+
+
 def payload_keys_in(case: Case) -> set[str]:
     """Every timeline payload key ``case`` carries.
 
@@ -686,6 +712,7 @@ __all__: list[str] = [
     "decision_view",
     "fact_view",
     "payload_keys_in",
+    "run_view",
     "section_for",
     "timeline_event_view",
 ]

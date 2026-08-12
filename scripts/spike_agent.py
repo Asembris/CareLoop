@@ -445,7 +445,7 @@ def scripted_intent() -> BaseModel:
     return PlannerIntent(
         tool_name="fetch_document",
         rationale="Read the referral before proposing anything with an effect.",
-        **dict.fromkeys(sorted(PlannerIntent.ARGUMENT_FIELDS), ""),
+        args={},
     )
 
 

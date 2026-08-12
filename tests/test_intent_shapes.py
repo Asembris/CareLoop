@@ -131,13 +131,27 @@ class TestEveryShapeReachesTheProviderIntact:
             assert set(emitted["required"]) == set(REGISTRY.get(name).arg_names)
 
 
-class TestOnlyTheShippedShapeAsksForEveryArgument:
-    """The property under investigation, stated as an assertion rather than as a belief."""
+class TestOnlyTheControlAsksForEveryArgument:
+    """The property under investigation, stated as an assertion rather than as a belief.
 
-    def test_the_shipped_shape_requires_every_argument_of_every_tool(self):
-        emitted = provider_tool_spec(PlannerIntent)
+    ``A_flat`` is the frozen record of what shipped before session B, and it is the only shape
+    that asks a model choosing one tool about another tool's arguments. That is the difference
+    the shootout measured at 0/8 against 24/24.
+    """
+
+    def test_the_control_requires_every_argument_of_every_tool(self):
+        emitted = provider_tool_spec(candidate("A_flat").schemas[0])
         every_argument = {arg for tool in REGISTRY for arg in tool.arg_names}
         assert every_argument <= set(emitted["required"])
+
+    def test_the_control_is_frozen_and_no_longer_tracks_what_ships(self):
+        """A control that follows the thing under test stops being a control.
+
+        The first draft imported the shipped schema here, so fixing the schema would have made
+        this shape a copy of the winner and the recorded 0/8 unreproducible.
+        """
+        assert candidate("A_flat").schemas[0] is not PlannerIntent
+        assert set(PlannerIntent.model_fields) != set(candidate("A_flat").schemas[0].model_fields)
 
     @pytest.mark.parametrize(
         "shape", [shape for shape in CANDIDATES if shape.key != "A_flat"], ids=lambda s: s.key
@@ -147,6 +161,14 @@ class TestOnlyTheShippedShapeAsksForEveryArgument:
         emitted = provider_tool_spec(shape.schemas[0])
         every_argument = {arg for tool in REGISTRY for arg in tool.arg_names}
         assert not (set(emitted["required"]) & every_argument)
+
+    def test_what_ships_now_is_the_shape_that_won(self):
+        """The shipped schema and the winning candidate agree on what the provider is handed."""
+        winner = provider_tool_spec(candidate("B_map").schemas[0])
+        shipped = provider_tool_spec(PlannerIntent)
+        assert sorted(shipped["properties"]) == sorted(winner["properties"])
+        assert sorted(shipped["required"]) == sorted(winner["required"])
+        assert shipped["properties"]["args"]["additionalProperties"] == {"type": "string"}
 
 
 class TestTheShapesAreGeneratedFromTheRegistry:

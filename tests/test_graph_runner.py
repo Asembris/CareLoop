@@ -54,9 +54,7 @@ EMAIL = {"to": CARER, "subject": "Referral received", "body": "Arranging the app
 
 
 def intent(tool_name: str, **args: str) -> PlannerIntent:
-    fields = dict.fromkeys(PlannerIntent.ARGUMENT_FIELDS, "")
-    fields.update(args)
-    return PlannerIntent(tool_name=tool_name, rationale="the next step", **fields)
+    return PlannerIntent(tool_name=tool_name, rationale="the next step", args=args)
 
 
 def triage_agent() -> TriageAgent:

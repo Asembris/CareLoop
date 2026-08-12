@@ -33,8 +33,6 @@ from careloop.agents.prompts import (
     triage_system_prompt,
 )
 from careloop.agents.schemas import (
-    ARG_NAMES,
-    NOT_SUPPLIED,
     PlannerIntent,
     TriageCategory,
     TriageResult,
@@ -61,9 +59,11 @@ def a_triage_result() -> TriageResult:
 
 
 def an_intent(tool_name: str = "fetch_document", **args: str):
-    fields = dict.fromkeys(ARG_NAMES, NOT_SUPPLIED)
-    fields.update(args or {"document_id": "doc-0001-referral"})
-    return PlannerIntent(tool_name=tool_name, rationale="because", **fields)
+    return PlannerIntent(
+        tool_name=tool_name,
+        rationale="because",
+        args=args or {"document_id": "doc-0001-referral"},
+    )
 
 
 def agent_modules() -> list[Path]:

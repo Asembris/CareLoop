@@ -14,7 +14,29 @@ property.
 
 from __future__ import annotations
 
+from enum import StrEnum
+
 from pydantic import BaseModel, ConfigDict
+
+
+class DocumentKind(StrEnum):
+    """What a document is.
+
+    Metadata, not an extracted value: CareLoop knows a referral is a referral because whoever
+    filed it said so, and inferring the kind from the text would make an attacker-controlled
+    document able to choose which schema validates it.
+
+    It decides which patterns are applied and which schema the extracted fields are checked
+    against, so it is a required field rather than one with a default — a document of unknown kind
+    should fail loudly rather than quietly skip validation.
+    """
+
+    REFERRAL = "REFERRAL"
+    CONTINUITY_NOTICE = "CONTINUITY_NOTICE"
+    APPOINTMENT_INSTRUCTIONS = "APPOINTMENT_INSTRUCTIONS"
+    EXPLANATION_OF_BENEFITS = "EXPLANATION_OF_BENEFITS"
+    CLAIM_REJECTION = "CLAIM_REJECTION"
+    RECEIPT = "RECEIPT"
 
 
 class ToolResult(BaseModel):
@@ -79,6 +101,10 @@ class Document(ToolResult):
     source_doc: str
     """Filename or message id the content came from, recorded on facts extracted from it."""
 
+    kind: DocumentKind
+    """What the document is. Required, and never inferred from its text — see
+    :class:`DocumentKind`."""
+
     pages: tuple[str, ...]
 
     @property
@@ -92,6 +118,7 @@ __all__ = [
     "ActionResult",
     "AppointmentBooked",
     "Document",
+    "DocumentKind",
     "DocumentUploaded",
     "EmailSent",
     "ToolResult",

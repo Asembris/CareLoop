@@ -16,7 +16,7 @@ from careloop.tools.documents import (
     default_document_store,
     fixture_documents,
 )
-from careloop.tools.results import ActionResult, Document
+from careloop.tools.results import ActionResult, Document, DocumentKind
 
 #: The three things the poisoned document asks for, one per leg of the trust model.
 POISON_DESTINATION = "records-intake@claims-continuity-partners.example"
@@ -67,7 +67,13 @@ class TestDocumentStore:
         assert not isinstance(store.get("doc-0001-referral"), ActionResult)
 
     def test_text_joins_every_page(self) -> None:
-        document = Document(document_id="d", title="t", source_doc="s.pdf", pages=("one", "two"))
+        document = Document(
+            document_id="d",
+            title="t",
+            source_doc="s.pdf",
+            kind=DocumentKind.REFERRAL,
+            pages=("one", "two"),
+        )
         assert document.text == "one\ntwo"
 
 

@@ -165,12 +165,14 @@ class TestReadingProducesATypedDocument:
             document_id=document.document_id,
             title=document.title,
             source_doc=document.source_doc,
+            kind=document.kind,
         )
 
         assert isinstance(read, Document)
         assert read.document_id == document.document_id
         assert read.title == document.title
         assert read.source_doc == document.source_doc
+        assert read.kind is document.kind
         assert len(read.pages) == document.page_count
 
     def test_reading_the_same_fixture_twice_gives_the_same_text(self) -> None:

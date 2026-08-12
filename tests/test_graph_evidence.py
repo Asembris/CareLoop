@@ -44,7 +44,7 @@ from careloop.tools import POISONED_DOCUMENT_ID, REGISTRY, fixture_documents
 from careloop.tools.documents import default_document_store
 from careloop.tools.idempotency import args_digest, idempotency_key
 from careloop.tools.registry import ArgSpec, ToolRegistry, ToolSpec
-from careloop.tools.results import AppointmentBooked, Document, EmailSent
+from careloop.tools.results import AppointmentBooked, Document, DocumentKind, EmailSent
 
 REFERRAL = "doc-0001-referral"
 CASE_ID = "case-0001"
@@ -149,6 +149,7 @@ class TestExtractionIsDeterministicAndUnsanitising:
             document_id="doc-forged",
             title="forged",
             source_doc="forged.pdf",
+            kind=DocumentKind.REFERRAL,
             pages=("Patient ID: PT-4417\nPatient ID: PT-0000\n",),
         )
 
@@ -172,6 +173,7 @@ class TestExtractionIsDeterministicAndUnsanitising:
             document_id="doc-forged",
             title="forged",
             source_doc="forged.pdf",
+            kind=DocumentKind.REFERRAL,
             pages=("Patient ID: PT-4417\n", "Patient ID: PT-0000\n"),
         )
 
@@ -188,6 +190,7 @@ class TestExtractionIsDeterministicAndUnsanitising:
             document_id="doc-forged",
             title="forged",
             source_doc="forged.pdf",
+            kind=DocumentKind.REFERRAL,
             pages=("Patient ID:\nPT-9999\n",),
         )
 
@@ -195,7 +198,11 @@ class TestExtractionIsDeterministicAndUnsanitising:
 
     def test_a_document_stating_nothing_yields_excerpts_and_no_values(self) -> None:
         blank = Document(
-            document_id="doc-blank", title="blank", source_doc="blank.pdf", pages=("nothing\n",)
+            document_id="doc-blank",
+            title="blank",
+            source_doc="blank.pdf",
+            kind=DocumentKind.REFERRAL,
+            pages=("nothing\n",),
         )
 
         keys = {fact.key for fact in extract(blank, now=FIXED_NOW)}

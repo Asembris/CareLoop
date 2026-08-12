@@ -16,6 +16,14 @@ this is the channel it arrives through.
 
 from __future__ import annotations
 
+from careloop.api.app import API_PREFIX, create_app, load_case
+from careloop.api.deps import (
+    ApiDeps,
+    ContextFactory,
+    caregiver,
+    default_context_factory,
+    sections_from,
+)
 from careloop.api.models import (
     RESPONSE_MODELS,
     ActionView,
@@ -59,6 +67,7 @@ from careloop.api.projections import (
 )
 
 __all__ = [
+    "API_PREFIX",
     "COMPLETED",
     "DERIVED",
     "NEEDS_YOU",
@@ -71,10 +80,12 @@ __all__ = [
     "WITHHELD",
     "WORKING",
     "ActionView",
+    "ApiDeps",
     "ApprovalView",
     "CaseCard",
     "CaseDetail",
     "CaseSections",
+    "ContextFactory",
     "DecisionView",
     "FactView",
     "ResponseFieldHasDefault",
@@ -84,6 +95,7 @@ __all__ = [
     "UndecidedField",
     "action_view",
     "approval_view",
+    "caregiver",
     "case_card",
     "case_detail",
     "case_sections",
@@ -91,9 +103,13 @@ __all__ = [
     "check_every_stored_field_is_decided",
     "check_no_response_defaults",
     "check_sections_partition_every_state",
+    "create_app",
     "decision_view",
+    "default_context_factory",
     "fact_view",
+    "load_case",
     "payload_keys_in",
     "section_for",
+    "sections_from",
     "timeline_event_view",
 ]

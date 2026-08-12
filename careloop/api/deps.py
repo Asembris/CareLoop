@@ -21,6 +21,7 @@ from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, Request, status
 
+from careloop.api.runs import RunRegistry
 from careloop.events.inbound import InboundEvent
 from careloop.events.simulator import EventSimulator
 from careloop.graph.context import RunContext
@@ -51,6 +52,7 @@ class ApiDeps:
     store: CaseStore
     events: EventSimulator = field(default_factory=EventSimulator)
     context_factory: ContextFactory = default_context_factory
+    runs: RunRegistry = field(default_factory=RunRegistry)
 
 
 def deps(request: Request) -> ApiDeps:

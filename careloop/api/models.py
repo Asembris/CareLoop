@@ -157,6 +157,45 @@ class CaseDetail(ResponseModel):
     timeline: list[TimelineEventView]
 
 
+class RunView(ResponseModel):
+    """A scheduled graph run.
+
+    Every field comes from the in-process run registry rather than from the store, which is why
+    every one of them is declared derived in :data:`careloop.api.projections.DERIVED`. A run is
+    execution context; nothing here answers a question the case cannot — see
+    :mod:`careloop.api.runs`.
+    """
+
+    run_id: str
+    case_id: str
+    state: str
+    executed_nodes: list[str]
+    error: str | None
+
+
+class RequestModel(BaseModel):
+    """Base for request bodies.
+
+    ``extra="forbid"`` so a caller's typo is a 422 rather than a silently ignored field — a
+    ``case_id`` misspelled into oblivion would open a case under whatever the default was.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class DeliverEventRequest(RequestModel):
+    """ "An email just arrived": deliver an inbound event to a case.
+
+    ``case_id`` is required rather than minted here. Generating one needs a clock or a random
+    source, and a demo whose case ids change every run is a demo whose URLs cannot be written down.
+    Which case an event belongs to is the caller's to say; whether that case may accept it is the
+    graph layer's, and ``reopen_case`` already refuses one that is still in flight.
+    """
+
+    event_id: str
+    case_id: str
+
+
 #: Every response shape, for the import-time no-defaults check and for the sweeps in
 #: ``tests/test_api_models.py``. Listed explicitly rather than discovered by walking
 #: ``ResponseModel.__subclasses__``, so a model defined and then forgotten is a visible omission.
@@ -169,6 +208,7 @@ RESPONSE_MODELS: tuple[type[ResponseModel], ...] = (
     CaseCard,
     CaseSections,
     CaseDetail,
+    RunView,
 )
 
 
@@ -211,9 +251,12 @@ __all__ = [
     "CaseDetail",
     "CaseSections",
     "DecisionView",
+    "DeliverEventRequest",
     "FactView",
+    "RequestModel",
     "ResponseFieldHasDefault",
     "ResponseModel",
+    "RunView",
     "TimelineEventView",
     "check_no_response_defaults",
 ]

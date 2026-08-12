@@ -11,12 +11,16 @@ loads ``conftest.py`` rather than exporting it.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
+from contextlib import contextmanager
 
+from fastapi.testclient import TestClient
 from helpers import FIXED_NOW
 
 from careloop.agents.planner import PlannerAgent
 from careloop.agents.schemas import PlannerIntent, TriageCategory, TriageResult, Urgency
 from careloop.agents.triage import TriageAgent
+from careloop.api.app import create_app
 from careloop.events.inbound import POISONED_EVENT, REFERRAL_EVENT, InboundEvent
 from careloop.graph.runner import approve, context_for, open_case, run_case
 from careloop.llm.mock import mock_model
@@ -118,6 +122,40 @@ def poisoned_store() -> InMemoryCaseStore:
         max_node_executions=12,
     )
     return store
+
+
+def factory_proposing(*proposals: PlannerIntent):
+    """A context factory whose agents are scripted and whose clock is pinned.
+
+    What ``create_app(context_factory=...)`` exists for: the routes are identical whether the run
+    behind them is driven by the mock or by Nova.
+    """
+
+    def build(store, inbound: InboundEvent, case_id: str):
+        return context_for(
+            store,
+            inbound,
+            case_id=case_id,
+            triage=triage_agent(),
+            planner=planner_proposing(*proposals),
+            now=lambda: FIXED_NOW,
+        )
+
+    return build
+
+
+@contextmanager
+def api_client(store, *proposals: PlannerIntent) -> Iterator[TestClient]:
+    """A ``TestClient`` over the app, with one event loop for the whole block.
+
+    **Context-managed rather than bare, and that is load-bearing.** A bare ``TestClient`` starts a
+    fresh event loop per request, so the ``asyncio`` task a 202 schedules is orphaned the moment
+    that request returns and can never settle — a test would see ``RUNNING`` forever and conclude
+    the registry was broken. Entering the context runs the lifespan and keeps one loop alive across
+    every request in the block, which is what a real server does and therefore what a test should.
+    """
+    with TestClient(create_app(store, context_factory=factory_proposing(*proposals))) as client:
+        yield client
 
 
 def finished_case() -> Case:

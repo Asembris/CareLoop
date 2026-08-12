@@ -1,0 +1,83 @@
+{
+  "mode": "live",
+  "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+  "probes": [
+    {
+      "probe": 1,
+      "title": "Zero-tool Agent via structured_output_model=",
+      "verdict": "TriageResult=valid, PlannerIntent=valid",
+      "evidence": [
+        "TriageResult: structured_output is TriageResult, stop_reason=tool_use, provider calls=1",
+        "TriageResult: no DeprecationWarning raised",
+        "PlannerIntent: structured_output is PlannerIntent, stop_reason=tool_use, provider calls=1",
+        "PlannerIntent: no DeprecationWarning raised"
+      ],
+      "error": ""
+    },
+    {
+      "probe": 2,
+      "title": "Cross-case history leakage",
+      "verdict": "reused-agent=LEAKS, fresh-agent=clean, null-manager=LEAKS",
+      "evidence": [
+        "(a) reused Agent: case A's canary appears in request(s) [1] of 2, where requests 1+ belong to case B",
+        "(a) corroboration only \u2014 agent.messages holds 6 message(s) after two invocations",
+        "(b) fresh Agent per invocation, shared model: case A's canary appears in request(s) [] of case B's 1",
+        "(b) corroboration only \u2014 agent_b.messages holds 3 message(s)",
+        "(c) NullConversationManager: case A's canary appears in request(s) [1] of case B's",
+        "(c) from source: apply_management is a no-op that PRESERVES full history. It is the 'manage nothing' manager, not the 'remember nothing' manager \u2014 the name is the opposite of what it sounds like for this purpose."
+      ],
+      "error": ""
+    },
+    {
+      "probe": 3,
+      "title": "Tool exposure to a BeforeToolCall hook",
+      "verdict": "a tool DOES reach the hook on a zero-tool agent: ['TriageResult']",
+      "evidence": [
+        "agent.tools declared: []",
+        "tool registry before invocation: empty",
+        "tool registry after invocation: empty (cleanup runs)",
+        "tool names that reached BeforeToolCallEvent: ['TriageResult']",
+        "tool spec names offered to the provider: ['TriageResult']",
+        "with a deny-everything hook attached: structured_output=NoneType, stop_reason=limit_turns, hook saw ['TriageResult', 'TriageResult']",
+        "deny-everything run made 3 provider call(s) and the hook fired 2 time(s), bounded at turns=3. UNBOUNDED, the live run measured 245 calls / 244 firings before RecursionError \u2014 see ADR 0001"
+      ],
+      "error": ""
+    },
+    {
+      "probe": 4,
+      "title": "Provider calls per structured output",
+      "verdict": "agent 1 call(s) vs direct 1 (1.0x)",
+      "evidence": [
+        "direct path: 1 structured_output call(s), 0 stream call(s)",
+        "agent path: 0 structured_output call(s), 1 stream call(s)",
+        "requests carrying a tool_choice (the forced-mode re-prompt): none",
+        "direct tokens in/out: 1526/82; agent tokens in/out: 1556/82",
+        "direct latency: 1431 ms; agent latency: 1585 ms"
+      ],
+      "error": ""
+    },
+    {
+      "probe": 5,
+      "title": "Invocation-level limits",
+      "verdict": "limits accepted; turns=1 gives stop_reason=tool_use",
+      "evidence": [
+        "strands.types.agent.Limits keys: ['output_tokens', 'total_tokens', 'turns']",
+        "measured normal invocation: 1 cycle(s), 1556 in / 88 out, 1 provider call(s)",
+        "with limits={'turns': 1}: stop_reason=tool_use, structured_output=TriageResult, 1 provider call(s)"
+      ],
+      "error": ""
+    },
+    {
+      "probe": 6,
+      "title": "Token usage on each path",
+      "verdict": "usage available on at least one path",
+      "evidence": [
+        "AgentResult.metrics.accumulated_usage: {'inputTokens': 1556, 'outputTokens': 87, 'totalTokens': 1643}",
+        "AgentResult.metrics.cycle_count: 1; context_size: 1556",
+        "direct path yielded envelope key sets: ['event', 'event', 'event', 'current_tool_use,delta,type', 'event', 'event', 'event', 'stop', 'output']",
+        "direct path usage captured by the recording proxy: [{'inputTokens': 1526, 'outputTokens': 84, 'totalTokens': 1610}]"
+      ],
+      "error": ""
+    }
+  ]
+}

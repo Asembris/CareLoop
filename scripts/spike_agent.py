@@ -92,6 +92,11 @@ FIXED_NOW = datetime(2026, 8, 12, 12, 0, 0, tzinfo=UTC)
 CANARY_A = "CANARY-ALPHA-7F3D91"
 CANARY_B = "CANARY-BRAVO-2E8C44"
 
+#: Turn cap on probe 3's deny-everything sub-probe. A cancelled structured-output tool never
+#: produces the output the event loop is waiting for, so the loop forces again — unbounded, that
+#: is a paid runaway rather than a clean failure. Measured once at 245 calls; bounded ever since.
+DENY_PROBE_TURNS = 3
+
 
 # ---------------------------------------------------------------------------------------------
 # Reporting
@@ -253,18 +258,29 @@ class RecordingModel(Model):
             yield event
         self.latencies_ms.append((time.perf_counter() - started) * 1000)
 
-    def _capture_usage(self, event: Any) -> None:
+    def _capture_usage(self, event: Any, depth: int = 0) -> None:
         """Pull token usage out of whatever shape the provider reported it in.
 
+        **Searches nested, and the first version did not.** The agent path yields a top-level
+        ``{"metadata": {"usage": ...}}``, but ``Model.structured_output`` wraps its stream in an
+        ``{"event": ...}`` envelope, so a top-level lookup reported zero tokens for the direct
+        path and made it look as though Bedrock surfaced no usage there. That would have been a
+        false negative on the one question open decision 16 turns on, produced by the instrument
+        rather than by the SDK.
+
         Session 4 established that ``strands-agents==1.51.0`` surfaces usage through Bedrock's
-        ``structured_output`` and not through the OpenAI one, so this reads defensively rather
-        than assuming an envelope is there.
+        ``structured_output`` and not through the OpenAI one, so this still reads defensively —
+        a missing envelope is an answer, not an error.
         """
-        if not isinstance(event, dict):
+        if not isinstance(event, dict) or depth > 4:
             return
         metadata = event.get("metadata")
         if isinstance(metadata, dict) and isinstance(metadata.get("usage"), dict):
             self.usage.append(dict(metadata["usage"]))
+            return
+        for value in event.values():
+            if isinstance(value, dict):
+                self._capture_usage(value, depth + 1)
 
 
 class ToolEmittingMockModel(MockModel):
@@ -655,21 +671,43 @@ async def probe_3_tool_exposure(factory: ModelFactory, *, live: bool) -> ProbeRe
         f"{sorted({name for request in model.requests for name in request.tool_names})}"
     )
 
-    # And the collision itself: a hook that refuses what it does not recognise.
+    # And the collision itself: a hook that refuses what it does not recognise. This is CareLoop's
+    # gate, in miniature — a deny-by-default engine meeting an SDK-internal tool it has no rule for.
+    #
+    # The call count is reported alongside the failure on purpose. A first run showed
+    # "RecursionError while encoding a JSON object", which reads like an artifact of this file's
+    # own json.dumps recording and is in fact a runaway re-prompt: a cancelled structured-output
+    # tool never produces the output the loop is waiting for, so the loop forces again. Counting
+    # the provider calls is what tells those two apart, and a finding that cannot distinguish the
+    # instrument from the subject is not a finding.
+    #
+    # Bounded at DENY_PROBE_TURNS. Unbounded, the live run measured **245 provider calls and 244
+    # hook firings** before Python's recursion limit ended it — a paid runaway, and the reason the
+    # bound is here rather than in a note. The number is the finding; re-running the runaway to
+    # re-observe it would be buying the same answer twice.
     denier = ToolNameRecorder(cancel_with="REQUIRES_HUMAN_APPROVAL")
     denied_model = factory([scripted_triage()])
     denied_agent = build_agent(denied_model, system, hooks=[denier])
     try:
-        denied_result = await denied_agent.invoke_async(user, structured_output_model=TriageResult)
+        denied_result = await denied_agent.invoke_async(
+            user,
+            structured_output_model=TriageResult,
+            limits={"turns": DENY_PROBE_TURNS},
+        )
         got = denied_result.structured_output
         result.evidence.append(
             f"with a deny-everything hook attached: structured_output={type(got).__name__}, "
             f"stop_reason={denied_result.stop_reason}, hook saw {denier.seen}"
         )
-    except Exception as failure:
+    except (Exception, RecursionError) as failure:
         result.evidence.append(
             f"with a deny-everything hook attached: {type(failure).__name__} — {str(failure)[:140]}"
         )
+    result.evidence.append(
+        f"deny-everything run made {denied_model.total_calls} provider call(s) and the hook fired "
+        f"{len(denier.seen)} time(s), bounded at turns={DENY_PROBE_TURNS}. UNBOUNDED, the live "
+        f"run measured 245 calls / 244 firings before RecursionError — see ADR 0001"
+    )
 
     if recorder.seen:
         result.verdict = (
@@ -792,9 +830,14 @@ async def probe_6_metrics(factory: ModelFactory, *, live: bool) -> ProbeResult:
     except Exception as failure:
         result.error = f"{type(failure).__name__}: {str(failure)[:140]}"
 
+    # Through the proxy, not through ``direct.inner``. The first version reached past the wrapper
+    # to the wrapped model, so nothing was recorded and this probe reported "no usage on the
+    # direct path" while probe 4 — which goes through ``structured_call`` and therefore through
+    # the proxy — reported 1526 in / 88 out for the same call. Two probes disagreeing is what
+    # found it; the one that bypassed its own instrument was the one that was wrong.
     direct = factory([scripted_triage()])
     envelopes: list[str] = []
-    async for event in direct.inner.structured_output(
+    async for event in direct.structured_output(
         TriageResult,
         [{"role": "user", "content": [{"text": user}]}],
         system_prompt=system,

@@ -16,6 +16,7 @@ from careloop.state.evidence import (
     record_fact,
 )
 from careloop.state.machine import (
+    AT_REST_STATES,
     TERMINAL_STATES,
     TRANSITIONS,
     IllegalTransition,
@@ -28,6 +29,7 @@ from careloop.state.sqlite_store import SqliteCaseStore
 from careloop.state.store import CaseAlreadyExists, CaseNotFound, CaseStore, VersionConflict
 
 __all__ = [
+    "AT_REST_STATES",
     "TERMINAL_STATES",
     "TRANSITIONS",
     "ActionRecord",

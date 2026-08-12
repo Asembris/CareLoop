@@ -54,6 +54,15 @@ class NoSuchApproval(Exception):
     """Raised when a decision names an approval the case does not carry."""
 
 
+class CaseNotReopenable(Exception):
+    """Raised when an inbound event tries to reopen a case that is not finished.
+
+    Only ``DONE`` reopens. A case still in flight does not need waking up — the event's documents
+    would race the ones the run is already reading — and a ``FAILED`` case is terminal, which is a
+    decision about failure this project has not revisited.
+    """
+
+
 class ApprovalAlreadyDecided(Exception):
     """Raised when a decision is recorded against an approval that is no longer pending."""
 
@@ -121,6 +130,78 @@ def open_case(
     return store.create(case)
 
 
+def reopen_case(
+    store: CaseStore,
+    inbound: InboundEvent,
+    *,
+    case_id: str,
+    now: datetime | None = None,
+) -> Case:
+    """Reopen a finished case for a follow-up event. ``DONE`` → ``GATHERING_EVIDENCE``.
+
+    **This is the only way out of ``DONE``, and only an inbound event may take it.** A claim
+    rejected weeks after the appointment was arranged is the same piece of work: the same patient,
+    the same claim, the same evidence, and a caregiver who would think of it as one thing. Opening
+    a second case would split the audit trail in half and lose the idempotency record that stops
+    the first case's effects happening twice.
+
+    The agent cannot do this. No graph edge leaves ``DONE``, so no node can route into a reopen,
+    and ``tests/test_reopen.py`` fails if any node, agent, tool or policy module so much as names
+    this function. The world can; the agent cannot.
+
+    What survives is everything: the case id, every fact with its provenance, every approval, every
+    recorded action, and the whole timeline. What changes is the state and one ``CASE_REOPENED``
+    entry naming the event that did it. ``Case.event_id`` is **not** rewritten — it records which
+    event opened the case, and a reopen is not an opening.
+
+    The follow-up's own documents are read by the next run, because
+    :func:`context_for` scopes ``document_ids`` to the event it is given. Documents the case
+    already holds are not re-read, and a value it already carries is not recorded twice — see
+    :func:`careloop.state.evidence.record_fact`.
+
+    Raises:
+        CaseNotFound: if the store does not hold ``case_id``. A reopen names an existing case; a
+            missing one is a caller error rather than a reason to create anything.
+        CaseNotReopenable: if the case is not ``DONE``.
+    """
+    at = now or _utcnow()
+    case = store.get(case_id)
+    base = case.version
+
+    if case.state is not CaseState.DONE:
+        raise CaseNotReopenable(
+            f"case {case_id!r} is {case.state} and only DONE reopens; an inbound event does not "
+            f"interrupt a case that is still in flight"
+        )
+
+    case = append_event(
+        case,
+        kind=TimelineKind.CASE_REOPENED,
+        actor="system",
+        summary=f"reopened by {inbound.event_id}",
+        diagnostic=(
+            f"{inbound.event_id} arrived for a case that had reached DONE; subject="
+            f"{inbound.subject!r}, documents={list(inbound.document_ids)}. The case keeps its "
+            f"id, its evidence, its approvals and its recorded actions, so nothing already done "
+            f"can be done again."
+        ),
+        payload={
+            "event_id": inbound.event_id,
+            "document_ids": list(inbound.document_ids),
+            "opened_by": case.event_id,
+        },
+        now=at,
+    )
+    case = transition(
+        case,
+        CaseState.GATHERING_EVIDENCE,
+        reason=f"reopened by {inbound.event_id}",
+        actor="system",
+        now=at,
+    )
+    return store.save(case, expected_version=base)
+
+
 def context_for(
     store: CaseStore,
     inbound: InboundEvent,
@@ -184,7 +265,7 @@ async def run_case(
 def _fail(context: RunContext, reason: str) -> None:
     """Record that a run ended without the case resting, unless it already rested."""
     case = context.current_case()
-    if case.is_terminal:
+    if case.is_at_rest:
         return
     context.commit(
         transition(case, CaseState.FAILED, reason=reason, actor="system", now=context.now()),
@@ -305,11 +386,13 @@ def _decide(
 
 __all__ = [
     "ApprovalAlreadyDecided",
+    "CaseNotReopenable",
     "NoSuchApproval",
     "RunResult",
     "approve",
     "context_for",
     "open_case",
     "reject",
+    "reopen_case",
     "run_case",
 ]

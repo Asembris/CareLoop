@@ -42,14 +42,42 @@ TRANSITIONS: Final[dict[CaseState, frozenset[CaseState]]] = {
     CaseState.WAITING_EXTERNAL: frozenset(
         {CaseState.PLANNING, CaseState.VERIFYING, CaseState.FAILED}
     ),
-    CaseState.DONE: frozenset(),
+    # DONE has exactly one way out, and only the world can take it. A claim rejected weeks after
+    # the appointment was arranged is the same piece of work, not a new one, so
+    # careloop.graph.runner.reopen_case moves a finished case back to GATHERING_EVIDENCE to read
+    # what has just arrived.
+    #
+    # **The agent can never leave DONE; the world can.** No graph edge exits DONE — see
+    # careloop/graph/builder.py, where dispatch has no outgoing edge for it — and a structural
+    # sweep in tests/test_reopen.py fails if any node, agent, tool or policy module so much as
+    # names reopen_case. Both halves are needed: the missing edge is what makes it true today,
+    # and the sweep is what keeps it true.
+    #
+    # Invariant 4 is untouched. DONE is still reachable only from VERIFYING, so "the case did not
+    # finish via the unsafe path" remains structural.
+    CaseState.DONE: frozenset({CaseState.GATHERING_EVIDENCE}),
     CaseState.FAILED: frozenset(),
 }
 
-#: States from which no transition is legal.
+#: States from which no transition is legal at all.
+#:
+#: FAILED alone, since commit 7. DONE left this set when the reopen edge was added, and the two
+#: meanings were separated rather than conflated: see :data:`AT_REST_STATES`.
 TERMINAL_STATES: Final[frozenset[CaseState]] = frozenset(
     state for state, allowed in TRANSITIONS.items() if not allowed
 )
+
+#: States the graph will not move a case out of.
+#:
+#: What ``TERMINAL_STATES`` meant before the reopen existed, and what every caller that asks "has
+#: this case come to rest" actually wants. A case in one of these has no satisfied outgoing edge,
+#: so a run ends with it sitting there; only a new inbound event can change that, and only for
+#: ``DONE``.
+AT_REST_STATES: Final[frozenset[CaseState]] = TERMINAL_STATES | {CaseState.DONE}
+
+#: The one transition an inbound event may make on a finished case.
+REOPEN_FROM: Final[CaseState] = CaseState.DONE
+REOPEN_TO: Final[CaseState] = CaseState.GATHERING_EVIDENCE
 
 
 class IllegalTransition(Exception):

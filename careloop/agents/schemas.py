@@ -6,18 +6,51 @@ policy verdict, an approval, a priority override, or any other lever over what h
 :class:`PlannerIntent` in particular is a *proposal* — a tool name, its arguments, and a sentence
 of reasoning — and there is deliberately no field through which it could say "and execute this".
 That is checked by enumeration rather than by inspection: the intent's field set is exactly
-``INTENT_FIELDS`` plus the argument names the tool registry declares, and a test pins it.
+``INTENT_FIELDS``, and a test pins it.
 
-**``PlannerIntent`` is generated from the registry.** Tool names and argument fields come from
+**``PlannerIntent`` is generated from the registry.** Tool names come from
 :data:`careloop.tools.registry.REGISTRY`, so they cannot drift from the tools the policy engine
 governs. A planner offered a tool the engine has never classified is a planner proposing effects
 nothing decides the authority of.
 
-**Why the flat, all-required, all-``str`` argument shape.** Optional fields and ``X | None`` unions
-render as nullable JSON-schema types that some strict structured-output implementations reject,
-and a rejection arrives looking like a model failure when the cause was the schema. Every argument
-field is therefore a required ``str`` and :data:`NOT_SUPPLIED` — the empty string — means "not
-supplied". The benchmark measured this shape; ``docs/model-benchmark.md`` has the numbers.
+**Why the arguments are a map, and what it cost to learn.** The shape here until session B was
+flat: one required ``str`` field per argument name across *every* tool, thirteen required fields
+in all, with the empty string meaning "not supplied". The reasoning was sound and the measurement
+was not taken. Session A found the consequence — against the recommended planner model that schema
+produced a valid intent **zero times in fifteen runs**, because a model that picks
+``book_appointment`` fills its four arguments and omits the seven belonging to tools it did not
+choose, which is the reasonable thing to do.
+
+Session B measured the alternatives with the provider held constant and only the shape varying,
+on the prompt the graph really sends. Same model, same session:
+
+===============================  ================  =========
+Shape                            required fields   valid
+===============================  ================  =========
+flat, every argument of every    13                **0/8**
+tool
+``args`` as a string map          3                **8/8**
+``args`` as name/value pairs      3                8/8
+two calls, tool then arguments    2, then that      8/8
+                                  tool's
+===============================  ================  =========
+
+The map won on being the cheapest and simplest of three shapes that tied on the only outcome that
+matters. Full detail in ``docs/live-loop-findings.md``.
+
+**What the map gives up, and where it went.** Which arguments belong to which tool is no longer
+expressed in the JSON schema the provider receives — it is enforced by
+:meth:`PlannerIntentBase._bind_arguments_to_the_chosen_tool` alone. That validator was a second
+line of defence and is now the only one, so it is load-bearing in a way it was not before, and the
+mutation pass covers it specifically. What did **not** move is the tool enumeration: ``tool_name``
+is still a ``Literal`` and still reaches the provider as a closed ``enum``.
+
+**A discriminated union was the obvious answer and does not work here.** ``strands-agents==1.51.0``
+converts a Pydantic model to a Bedrock tool spec through ``convert_pydantic_to_tool_spec``, which
+drops ``$defs``: a union in a wrapper object reaches the provider as ``oneOf`` over five dangling
+``$ref`` pointers, and a ``RootModel`` union reaches it as ``{"type": "object", "properties": {}}``
+— an empty schema, with nothing raised. Both shapes are kept in ``bench/intent_shapes.py`` as the
+vacuity proof for the guard in ``tests/test_provider_tool_spec.py``.
 
 **Triage emits no destination.** There is no ``provider_id``, no recipient, no portal on
 :class:`TriageResult`, and its absence is load-bearing rather than an omission. The policy engine
@@ -31,22 +64,18 @@ come from trusted configuration and nowhere else.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import ClassVar, Final, Literal
+from typing import Annotated, Any, ClassVar, Final, Literal, NoReturn
 
-from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, create_model, model_validator
 
 from careloop.tools.registry import REGISTRY, ToolRegistry
 
 #: The empty string, meaning "the source did not state this" or "this tool does not take it".
 NOT_SUPPLIED: Final[str] = ""
 
-#: Fields every :class:`PlannerIntent` carries regardless of which tools exist. An argument name
-#: colliding with one of these would silently shadow it, so :func:`build_planner_intent` refuses.
-INTENT_FIELDS: Final[tuple[str, ...]] = ("tool_name", "rationale")
-
-
-class ReservedArgumentName(Exception):
-    """Raised when a registry declares an argument whose name is already an intent field."""
+#: Every field a :class:`PlannerIntent` carries, whatever tools exist. The set is now closed
+#: rather than growing with the registry, which is the whole point of the shape.
+INTENT_FIELDS: Final[tuple[str, ...]] = ("tool_name", "rationale", "args")
 
 
 class EmptyRegistry(Exception):
@@ -55,6 +84,43 @@ class EmptyRegistry(Exception):
     A planner with no callable tools has nothing to propose. Failing here is louder than emitting
     a schema whose ``tool_name`` can never be satisfied.
     """
+
+
+class FrozenArguments(dict[str, str]):
+    """A mapping that refuses to be changed after validation.
+
+    ``model_config = ConfigDict(frozen=True)`` freezes the *fields* of a model, not the objects
+    they hold, so a plain ``dict`` field would leave the intent mutable through its own arguments —
+    the shallow-freeze hole session 2 closed on :class:`~careloop.state.case.Case` by making its
+    collections tuples. A tuple is not available here without changing the JSON schema the
+    provider receives, which is the thing that was measured, so the mapping refuses mutation
+    instead.
+
+    It subclasses ``dict`` deliberately rather than implementing ``Mapping``: the arguments are
+    JSON-encoded when an idempotency key is derived, and ``json.dumps`` accepts a ``dict``
+    subclass while raising on an unrelated mapping type. An immutability that broke keying would
+    have traded a real property for a theoretical one.
+    """
+
+    __slots__ = ()
+
+    def _immutable(self, *args: object, **kwargs: object) -> NoReturn:
+        raise TypeError("a planner intent's arguments cannot be changed after it is validated")
+
+    __setitem__ = _immutable
+    __delitem__ = _immutable
+    __ior__ = _immutable
+    clear = _immutable
+    pop = _immutable
+    popitem = _immutable
+    setdefault = _immutable
+    update = _immutable
+
+
+#: The declared type of ``PlannerIntent.args``. The annotation is a plain string map, so the JSON
+#: schema the provider receives is exactly the one that was measured; the validator is what makes
+#: the value immutable once it exists.
+ArgumentMap = Annotated[dict[str, str], AfterValidator(FrozenArguments)]
 
 
 class TriageCategory(StrEnum):
@@ -112,8 +178,8 @@ class TriageResult(BaseModel):
 class PlannerIntentBase(BaseModel):
     """Behaviour shared by every generated intent.
 
-    Split from the generated fields so the validator and the :attr:`args` accessor are ordinary,
-    readable code rather than something assembled by ``create_model``.
+    Split from the generated field so the validator is ordinary, readable code rather than
+    something assembled by ``create_model``.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -121,59 +187,68 @@ class PlannerIntentBase(BaseModel):
     #: The registry the concrete subclass was generated from.
     TOOL_REGISTRY: ClassVar[ToolRegistry]
 
-    #: Names of the generated argument fields — every field that is not in ``INTENT_FIELDS``.
-    ARGUMENT_FIELDS: ClassVar[frozenset[str]]
-
     tool_name: str
     rationale: str
+    args: ArgumentMap
 
-    @model_validator(mode="after")
-    def _reject_arguments_the_chosen_tool_does_not_declare(self) -> PlannerIntentBase:
-        """Refuse an intent that supplies an argument its tool has never declared.
+    @model_validator(mode="before")
+    @classmethod
+    def _bind_arguments_to_the_chosen_tool(cls, data: Any) -> Any:
+        """Refuse arguments the chosen tool does not declare, and supply the ones it left out.
 
-        The flat schema carries every argument of every tool, so ``fetch_document`` still has a
-        ``to`` field. Filling it is not harmless: the policy engine denies undeclared arguments
-        because an argument the registry does not classify has no argument class, and therefore
-        nothing establishes that it is not a destination. Rejecting here fails closed one step
-        earlier, and turns "an undeclared argument" into a construction error rather than a call
-        the engine has to reason about.
+        **This is the only thing standing between the model and an unclassified argument.** Under
+        the flat shape the JSON schema itself enumerated which fields existed, so a wrong-tool
+        argument was refused at two boundaries; the map shape expresses no such constraint to the
+        provider, and this validator is the remaining one. The policy engine denies undeclared
+        arguments anyway — an argument the registry does not classify has no argument class, so
+        nothing establishes that it is not a destination — but failing here turns it into a
+        construction error one step earlier, rather than a call the engine has to reason about.
 
-        This validator's own message names fields and never their values, so it is safe to show a
-        model. Note what that does *not* cover: pydantic wraps it in a ``ValidationError`` whose
+        Missing declared arguments are filled with :data:`NOT_SUPPLIED` rather than left out, for
+        two reasons that have not changed: ``ToolSet.call`` binds by name against the registry's
+        exact argument set, so a mapping missing a declared argument raises ``TypeError`` at the
+        call site; and an empty ``DESTINATION`` is a value the policy engine should get the chance
+        to deny, not one that quietly disappears before it is asked.
+
+        An undeclared argument that is *empty* is dropped rather than refused. It carries no
+        proposal — the model named a key and put nothing in it — and refusing it would fail a run
+        over punctuation.
+
+        This validator's own message names arguments and never their values, so it is safe to show
+        a model. Note what that does *not* cover: pydantic wraps it in a ``ValidationError`` whose
         rendering includes ``input_value``, which does carry the supplied arguments. Nothing in
         CareLoop returns a ``ValidationError`` to a model, and nothing should start to — the
         argument values are text the planner copied out of a document, and echoing them back is
         the loop this schema exists to keep closed.
         """
-        spec = self.TOOL_REGISTRY.get(self.tool_name)
-        if spec is None:  # pragma: no cover - Literal already rejects unregistered names
-            raise ValueError(f"{self.tool_name!r} is not a registered tool")
+        if not isinstance(data, dict):  # pragma: no cover - pydantic reports the shape itself
+            return data
 
-        supplied = sorted(
+        tool_name = data.get("tool_name")
+        if not isinstance(tool_name, str):
+            return data  # the field's own validation says so, and says it better
+        spec = cls.TOOL_REGISTRY.get(tool_name)
+        if spec is None:
+            return data  # the Literal rejects an unregistered tool with a clearer message
+
+        supplied = data.get("args")
+        if not isinstance(supplied, dict):
+            return data  # likewise: a missing or wrongly-typed map is the field's to report
+
+        undeclared = sorted(
             name
-            for name in self.ARGUMENT_FIELDS
-            if name not in spec.arg_names and getattr(self, name).strip()
+            for name, value in supplied.items()
+            if name not in spec.arg_names and isinstance(value, str) and value.strip()
         )
-        if supplied:
+        if undeclared:
             raise ValueError(
-                f"tool {self.tool_name!r} does not take argument(s) {', '.join(supplied)}; "
+                f"tool {tool_name!r} does not take argument(s) {', '.join(undeclared)}; "
                 f"it takes {', '.join(sorted(spec.arg_names))}"
             )
-        return self
-
-    @property
-    def args(self) -> dict[str, str]:
-        """Every argument the chosen tool declares, including the ones left empty.
-
-        Empty strings are kept rather than dropped. ``ToolSet.call`` binds by name against the
-        registry's exact argument set, so a mapping missing a declared-but-unsupplied argument
-        raises ``TypeError`` at the call site; and an empty ``DESTINATION`` is a value the policy
-        engine should get the chance to deny, not one that quietly disappears before it is asked.
-        """
-        spec = self.TOOL_REGISTRY.get(self.tool_name)
-        if spec is None:  # pragma: no cover - construction already guaranteed otherwise
-            raise ValueError(f"{self.tool_name!r} is not a registered tool")
-        return {name: getattr(self, name) for name in sorted(spec.arg_names)}
+        return {
+            **data,
+            "args": {name: supplied.get(name, NOT_SUPPLIED) for name in sorted(spec.arg_names)},
+        }
 
 
 def tool_names(registry: ToolRegistry = REGISTRY) -> tuple[str, ...]:
@@ -182,7 +257,12 @@ def tool_names(registry: ToolRegistry = REGISTRY) -> tuple[str, ...]:
 
 
 def argument_names(registry: ToolRegistry = REGISTRY) -> tuple[str, ...]:
-    """The union of every argument name across every tool in ``registry``, sorted."""
+    """The union of every argument name across every tool in ``registry``, sorted.
+
+    No longer the intent's field set — the map shape has one ``args`` field whatever the registry
+    holds. Kept because it is still a true statement about the registry and the prompt and the
+    tests both ask it.
+    """
     return tuple(sorted({arg for tool in registry for arg in tool.arg_names}))
 
 
@@ -195,19 +275,10 @@ def build_planner_intent(registry: ToolRegistry = REGISTRY) -> type[PlannerInten
 
     Raises:
         EmptyRegistry: if ``registry`` declares no tools.
-        ReservedArgumentName: if an argument name collides with an intent field.
     """
     names = tool_names(registry)
     if not names:
         raise EmptyRegistry("cannot generate a planner intent from a registry with no tools")
-
-    args = argument_names(registry)
-    reserved = sorted(set(args) & set(INTENT_FIELDS))
-    if reserved:
-        raise ReservedArgumentName(
-            f"argument name(s) {', '.join(reserved)} collide with intent field(s) "
-            f"{', '.join(INTENT_FIELDS)}"
-        )
 
     fields: dict[str, tuple[type, object]] = {
         "tool_name": (
@@ -223,18 +294,16 @@ def build_planner_intent(registry: ToolRegistry = REGISTRY) -> type[PlannerInten
                 )
             ),
         ),
-    }
-    for arg in args:
-        owners = ", ".join(sorted(tool.name for tool in registry if arg in tool.arg_names))
-        fields[arg] = (
-            str,
+        "args": (
+            ArgumentMap,  # type: ignore[arg-type]
             Field(
                 description=(
-                    f"Argument '{arg}' of {owners}. Leave it as the empty string unless the tool "
-                    f"you chose takes it."
+                    "The arguments of the tool you chose, by name. Include only that tool's "
+                    "arguments and no others."
                 )
             ),
-        )
+        ),
+    }
 
     intent = create_model(
         "PlannerIntent",
@@ -244,13 +313,12 @@ def build_planner_intent(registry: ToolRegistry = REGISTRY) -> type[PlannerInten
             "A proposal and nothing more. It carries no case state, no verdict and no approval, "
             "and there is no field through which it could ask to be executed: a deterministic "
             "policy engine decides that, and this schema is not how it is spoken to.\n\n"
-            "Generated from careloop.tools.registry.REGISTRY, so the tool names and argument "
-            "fields are exactly the ones the policy engine governs."
+            "Generated from careloop.tools.registry.REGISTRY, so the tool names are exactly the "
+            "ones the policy engine governs."
         ),
         **fields,  # type: ignore[arg-type]
     )
     intent.TOOL_REGISTRY = registry
-    intent.ARGUMENT_FIELDS = frozenset(args)
     return intent
 
 
@@ -269,10 +337,11 @@ __all__ = [
     "INTENT_FIELDS",
     "NOT_SUPPLIED",
     "TOOL_NAMES",
+    "ArgumentMap",
     "EmptyRegistry",
+    "FrozenArguments",
     "PlannerIntent",
     "PlannerIntentBase",
-    "ReservedArgumentName",
     "TriageCategory",
     "TriageResult",
     "Urgency",

@@ -95,9 +95,7 @@ def triage_agent(summary: str) -> TriageAgent:
 
 
 def intent(tool_name: str, **args: str) -> PlannerIntent:
-    fields = dict.fromkeys(PlannerIntent.ARGUMENT_FIELDS, "")
-    fields.update(args)
-    return PlannerIntent(tool_name=tool_name, rationale="the next step for this case", **fields)
+    return PlannerIntent(tool_name=tool_name, rationale="the next step for this case", args=args)
 
 
 def planner_agent(*proposals: PlannerIntent) -> PlannerAgent:

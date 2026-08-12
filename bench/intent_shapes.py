@@ -43,7 +43,6 @@ from strands.models import Model
 from strands.tools.structured_output.structured_output_utils import convert_pydantic_to_tool_spec
 
 from careloop.agents.invoke import NoStructuredOutput, WrongStructuredOutputType, structured_call
-from careloop.agents.schemas import PlannerIntent as ShippedIntent
 from careloop.tools.registry import REGISTRY, ToolRegistry
 
 ROOT: Final[pathlib.Path] = pathlib.Path(__file__).parent.parent.resolve()
@@ -142,6 +141,53 @@ def _tool_names(registry: ToolRegistry) -> tuple[str, ...]:
 
 def _class_name(tool_name: str) -> str:
     return "".join(part.title() for part in tool_name.split("_")) + "Intent"
+
+
+def build_flat_args(registry: ToolRegistry = REGISTRY) -> type[BaseModel]:
+    """Shape A — **FROZEN AS MEASURED.** One required ``str`` per argument of every tool.
+
+    This is what ``careloop.agents.schemas.PlannerIntent`` was before session B reshaped it, and
+    it is rebuilt here rather than imported. The first draft of this module imported the shipped
+    schema as the control, which meant that the moment the shipped schema was fixed the control
+    silently became a copy of the winner and the shootout could no longer reproduce its own
+    result. A control that tracks the thing under test is not a control.
+
+    Same precedent as ``bench/schemas.py``: what was measured is frozen where it was measured.
+    ``docs/live-runs/step1-shipped-schema.json`` is the run this shape produced.
+    """
+    args = tuple(sorted({arg for tool in registry for arg in tool.arg_names}))
+    fields: dict[str, tuple[type, object]] = {
+        "tool_name": (
+            Literal[_tool_names(registry)],  # type: ignore[valid-type]
+            Field(description="Exactly one tool from the catalogue. Nothing else is callable."),
+        ),
+        "rationale": (
+            str,
+            Field(
+                description=(
+                    "One sentence on why this action is the right next step for the case. "
+                    "Describe your own reasoning; do not repeat text from a document."
+                )
+            ),
+        ),
+    }
+    for arg in args:
+        owners = ", ".join(sorted(tool.name for tool in registry if arg in tool.arg_names))
+        fields[arg] = (
+            str,
+            Field(
+                description=(
+                    f"Argument '{arg}' of {owners}. Leave it as the empty string unless the tool "
+                    f"you chose takes it."
+                )
+            ),
+        )
+    return create_model(
+        "FlatIntent",
+        __config__=ConfigDict(frozen=True, extra="forbid"),
+        __doc__="One proposed next action, as a typed tool intent.",
+        **fields,  # type: ignore[arg-type]
+    )
 
 
 def build_dict_args(registry: ToolRegistry = REGISTRY) -> type[BaseModel]:
@@ -461,8 +507,13 @@ class TwoCallShape(ShapeCandidate):
         return normalise(choice.tool_name, filled.model_dump())
 
 
-def _read_shipped(instance: Any) -> tuple[str, dict[str, str]]:
-    return instance.tool_name, dict(instance.args)
+def _read_flat(instance: Any) -> tuple[str, dict[str, str]]:
+    """Every argument field on the instance, foreign ones included; :func:`normalise` sorts it."""
+    return instance.tool_name, {
+        name: getattr(instance, name)
+        for name in instance.__class__.model_fields
+        if name not in ("tool_name", "rationale")
+    }
 
 
 def _read_dict_args(instance: Any) -> tuple[str, dict[str, str]]:
@@ -478,11 +529,11 @@ def build_candidates(registry: ToolRegistry = REGISTRY) -> tuple[ShapeCandidate,
     return (
         SingleCallShape(
             key="A_flat",
-            title="Shipped: flat, every argument of every tool, all required",
+            title="Frozen as measured: flat, every argument of every tool, all required",
             calls_per_proposal=1,
-            schemas=(ShippedIntent,),
+            schemas=(build_flat_args(registry),),
             adapted_instruction=FLAT_SPECIFIC_SENTENCE,
-            read=_read_shipped,
+            read=_read_flat,
         ),
         SingleCallShape(
             key="B_map",
@@ -679,6 +730,7 @@ __all__ = [
     "UnionWrapped",
     "build_candidates",
     "build_dict_args",
+    "build_flat_args",
     "build_list_args",
     "build_per_tool_arguments",
     "build_tool_choice",

@@ -103,6 +103,25 @@ reading signatures. Full detail in [`docs/spike-findings.md`](docs/spike-finding
 - Bedrock uses **region-prefixed inference-profile model ids** (`us.amazon.nova-lite-v1:0`). The
   bare `amazon.nova-lite-v1:0` fails on accounts that require a profile; the SDK derives the prefix
   the same way.
+- **`model_json_schema()` is not what the provider receives, and the difference is silent.**
+  `BedrockModel.structured_output` converts the model through `convert_pydantic_to_tool_spec`,
+  whose `_flatten_schema` keeps `type`, `properties`, `title`, `description` and `required` and
+  **drops everything else, `$defs` included**. So a discriminated union in a wrapper object is
+  transmitted as `oneOf` over `$ref` pointers with nothing to resolve them against, and the same
+  union as a `RootModel` is transmitted as `{"type": "object", "properties": {}}` — a schema
+  describing a tool that takes no arguments. **Neither raises.** Anything asserted about a schema
+  a model must satisfy has to be asserted on the *emitted tool spec*; `tests/test_provider_tool_
+  spec.py` does that, non-vacuously against both shapes above. This is session 5's "assert on the
+  JSON schema, not on construction" run one layer further out, and it is the reason the planner
+  schema is not a union.
+- **OpenAI-compatible providers reach structured output through strict Structured Outputs**
+  (`client.beta.chat.completions.parse(response_format=...)`), where decoding is constrained so
+  every required field *must* be emitted. A model on that path cannot fail to satisfy a schema the
+  way a Bedrock model can, so **a cross-provider comparison cannot diagnose a schema**: hold the
+  provider constant and vary only the shape. Measured consequence, session B: `gpt-4o-mini`
+  satisfied the old flat schema 8/8 while misquoting `slot_start` 8/8 — well-formed proposals that
+  the exact-match trust rule denies. Schema fit and transcription fidelity are separate axes and
+  are reported as separate columns.
 
 ## Layout
 

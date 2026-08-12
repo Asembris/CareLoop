@@ -2,11 +2,19 @@
 
 Nothing here measures model quality. That was the benchmark's job — see
 ``docs/model-benchmark.md`` — and repeating it against a scripted mock would prove nothing.
+
+**Session B moved a load-bearing check.** Until session B the planner's schema carried one field
+per argument of every tool, so a wrong-tool argument was refused twice: once by the field set the
+provider was handed, and once by the validator. The map shape expresses no argument binding to the
+provider at all, so :class:`TestTheValidatorIsTheOnlyThingLeftGuardingThis` is now the only thing
+between the model and an argument nothing has classified. It is written to fail loudly if that
+validator is weakened, and the mutation pass covers it specifically.
 """
 
 from __future__ import annotations
 
 from inspect import signature
+from itertools import permutations
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -17,9 +25,9 @@ from careloop.agents.schemas import (
     NOT_SUPPLIED,
     TOOL_NAMES,
     EmptyRegistry,
+    FrozenArguments,
     PlannerIntent,
     PlannerIntentBase,
-    ReservedArgumentName,
     TriageCategory,
     TriageResult,
     Urgency,
@@ -36,9 +44,7 @@ ATTACKER = "records-intake@claims-continuity-partners.example"
 
 def intent(tool_name: str, **args: str) -> PlannerIntentBase:
     """Build an intent, leaving every argument the caller did not name empty."""
-    fields = dict.fromkeys(ARG_NAMES, NOT_SUPPLIED)
-    fields.update(args)
-    return PlannerIntent(tool_name=tool_name, rationale="because", **fields)
+    return PlannerIntent(tool_name=tool_name, rationale="because", args=args)
 
 
 def synthetic_registry() -> ToolRegistry:
@@ -158,8 +164,14 @@ class TestTriageCannotNameADestination:
 
 
 class TestPlannerIntentIsAProposalAndNothingMore:
-    def test_the_field_set_is_exactly_the_intent_fields_plus_the_registry_arguments(self):
-        assert set(PlannerIntent.model_fields) == set(INTENT_FIELDS) | set(ARG_NAMES)
+    def test_the_field_set_is_exactly_the_intent_fields(self):
+        """Closed, and no longer growing with the registry — that is the session B shape."""
+        assert set(PlannerIntent.model_fields) == set(INTENT_FIELDS)
+
+    def test_the_field_set_does_not_grow_when_the_registry_does(self):
+        """The property the flat shape did not have, and the reason it failed against a model."""
+        generated = build_planner_intent(synthetic_registry())
+        assert set(generated.model_fields) == set(PlannerIntent.model_fields)
 
     def test_no_field_can_express_execution_approval_state_or_priority(self):
         forbidden = (
@@ -209,9 +221,34 @@ class TestPlannerIntentIsAProposalAndNothingMore:
         with pytest.raises(ValidationError):
             proposal.tool_name = "send_email"
 
+    def test_the_arguments_are_frozen_too_and_not_merely_the_field_holding_them(self):
+        """Pydantic's ``frozen`` freezes fields, not the objects they hold.
+
+        The same shallow-freeze hole session 2 closed on ``Case`` by making its collections
+        tuples. A tuple would change the schema the provider receives, so the mapping refuses
+        mutation instead.
+        """
+        proposal = intent("send_email", to="rosa.marlowe@carer.example")
+        assert isinstance(proposal.args, FrozenArguments)
+        for mutate in (
+            lambda: proposal.args.__setitem__("to", ATTACKER),
+            lambda: proposal.args.update({"to": ATTACKER}),
+            lambda: proposal.args.setdefault("cc", ATTACKER),
+            lambda: proposal.args.pop("to"),
+            lambda: proposal.args.clear(),
+        ):
+            with pytest.raises(TypeError):
+                mutate()
+        assert proposal.args["to"] == "rosa.marlowe@carer.example"
+
     def test_an_invented_field_is_rejected_rather_than_dropped(self):
         with pytest.raises(ValidationError):
-            intent("fetch_document", document_id="doc-0001-referral", execute_now="true")
+            PlannerIntent(
+                tool_name="fetch_document",
+                rationale="because",
+                args={"document_id": "doc-0001-referral"},
+                execute_now="true",
+            )
 
 
 class TestPlannerIntentRejectsWhatTheRegistryDoesNotDeclare:
@@ -227,20 +264,53 @@ class TestPlannerIntentRejectsWhatTheRegistryDoesNotDeclare:
         unregistered name is refused either way — the validator would catch it — so the assertion
         above cannot tell the two apart, and a widened annotation costs a wasted call and a replan
         without failing a single test. This is the one that notices.
+
+        ``tests/test_provider_tool_spec.py`` carries the same assertion one layer further out,
+        against the tool spec the SDK actually transmits, because those two are not the same
+        document.
         """
         field = PlannerIntent.model_json_schema()["properties"]["tool_name"]
         assert set(field["enum"]) == set(TOOL_NAMES)
+
+    def test_the_arguments_reach_the_provider_as_a_string_map(self):
+        field = PlannerIntent.model_json_schema()["properties"]["args"]
+        assert field["type"] == "object"
+        assert field["additionalProperties"] == {"type": "string"}
 
     def test_a_tool_added_to_the_registry_widens_the_enumeration(self):
         generated = build_planner_intent(synthetic_registry())
         field = generated.model_json_schema()["properties"]["tool_name"]
         assert set(field["enum"]) == set(TOOL_NAMES) | {"wire_transfer"}
 
-    def test_an_undeclared_argument_is_rejected_at_the_construction_boundary(self):
+
+class TestTheValidatorIsTheOnlyThingLeftGuardingThis:
+    """The check that used to be enforced twice and is now enforced once.
+
+    The flat shape enumerated every argument as a field, so the provider's own schema refused an
+    argument no tool declared. The map shape says nothing to the provider about which arguments
+    belong to which tool, so everything below rests on
+    ``PlannerIntentBase._bind_arguments_to_the_chosen_tool``. Delete that validator and this class
+    is what goes red.
+    """
+
+    def test_an_argument_belonging_to_another_tool_is_rejected(self):
         with pytest.raises(ValidationError):
             intent("fetch_document", document_id="doc-0001-referral", to=ATTACKER)
 
-    def test_the_rejection_message_names_fields_and_never_their_values(self):
+    @pytest.mark.parametrize("chosen,other", list(permutations(TOOL_NAMES, 2)))
+    def test_no_tool_accepts_any_other_tools_argument(self, chosen, other):
+        """Every ordered pair, so the guard cannot hold for the one example it was written with."""
+        foreign = sorted(REGISTRY.get(other).arg_names - REGISTRY.get(chosen).arg_names)
+        if not foreign:
+            pytest.skip(f"{other} declares no argument {chosen} does not")
+        with pytest.raises(ValidationError):
+            intent(chosen, **{foreign[0]: "a value the chosen tool has no field for"})
+
+    def test_an_argument_no_tool_declares_at_all_is_rejected(self):
+        with pytest.raises(ValidationError):
+            intent("fetch_document", document_id="doc-0001-referral", beneficiary="acct-1")
+
+    def test_the_rejection_message_names_arguments_and_never_their_values(self):
         """The validator's own message is model-safe; see the note in ``schemas.py``."""
         with pytest.raises(ValidationError) as caught:
             intent("fetch_document", document_id="doc-0001-referral", to=ATTACKER)
@@ -258,6 +328,12 @@ class TestPlannerIntentRejectsWhatTheRegistryDoesNotDeclare:
         """``"   "`` counts as empty, so it cannot smuggle a value past the check either way."""
         proposal = intent("fetch_document", document_id="doc-0001-referral", to="   ")
         assert proposal.args == {"document_id": "doc-0001-referral"}
+
+    def test_the_guard_is_not_passing_because_nothing_is_ever_accepted(self):
+        """Vacuity: the arguments a tool *does* declare must go through untouched."""
+        proposal = intent("send_email", to="rosa.marlowe@carer.example", subject="Referral")
+        assert proposal.args["to"] == "rosa.marlowe@carer.example"
+        assert proposal.args["subject"] == "Referral"
 
 
 class TestPlannerIntentArgs:
@@ -280,6 +356,12 @@ class TestPlannerIntentArgs:
             "reason": "",
         }
 
+    def test_a_tool_given_no_arguments_at_all_still_gets_the_full_set(self):
+        """The model may omit ``args`` entries; it may not thereby omit them from the call."""
+        proposal = intent("book_appointment")
+        assert set(proposal.args) == REGISTRY.get("book_appointment").arg_names
+        assert set(proposal.args.values()) == {""}
+
     @pytest.mark.parametrize("tool_name", TOOL_NAMES)
     def test_args_bind_against_the_real_tool_body_for_every_tool(self, tool_name):
         """The reason empties are kept: ``ToolSet.call`` binds by name against the exact set.
@@ -291,35 +373,55 @@ class TestPlannerIntentArgs:
         method = getattr(ToolSet, tool_name)
         signature(method).bind(None, **proposal.args)
 
+    def test_the_arguments_survive_json_encoding(self):
+        """``idempotency_key`` JSON-encodes the mapping, so the frozen type must remain a dict."""
+        import json
+
+        proposal = intent("send_email", to="rosa.marlowe@carer.example")
+        assert json.loads(json.dumps(proposal.args)) == dict(proposal.args)
+
 
 class TestGeneratedFromTheRegistryInBothDirections:
-    def test_a_tool_added_to_the_registry_appears_in_the_schema(self):
+    def test_a_tool_added_to_the_registry_can_be_proposed(self):
         registry = synthetic_registry()
         generated = build_planner_intent(registry)
         assert "wire_transfer" in tool_names(registry)
         proposal = generated(
             tool_name="wire_transfer",
             rationale="because",
-            **dict.fromkeys(argument_names(registry), NOT_SUPPLIED)
-            | {"beneficiary": "acct-1", "amount": "100"},
+            args={"beneficiary": "acct-1", "amount": "100"},
         )
         assert proposal.args == {"beneficiary": "acct-1", "amount": "100"}
 
-    def test_an_argument_added_to_the_registry_appears_as_a_field(self):
+    def test_an_argument_added_to_the_registry_becomes_acceptable_for_its_own_tool(self):
         generated = build_planner_intent(synthetic_registry())
-        assert {"beneficiary", "amount"} <= set(generated.model_fields)
+        proposal = generated(
+            tool_name="wire_transfer", rationale="because", args={"beneficiary": "acct-1"}
+        )
+        assert proposal.args == {"amount": "", "beneficiary": "acct-1"}
 
-    def test_nothing_appears_that_the_registry_does_not_declare(self):
-        assert set(PlannerIntent.model_fields) - set(INTENT_FIELDS) == {
-            arg for tool in REGISTRY for arg in tool.arg_names
-        }
+    def test_and_stays_unacceptable_for_every_other_tool(self):
+        generated = build_planner_intent(synthetic_registry())
+        with pytest.raises(ValidationError):
+            generated(
+                tool_name="fetch_document", rationale="because", args={"beneficiary": "acct-1"}
+            )
 
-    def test_a_tool_absent_from_the_registry_is_absent_from_the_schema(self):
+    def test_a_tool_absent_from_the_registry_cannot_be_proposed(self):
         assert "wire_transfer" not in TOOL_NAMES
-        assert "beneficiary" not in PlannerIntent.model_fields
+        with pytest.raises(ValidationError):
+            intent("wire_transfer", beneficiary="acct-1")
 
     def test_the_shipped_schema_and_the_shipped_registry_agree_on_tool_names(self):
         assert set(TOOL_NAMES) == REGISTRY.names
+
+    def test_the_argument_names_helper_still_describes_the_registry(self):
+        """No longer the field set; still a true statement, and the prompt renders from it."""
+        assert set(ARG_NAMES) == {arg for tool in REGISTRY for arg in tool.arg_names}
+        assert set(argument_names(synthetic_registry())) == set(ARG_NAMES) | {
+            "beneficiary",
+            "amount",
+        }
 
     def test_generation_is_deterministic(self):
         first = build_planner_intent(REGISTRY)
@@ -332,21 +434,16 @@ class TestGenerationFailsClosed:
         with pytest.raises(EmptyRegistry):
             build_planner_intent(ToolRegistry([]))
 
-    def test_an_argument_named_like_an_intent_field_raises(self):
-        colliding = ToolRegistry(
-            [
-                ToolSpec(
-                    name="shadow",
-                    external_effect=False,
-                    args=(ArgSpec(name="rationale", arg_class=ArgClass.VALUE),),
-                )
-            ]
-        )
-        with pytest.raises(ReservedArgumentName):
-            build_planner_intent(colliding)
-
     @pytest.mark.parametrize("field", INTENT_FIELDS)
-    def test_every_intent_field_is_protected_from_collision(self, field):
+    def test_an_argument_named_like_an_intent_field_is_no_longer_a_collision(self, field):
+        """``ReservedArgumentName`` guarded a hazard the map shape removes.
+
+        Under the flat shape an argument called ``rationale`` became a *field* and silently
+        shadowed the intent's own, so generation refused it. Arguments are now map keys and cannot
+        shadow anything, so the guard was deleted rather than kept pointing at an impossible
+        condition — a guard for something that cannot happen implies a hazard that does not exist.
+        This is what replaces it: the collision is constructed, and it is harmless.
+        """
         colliding = ToolRegistry(
             [
                 ToolSpec(
@@ -356,5 +453,8 @@ class TestGenerationFailsClosed:
                 )
             ]
         )
-        with pytest.raises(ReservedArgumentName):
-            build_planner_intent(colliding)
+        generated = build_planner_intent(colliding)
+        proposal = generated(tool_name="shadow", rationale="because", args={field: "a value"})
+        assert proposal.rationale == "because"
+        assert proposal.tool_name == "shadow"
+        assert proposal.args == {field: "a value"}

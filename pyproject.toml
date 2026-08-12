@@ -89,6 +89,14 @@ timeout = 60
 # when diagnosing a deadlock in async graph execution.
 timeout_method = "thread"
 filterwarnings = ["error::DeprecationWarning:careloop.*"]
+# Registered so an unknown-marker warning cannot hide a typo'd mark. Deliberately NOT excluded via
+# addopts: `live` tests gate themselves on CARELOOP_LIVE=1 plus a key pair in .env, so CI collects
+# them and skips them, and the skip is visible in the run summary. A `-m "not live"` default would
+# make them invisible instead, and a test nobody can see being skipped is a test nobody notices has
+# stopped existing.
+markers = [
+    "live: runs against a real paid model provider; skipped unless CARELOOP_LIVE=1 and .env carries credentials",
+]
 
 [tool.ruff]
 line-length = 100

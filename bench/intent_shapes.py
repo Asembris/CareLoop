@@ -343,6 +343,55 @@ def normalise(
     )
 
 
+#: How the planner's user prompt renders one fact: ``| fact <key>: <value>``.
+_FACT_LINE_PREFIX: Final[str] = "| fact "
+
+
+def evidence_facts(user_prompt: str) -> dict[str, str]:
+    """The facts the prompt showed the model, by key.
+
+    Parsed out of the rendered prompt rather than reconstructed from a case, because the prompt is
+    the only thing the model actually saw and the question is whether it copied what was in front
+    of it. Multi-line excerpt facts key on ``excerpt:<doc>:<page>``, which no argument is named
+    after, so their continuation lines are ignored without a special case.
+    """
+    facts: dict[str, str] = {}
+    for raw in user_prompt.splitlines():
+        line = raw.strip()
+        if not line.startswith(_FACT_LINE_PREFIX):
+            continue
+        key, sep, value = line[len(_FACT_LINE_PREFIX) :].partition(": ")
+        if sep:
+            facts.setdefault(key.strip(), value.strip())
+    return facts
+
+
+def transcription_defects(proposal: Proposal, facts: Mapping[str, str]) -> list[str]:
+    """Arguments whose value disagrees with the fact of the same name. Empty means faithful.
+
+    **Why this is measured at all, and why it is not folded into "valid".** Trust resolves by
+    matching an argument's value against ``case.facts`` **exactly** — no case-folding, no trimming,
+    no normalisation, because normalisation is a laundering surface (session 2). So a proposal that
+    satisfies the schema perfectly and copies ``2026-09-03T09:30:00`` as ``2026-09-03T09:30:00.``
+    resolves ``UNTRUSTED`` and is denied ``INSUFFICIENT_FACT_TRUST``. Nothing about that denial
+    says "the model added a full stop"; it reads as a policy bug and it is not one.
+
+    It stays a separate column because schema fit is a property of the *shape* and transcription
+    fidelity is a property of the *model*. Blending them would let a shape be blamed for a model's
+    typing, which is the confusion this whole instrument exists to avoid.
+
+    Only arguments the evidence actually stated a fact for are checked. ``body``, ``subject`` and
+    ``reason`` are composed by the planner and are supposed to be new text.
+    """
+    defects: list[str] = []
+    for name, value in sorted(proposal.args.items()):
+        if not value.strip() or name not in facts:
+            continue
+        if value != facts[name]:
+            defects.append(name)
+    return defects
+
+
 # ---------------------------------------------------------------------------------------------
 # Candidates
 # ---------------------------------------------------------------------------------------------
@@ -516,20 +565,38 @@ class ShapeTrial:
     error: str = ""
     latency_ms: float = 0.0
 
+    misquoted: list[str] = field(default_factory=list)
+    """Arguments whose value disagrees with the evidence's fact of the same name."""
+
     @property
     def valid(self) -> bool:
-        """A usable proposal: the schema was satisfied and the arguments are the tool's own."""
+        """The schema was satisfied and the arguments are the chosen tool's own.
+
+        A property of the **shape**. Deliberately blind to whether the values are any good — see
+        :attr:`usable`, and :func:`transcription_defects` for why the two are kept apart.
+        """
         return not (self.schema_failure or self.argument_defect or self.error)
+
+    @property
+    def usable(self) -> bool:
+        """Valid, *and* every value it copied matches what the evidence said.
+
+        A property of the **model**. This is the one that predicts whether the graph gets past the
+        policy gate, because trust resolves on an exact match and a stray character does not.
+        """
+        return self.valid and not self.misquoted
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "shape": self.shape_key,
             "model": self.model_spec,
             "valid": self.valid,
+            "usable": self.usable,
             "tool_name": self.tool_name,
             "args": self.args,
             "schema_failure": self.schema_failure,
             "argument_defect": self.argument_defect,
+            "misquoted": self.misquoted,
             "error": self.error,
             "latency_ms": round(self.latency_ms, 1),
         }
@@ -547,8 +614,9 @@ async def run_trial(
 
     Session A's third instrument defect was a rate function that swallowed exceptions while
     counting them, and reported "0/8 valid" without noticing the failure had changed shape
-    entirely. So the three outcomes are kept apart: the provider failed to satisfy the schema, the
-    output satisfied it but named arguments the tool does not take, or something else broke.
+    entirely. So the outcomes are kept apart: the provider failed to satisfy the schema, the
+    output satisfied it but named arguments the tool does not take, the output was well-formed but
+    misquoted a value the evidence stated, or something else broke.
     """
     trial = ShapeTrial(shape_key=shape.key, model_spec=model_spec)
     started = time.perf_counter()
@@ -563,6 +631,7 @@ async def run_trial(
     else:
         trial.tool_name = proposal.tool_name
         trial.args = proposal.args
+        trial.misquoted = transcription_defects(proposal, evidence_facts(user_prompt))
     trial.latency_ms = (time.perf_counter() - started) * 1000
     return trial
 
@@ -579,15 +648,18 @@ def _first_line(failure: BaseException) -> str:
 
 def summarise(trials: Sequence[ShapeTrial]) -> dict[str, Any]:
     """Counts, never a single blended score."""
-    total = len(trials)
-    valid = sum(1 for trial in trials if trial.valid)
     return {
-        "n": total,
-        "valid": valid,
+        "n": len(trials),
+        "valid": sum(1 for trial in trials if trial.valid),
+        "usable": sum(1 for trial in trials if trial.usable),
         "schema_failures": sum(1 for trial in trials if trial.schema_failure),
         "argument_defects": sum(1 for trial in trials if trial.argument_defect),
+        "misquoted": sum(1 for trial in trials if trial.misquoted),
         "errors": sum(1 for trial in trials if trial.error),
         "tools_proposed": sorted({trial.tool_name for trial in trials if trial.tool_name}),
+        "misquoted_arguments": sorted(
+            {name for trial in trials for name in trial.misquoted},
+        ),
     }
 
 
@@ -612,10 +684,12 @@ __all__ = [
     "build_tool_choice",
     "candidate",
     "captured_prompt",
+    "evidence_facts",
     "normalise",
     "provider_tool_spec",
     "run_trial",
     "summarise",
     "system_prompt_for",
     "tool_spec_defects",
+    "transcription_defects",
 ]

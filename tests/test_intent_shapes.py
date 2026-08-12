@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import get_origin
 
 import pytest
+from helpers import make_case, make_fact
 from pydantic import BaseModel, ValidationError
 
 from bench.intent_shapes import (
@@ -29,14 +30,17 @@ from bench.intent_shapes import (
     build_tool_choice,
     candidate,
     captured_prompt,
+    evidence_facts,
     normalise,
     provider_tool_spec,
     summarise,
     system_prompt_for,
     tool_spec_defects,
+    transcription_defects,
 )
 from careloop.agents.schemas import PlannerIntent
-from careloop.provenance import ArgClass
+from careloop.policy.engine import resolve_trust
+from careloop.provenance import ArgClass, TrustLevel
 from careloop.tools.registry import REGISTRY, ArgSpec, ToolRegistry, ToolSpec
 
 
@@ -188,6 +192,80 @@ class TestEveryShapeIsReducedToOneAnswer:
         ]
         stats = summarise(trials)
         assert (stats["valid"], stats["schema_failures"], stats["argument_defects"]) == (1, 1, 1)
+
+
+class TestAWellFormedProposalCanStillBeUnusable:
+    """The distinction step 1 found by running it, and the reason it is two columns.
+
+    ``gpt-4o-mini`` satisfied the shipped schema on 8 of 8 trials and copied ``slot_start`` with a
+    stray trailing character on all 8. Trust resolves on an exact match — no trimming, no
+    normalisation, deliberately, because normalisation is a laundering surface — so every one of
+    those well-formed proposals would be denied ``INSUFFICIENT_FACT_TRUST``.
+    """
+
+    def test_the_facts_the_prompt_showed_are_parsed_out_of_the_prompt(self):
+        _, user = captured_prompt()
+        facts = evidence_facts(user)
+        assert facts["patient_id"] == "PT-4417"
+        assert facts["slot_start"] == "2026-09-03T09:30:00"
+
+    def test_a_multi_line_excerpt_cannot_masquerade_as_an_argument(self):
+        """Excerpt facts span lines, and their keys must never collide with an argument name.
+
+        They cannot: an excerpt keys on ``excerpt:<doc>:<page>``, and no tool declares an argument
+        with a colon in it. Asserted rather than assumed, because a collision would silently make
+        a document excerpt the authority on what an argument should say.
+        """
+        _, user = captured_prompt()
+        facts = evidence_facts(user)
+        every_argument = {arg for tool in REGISTRY for arg in tool.arg_names}
+        assert any(key.startswith("excerpt:") for key in facts), "the capture lost its excerpts"
+        assert not {key for key in facts if key.startswith("excerpt:")} & every_argument
+
+    def test_a_faithful_copy_has_no_defect(self):
+        _, user = captured_prompt()
+        proposal = normalise("book_appointment", {"slot_start": "2026-09-03T09:30:00"})
+        assert transcription_defects(proposal, evidence_facts(user)) == []
+
+    def test_a_stray_character_is_a_defect(self):
+        _, user = captured_prompt()
+        proposal = normalise("book_appointment", {"slot_start": "2026-09-03T09:30:00."})
+        assert transcription_defects(proposal, evidence_facts(user)) == ["slot_start"]
+
+    def test_the_defect_is_exactly_what_the_policy_engine_would_refuse(self):
+        """Asserted through ``resolve_trust``, not by inspecting the string.
+
+        A test that only compared strings would still pass if trust resolution grew a ``strip()``,
+        which is the mutation this project has already run once and rejected.
+        """
+        _, user = captured_prompt()
+        facts = evidence_facts(user)
+        case = make_case(
+            facts=(make_fact("slot_start", facts["slot_start"], TrustLevel.CONTROLLED),)
+        )
+        assert resolve_trust(facts["slot_start"], case) is TrustLevel.CONTROLLED
+        assert resolve_trust(facts["slot_start"] + ".", case) is TrustLevel.UNTRUSTED
+
+    def test_composed_prose_is_never_a_defect(self):
+        """``body`` and ``reason`` are the planner's own words and no fact states them."""
+        _, user = captured_prompt()
+        proposal = normalise("send_email", {"to": "x@y.example", "body": "wrote this myself"})
+        assert transcription_defects(proposal, evidence_facts(user)) == []
+
+    def test_valid_and_usable_are_different_columns(self):
+        trial = ShapeTrial(
+            shape_key="x", model_spec="m", tool_name="book_appointment", misquoted=["slot_start"]
+        )
+        assert trial.valid is True
+        assert trial.usable is False
+
+    def test_the_summary_counts_them_apart(self):
+        trials = [
+            ShapeTrial(shape_key="x", model_spec="m", tool_name="send_email"),
+            ShapeTrial(shape_key="x", model_spec="m", tool_name="send_email", misquoted=["to"]),
+        ]
+        stats = summarise(trials)
+        assert (stats["valid"], stats["usable"], stats["misquoted"]) == (2, 1, 1)
 
 
 class TestTheUnionIsKeptAsEvidence:

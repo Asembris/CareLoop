@@ -6,6 +6,9 @@ differ only in which existing function they call and therefore where the case go
 
 from __future__ import annotations
 
+import asyncio
+import threading
+
 import pytest
 from api_helpers import CASE_ID, EMAIL, api_client, finished_store, intent, parked_store
 from fastapi import HTTPException
@@ -13,10 +16,13 @@ from fastapi.testclient import TestClient
 from helpers import make_case
 
 from careloop.api.app import create_app, resume_event
+from careloop.api.app import decide as decide_directly
 from careloop.api.deps import ApiDeps
 from careloop.api.projections import COMPLETED, NEEDS_YOU, WORKING
 from careloop.events.inbound import CLAIM_REJECTION_EVENT_ID, REFERRAL_EVENT_ID
+from careloop.graph.runner import approve as approve_directly
 from careloop.state import CaseState, InMemoryCaseStore, TimelineKind
+from careloop.state.case import ApprovalStatus
 
 WAIT = 10.0
 CARER = "rosa"
@@ -243,6 +249,72 @@ class TestDecisionsThatCannotBeMade:
         assert len(store.get(CASE_ID).actions) == 1
 
 
+class TestADecisionDuringARunIsRefusedBeforeAnythingIsRecorded:
+    """The window is narrow and it is real.
+
+    The gate node commits ``AWAITING_HUMAN`` and the pending approval, and only then does the graph
+    finish and the run settle. In between, the case is parked and the run is still going — a
+    dashboard polling once a second can land there, and a caregiver can click. Without the check,
+    ``approve`` would release the case to ``READY_TO_EXECUTE`` while the graph still held a version
+    it was about to write, and the two would collide somewhere inside a node.
+
+    Refusing *before* recording is what makes the request all-or-nothing. Recording the approval and
+    then failing to schedule would leave a decision made, a case released, and a caller told the
+    request was refused — three things that disagree about what happened.
+    """
+
+    def test_the_approval_is_not_recorded(self) -> None:
+        store = parked_store()
+        before = store.get(CASE_ID)
+        approval_id = before.pending_approval().approval_id
+
+        async def exercise() -> None:
+            async def occupying():
+                await asyncio.sleep(0.05)
+                raise AssertionError("deliberate: this run is only here to occupy the case")
+
+            deps = ApiDeps(store=store)
+            deps.runs.start(CASE_ID, occupying)
+
+            with pytest.raises(HTTPException) as raised:
+                await decide_directly(approve_directly, CASE_ID, approval_id, deps, CARER, 0.0)
+
+            assert raised.value.status_code == 409
+            await deps.runs.drain()
+
+        asyncio.run(exercise())
+
+        after = store.get(CASE_ID)
+        assert after.version == before.version
+        assert after.state is CaseState.AWAITING_HUMAN
+        assert after.pending_approval().status is ApprovalStatus.PENDING
+
+    def test_the_refusal_comes_before_the_approval_is_even_looked_up(self) -> None:
+        """A 409 rather than the 404 an unknown approval id would otherwise get."""
+        gate = threading.Event()
+
+        with api_client(InMemoryCaseStore(), *SEND_EMAIL, gate=gate) as client:
+            client.post(
+                "/api/events?wait=0",
+                json={"event_id": REFERRAL_EVENT_ID, "case_id": CASE_ID},
+            )
+            response = decide(client, "approve", "apr-does-not-exist", wait=0)
+            gate.set()
+
+        assert response.status_code == 409
+        assert "in flight" in response.json()["detail"]
+
+    def test_once_the_run_settles_the_decision_goes_through(self) -> None:
+        """Vacuity: the refusal is about the run, not about the request being malformed."""
+        store = parked_store()
+
+        with api_client(store) as client:
+            response = decide(client, "approve", pending_id(store))
+
+        assert response.status_code == 202
+        assert store.get(CASE_ID).state is CaseState.DONE
+
+
 class TestAReopenedCaseResumesUnderTheEventThatReopenedIt:
     """Why the API reads ``latest_delivery`` and not ``case.event_id``.
 
@@ -320,8 +392,6 @@ class TestTheApiCallsExistingFunctionsRatherThanDecidingAnything:
 
     def test_the_state_the_api_left_behind_is_what_the_next_run_dispatches_on(self) -> None:
         """A second app over the same store finishes what the first one released."""
-        from careloop.graph.runner import approve as approve_directly
-
         store = parked_store()
         approve_directly(store, CASE_ID, pending_id(store), decided_by=CARER)
         assert store.get(CASE_ID).state is CaseState.READY_TO_EXECUTE

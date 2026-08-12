@@ -24,13 +24,20 @@ from careloop.graph.builder import (
     build_graph,
 )
 from careloop.graph.conditions import when_case_is, when_case_is_not
-from careloop.graph.context import RunContext, latest_proposal, prior_denials
+from careloop.graph.context import (
+    RunContext,
+    latest_delivery,
+    latest_proposal,
+    prior_denials,
+    proposal_for,
+)
 from careloop.graph.nodes import DeterministicNode, DispatchNode, TriageNode
 from careloop.graph.trusted import trusted_facts
 from careloop.llm.mock import mock_model
 from careloop.policy.verdicts import ReasonCode
 from careloop.state import Case, CaseState, InMemoryCaseStore, TimelineKind
 from careloop.state.machine import append_event
+from careloop.tools.idempotency import args_digest
 
 REFERRAL = "doc-0001-referral"
 
@@ -272,6 +279,18 @@ class TestTheGraphShape:
         assert plan_to_gate.condition is None
 
 
+def _proposed(case: Case, tool_name: str, args: dict[str, str]) -> Case:
+    """Append the ``PLAN_PROPOSED`` entry the plan node writes."""
+    return append_event(
+        case,
+        kind=TimelineKind.PLAN_PROPOSED,
+        actor="planner",
+        summary=f"proposed {tool_name}",
+        payload={"tool_name": tool_name, "args": dict(args), "rationale": ""},
+        now=FIXED_NOW,
+    )
+
+
 class TestReadingTheCaseBack:
     def test_a_proposal_round_trips_through_the_timeline(self) -> None:
         case = append_event(
@@ -308,6 +327,85 @@ class TestReadingTheCaseBack:
 
     def test_a_case_with_no_proposal_has_none(self) -> None:
         assert latest_proposal(make_case()) is None
+
+    def test_a_proposal_is_findable_by_the_digest_an_approval_records(self) -> None:
+        """What lets a decision card show the caregiver the call they are approving."""
+        args = {"to": "carer@example", "subject": "s", "body": "b"}
+        case = _proposed(make_case(), "send_email", args)
+
+        found = proposal_for(case, args_digest(args))
+
+        assert found is not None
+        assert found.args == args
+
+    def test_a_digest_no_proposal_covers_finds_nothing(self) -> None:
+        case = _proposed(make_case(), "send_email", {"to": "carer@example"})
+
+        assert proposal_for(case, args_digest({"to": "attacker@evil.example"})) is None
+
+    def test_the_digest_picks_the_matching_proposal_not_the_latest(self) -> None:
+        """An approval covers specific arguments; the newest proposal need not be them."""
+        approved = {"to": "carer@example", "subject": "s", "body": "b"}
+        case = _proposed(make_case(), "send_email", approved)
+        case = _proposed(case, "send_email", {"to": "carer@example", "subject": "s2", "body": "b"})
+
+        found = proposal_for(case, args_digest(approved))
+
+        assert found is not None
+        assert found.args == approved
+        assert latest_proposal(case).args != approved
+
+    def test_the_latest_delivery_is_the_opening_event_before_any_reopen(self) -> None:
+        case = append_event(
+            make_case(),
+            kind=TimelineKind.CASE_CREATED,
+            actor="system",
+            summary="case opened",
+            payload={"event_id": "evt-0001-referral", "document_ids": ["doc-0001"]},
+            now=FIXED_NOW,
+        )
+
+        delivery = latest_delivery(case)
+
+        assert delivery.event_id == "evt-0001-referral"
+        assert delivery.document_ids == ("doc-0001",)
+
+    def test_a_reopen_becomes_the_latest_delivery_and_case_event_id_does_not_move(self) -> None:
+        """The distinction the reader exists for.
+
+        ``Case.event_id`` records which event *opened* the case and ``reopen_case`` deliberately
+        does not rewrite it. Anything carrying a reopened case forward needs the later event's
+        documents, so reading ``case.event_id`` would hand it the referral's.
+        """
+        case = append_event(
+            make_case(),
+            kind=TimelineKind.CASE_CREATED,
+            actor="system",
+            summary="case opened",
+            payload={"event_id": "evt-0001-referral", "document_ids": ["doc-0001"]},
+            now=FIXED_NOW,
+        )
+        case = append_event(
+            case,
+            kind=TimelineKind.CASE_REOPENED,
+            actor="system",
+            summary="reopened",
+            payload={
+                "event_id": "evt-0003-claim-rejection",
+                "document_ids": ["doc-0004", "doc-0005"],
+                "opened_by": "evt-0001-referral",
+            },
+            now=FIXED_NOW,
+        )
+
+        delivery = latest_delivery(case)
+
+        assert delivery.event_id == "evt-0003-claim-rejection"
+        assert delivery.document_ids == ("doc-0004", "doc-0005")
+        assert case.event_id == "evt-0001"
+
+    def test_a_case_with_no_delivery_entry_has_none(self) -> None:
+        assert latest_delivery(make_case()) is None
 
     def test_denials_carry_the_tool_and_the_reason_code_and_nothing_else(self) -> None:
         case = append_event(

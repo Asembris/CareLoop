@@ -962,9 +962,302 @@ open decision 9 below.
 
 ---
 
+## Session 6 — 2026-08-12
+
+### Position
+
+Branch `main`. `origin/main` is at `b39f917`; everything from session 5 onward is **unpushed**.
+
+| Commit | Subject | Pushed |
+|---|---|---|
+| `832cdce` | Close open decision 9: fact promotion replaces the untrusted original | no |
+| `d1983f1` | Add the shared policy gate with a decision cache keyed on the case version | no |
+| `aac8956` | Add the BeforeToolCall policy hook, fired by CareLoop against a real registry | no |
+| `26bf97e` | Add the gated toolset backstop, applied by enumerating the registry | no |
+| `3f73d72` | Permit PLANNING in the ALLOW rules so a proposal can reach a verdict | no |
+| `cb3be10` | Add trusted configuration, deterministic extraction and per-action verification | no |
+| `207beea` | Add the deterministic graph nodes, edge conditions, and the bounded wiring | no |
+| `63e30f2` | Add the case runner, inbound events, and the `args_approved` rule clause | no |
+| `b25a192` | Add T1 to T4 end to end, with each enforcement point mutation-proven | no |
+| — | Record commit 6 in the session log | no |
+
+**1038 passed, 2 skipped locally; 1036 passed, 4 skipped in a clean `.[dev]`-only virtualenv.**
+`ruff check` and `ruff format --check` clean in both. Verified under `pytest` and
+`python -m pytest`, and **at every one of the nine commits individually** in the fresh venv with
+every credential unset and `AWS_CONFIG_FILE` pointed at `/nonexistent`.
+
+### Done — commit 6: the spine runs
+
+`careloop/graph/` (context, extract, trusted, verify, nodes, conditions, builder, runner),
+`careloop/policy/` gains `gate.py`, `hook.py` and `gated.py`, `careloop/state/evidence.py`, and a
+minimal `careloop/events/`. A case now goes `NEW → DONE`.
+
+### The correction that shaped the commit — spike finding 2 assumed an event loop
+
+**Recorded first because everything else follows from it.** The spike verified `cancel_tool` inside
+a `strands.Agent` running tools, and concluded that a denial reaches the planner as an error tool
+result. Commit 5 removed the event loop: `agents/invoke.py` drives the provider's structured-output
+generator directly, so neither agent holds a tool and **no tool result is ever returned to a
+model**. That channel does not exist.
+
+Two consequences, both good:
+
+**The replan channel is `prior_denials` → `planner_user_prompt`**, built in commit 5 and already
+proven pure. What reaches the planner is a `(tool_name, ReasonCode)` pair rendered through
+`reason_text` — a literal from a closed enum, on a path with no SDK in it. Strictly better for
+invariant 6 than an SDK-formatted error string would have been.
+
+**CareLoop fires the hook itself.** The execute node builds a real `BeforeToolCallEvent` and fires
+it against a real `HookRegistry`. Verified by execution: `invoke_callbacks_async` dispatches on the
+event's type and never reads `event.agent`, so `agent=None` works, and `selected_tool=None` is a
+value that field's own type already admits. A `PolicyHook` written this way plugs unchanged into a
+real `Agent` the day one exists.
+
+**The disclosure is a requirement, not a footnote.** `policy/hook.py`, the README and
+`spike-findings.md` §2 all say plainly that CareLoop fires the SDK's real hook from its own node
+rather than an SDK event loop firing it. "Strands blocks the attack" is the sentence this project
+cannot afford, because it is checkable and it would be found inflated.
+
+### There are three enforcement points, not two
+
+Found by a mutation that passed for the wrong reason, and it changes how the layering claim has to
+be stated.
+
+| Point | Case state | Decides |
+|---|---|---|
+| `gate` node | `PLANNING` | route to execution, to a human, or back to the planner |
+| `BeforeToolCall` hook | `EXECUTING` | whether the dispatched call proceeds |
+| gated tool wrapper | `EXECUTING` | the same, independently of the hook |
+
+The routing evaluation is not optional: `AWAITING_HUMAN` is reachable from `PLANNING` and from
+nowhere else an external effect could be proposed, so `REQUIRE_HUMAN` has to be discovered before
+execution or the state machine forbids acting on it.
+
+The consequence for T2 is that **the poison never reaches a tool boundary at all** — the gate node
+denies it and the case never leaves `PLANNING`. The first version of T2's mutations removed the
+hook, then the backstop, and both passed; they passed because the code under test was never
+reached. Rewritten so each tool-boundary layer is exercised against a case already routed to
+execution with a poisoned proposal, which is exactly the scenario invariant 2's second enforcement
+point exists for: the routing decision being wrong, absent, or bypassed. A control test with
+neither layer present asserts the attack lands.
+
+### Blocking prerequisites, all three closed
+
+**Open decision 9 — promotion replaces, it does not append. CLOSED.** `careloop/state/evidence.py`
+substitutes the promoted fact at its original's index and is the only promotion API a node has.
+Two guards make a regression loud: the fact must already be on the case, and the promotion must be
+*effective* — if another fact still carries the same value below the target level,
+`PromotionIneffective` is raised rather than the promotion silently resolving to nothing.
+
+The test that matters asserts `resolve_trust(value, case) is CONTROLLED` through the **engine**.
+`tests/test_evidence.py::TestTheAssertionThatWouldNotHaveCaught` pins the distinction by building
+the case the wrong way and showing the plausible assertion ("a CONTROLLED fact exists") passes
+while the engine still reads `UNTRUSTED`.
+
+**Open decision 7 — the durable ledger. CLOSED.** The execute node consults `case.action_for(key)`
+before dispatching and writes an `ActionRecord` after. T3 replays across a genuine process
+boundary — the case is serialised, rehydrated into a store that has never seen it, and driven by a
+**fresh executor with an empty ledger** — and performs no second effect. If suppression came from
+the executor's ledger, that test would book a second appointment.
+
+**Decision-cache TOCTOU (session 2). CLOSED.** The key carries `case.version`, `case.state` and a
+fingerprint over the case's facts, not just `(case_id, tool, args)`. Uncanonicalizable arguments
+are never cached at all — a key that cannot distinguish two calls must not answer for either.
+`tests/test_policy_gate.py` includes the pre-fix key and shows it collides across a case change
+that flips the verdict.
+
+### Two rules bugs, both fixed in `rules.yaml` rather than in Python
+
+**`PLANNING` was missing from the `ALLOW` rules.** `deny-external-effect-outside-execution-states`
+permits `PLANNING` and its comment says why — the planner proposes from there and must receive a
+real verdict — but both `ALLOW` rules named only the execution states, so an evaluation in
+`PLANNING` could never reach an `ALLOW` and fell through to the default deny. A legitimate booking
+was refused `NO_RULE_MATCH` for a reason no diagnostic explained. `tests/test_policy_engine.py`
+carried a test asserting the buggy behaviour as intentional; it is reversed in place, with the
+reasoning in its docstring rather than deleted.
+
+**A `REQUIRE_HUMAN` rule with no approval clause can never be satisfied.** Policy is evaluated
+once to route the proposal and once at the tool boundary, so an unconditional
+`require-human-for-outbound-email` fires *after* the caregiver approves and parks the case again.
+T1 could not complete. Fixed with a new condition clause, `args_approved: bool | None`, plus two
+`allow-approved-*` rules. Deliberately not fixed with a Python branch in the execute node that
+skips the gate when an approval exists — that would be a rule encoded in code and a bypass around
+the enforcement point in one move.
+
+`Case.is_approved(args_digest)` is the durable answer, matched on the canonical argument digest so
+an approval authorises one specific call rather than a tool. **An approval cannot launder an
+untrusted destination**: `DENY` runs before `ALLOW`, so the question is never put to a human at
+all.
+
+### Decisions the plan did not contain
+
+**Verification semantics — open decision 5, CLOSED.** *Verified means the effect that was performed
+is the effect that was authorised.* The idempotency key re-derived from the approved arguments must
+equal the key the action was recorded under, the digests must match, and every field the typed
+result echoes back must equal the argument policy allowed. `VERIFIERS` is drift-checked against
+`REGISTRY.external_effect_tools` at import.
+
+Not "the outside world did the right thing" — against a mock that would be theatre. What this
+closes is the gap between decision and execution. What it does not close is the gap between
+execution and the world, and the README says so.
+
+**Human-in-the-loop is park-and-resume, not the SDK interrupt.** An approval is a business fact and
+invariant 8 puts business facts in the `CaseStore`; driving it through `Interrupt` as well would
+give one fact two homes and two answers to "was this approved?". `Case` already modelled all of it.
+The resume is **a `CaseStore` reconstruction across a process boundary, not a Strands session
+restore** — nothing about the graph's execution state needs to survive, which is what invariant 8
+was for. **The resume session inherits this stated rather than rediscovering it.**
+
+**Triage records no facts.** Its classification goes to `case.summary` and the timeline, never to
+`case.facts`. Session 5's delta D5 gave one reason (a triage-emitted duplicate of a `TRUSTED`
+configuration value drags it down under lowest-wins); building it the other way surfaced the mirror
+image. The evidence node extracts `patient_id` deterministically and validates it to `CONTROLLED`;
+a triage-emitted duplicate left at `UNTRUSTED` makes that promotion invisible, and `promote_fact`
+refuses it outright. **Model output therefore never becomes a policy input** — every fact the
+engine reads was produced by deterministic code. Mutating this turned 50 tests red.
+
+**The injection channel, stated deliberately.** Untrusted text reaches the planner at exactly one
+place: `planner_user_prompt` renders `case.summary` and every `Fact.value` inside the quoted
+evidence block. The evidence node records each document page as an `excerpt:<doc>:p<n>`
+`UNTRUSTED` fact, so the poisoned continuity notice's three requests reach the planner in full.
+Nothing is sanitised — a filter would make T2 pass for the wrong reason. `T2` asserts the poison is
+in the rendered prompt *and* that the planner proposed all three payloads, so the denial is a
+denial rather than an absence.
+
+**Edge conditions read the persisted case, never node output.** The SDK threads each node's result
+text into the next node's input; routing on that would make control flow depend on prose that, one
+node upstream, was produced by a model reading attacker-controlled evidence.
+
+### Deltas from the approved plan
+
+All ten approved deltas were implemented as described. Two more were found during implementation:
+
+| # | Delta | Status |
+|---|---|---|
+| D1 | `@gated_tool` in `policy/gated.py`, applied by registry enumeration | approved |
+| D2 | The hook is fired by the execute node against a real `HookRegistry` | approved, with the disclosure requirement |
+| D3 | `rules.yaml` `ALLOW` rules gain `PLANNING` | approved as a bug fix |
+| D4 | Park-and-resume, not the SDK interrupt | approved |
+| D5 | Verification = "the effect performed is the effect authorised" | approved |
+| D6 | Minimal `events/inbound.py`; the simulator stays in a later commit | approved |
+| D7 | Document pages become `excerpt:*` `UNTRUSTED` facts | approved |
+| D8 | A `dispatch` entry node, for resume | approved |
+| D9 | `graph/trusted.py` seeds `TRUSTED` facts at case creation | approved |
+| D10 | Open decision 8 closes as "no" — no tool-result-to-model channel | approved |
+| **D11** | **`args_approved` rule clause** — a `REQUIRE_HUMAN` rule is otherwise unsatisfiable | **found during implementation** |
+| **D12** | **Triage records no facts** — see above | **found during implementation** |
+
+### Guards proven non-vacuous by mutation
+
+Twenty-two mutations, each applied to a clean tree, suite re-run, reverted. **Four survived, and
+every one was a real gap in the tests rather than a false alarm.**
+
+| Mutation | Result |
+|---|---|
+| promotion appends instead of replacing | 4 failed |
+| …and the shadowing guard disabled too | 5 failed |
+| the decision cache key drops version, state and facts | 6 failed |
+| `cancel_tool` interpolates the matched rule id | 9 failed |
+| the hook never cancels | 6 failed |
+| `cancel_tool` loses its reason | 6 failed |
+| the gated decorator never consults the gate | 8 failed |
+| the gate is consulted *after* the effect | 6 failed |
+| only effectful tools are wrapped | 4 failed |
+| `PLANNING` removed from the `ALLOW` rules again | 1 failed |
+| extraction takes the last matching page | **survived — fixed** |
+| a `DESTINATION` argument name declared promotable | import fails |
+| validation promotes without consulting the validator | 1 failed |
+| verification skips the per-action predicate | 3 failed |
+| verification compares the record against itself | 1 failed |
+| an approval authorises the tool rather than the arguments | 1 failed |
+| the `args_approved` clause dropped | 1 failed |
+| the `ALLOW` rule loses its own destination check | **survived — fixed** |
+| the durable ledger is not consulted before dispatch | 4 failed |
+| the execute node ignores the hook's cancellation | 3 failed |
+| verification always passes | **survived — fixed** |
+| the approval-covers-arguments check removed | **survived — fixed** |
+| the gate reaches execution unconditionally | 41 failed |
+| `set_max_node_executions` never set | 26 failed |
+| the runner ignores the SDK's `FAILED` verdict | 2 failed |
+| the evidence node never validates | 10 failed |
+| triage records its own `patient_id` as a fact | 50 failed |
+| page excerpts are sanitised | 4 failed |
+| denials hand the planner the matched rule id | 25 failed |
+| every edge condition always holds | 69 failed |
+| `EXECUTING` not persisted before the tool boundary | 26 failed |
+
+**The four survivors, and what was wrong with the tests.**
+
+1. **Extraction's page loop.** The test put two `Patient ID:` lines on one page, where `re.search`
+   already takes the first — so the `break` that stops at the first *matching page* could be
+   deleted with the suite green. What it actually guards is a document whose second page restates
+   a field: two facts under one key, `case.fact` returning the later one, and trust resolution
+   matching on value either way. Rewritten to a two-page document.
+2. **The `ALLOW` rule's own destination check** is redundant against
+   `deny-email-to-untrusted-recipient`, which runs first — so no end-to-end assertion could see
+   it. Closed with a test that removes the `DENY` rule and checks the `ALLOW` rule alone. The
+   redundancy is deliberate and now documented as belt-and-braces.
+3. **Verification's failure branch** was never reached: in a normal run the record and the result
+   are both written by the execute node from one proposal, so they cannot disagree.
+   `TestVerificationCanFail` constructs the disagreement, which is the condition the check exists
+   for.
+4. **The execute node's approval check** is redundant against the `args_approved` rule for the same
+   reason as (2). What only it does is refuse *before* the case transitions to `EXECUTING`, and
+   name the approval as the problem rather than reporting a disagreement between two enforcement
+   points. Tested for exactly that.
+
+A fifth mutation was applied and found to be **a no-op** rather than a survivor — the replacement
+string did not match the source indentation. Re-applied correctly, it turned 4 tests red. Worth
+recording: a mutation that "survives" should be checked for having actually been applied.
+
+**One guard was deleted rather than fixed.** `GatedToolSet` originally checked that the gated set
+equalled `registry.names` — the very set the enumeration iterates, so it could not fail, and
+deleting it left the suite green. A guard that cannot fire is decoration. Replaced with
+`check_no_reserved_collision`, which refuses a registry declaring a tool named `call`, `executor`,
+`gate`, `documents` or `case_id` — those would shadow `GatedToolSet` members via `setattr`, and a
+shadowed dispatch method still looks callable. That one is reachable and mutation-proven; its two
+*call sites* are unreachable while no such tool exists, and that is stated in the source rather
+than implied.
+
+### T1 to T4
+
+All four in `tests/test_case_run.py`, on the mock model, offline.
+
+**T1** — referral → `AWAITING_HUMAN` with one decision request → approval → gated execution →
+verification → `DONE`. The resume runs in a **new `RunContext` entirely**: new gate, new hook
+registry, new toolset, new executor. What carries the case forward is the store and nothing else.
+The transition into `DONE` is asserted to have come from `VERIFYING` and from nowhere else. A
+second test drives the fully autonomous path — a booking against trusted config on a validated slot
+— start to finish with no human at all.
+
+**T2** — the poison reaches the planner (asserted against the rendered prompt), the planner
+proposes all three payloads (asserted), every one is denied, `invocation_count == 0`, the ledger is
+empty, no approval is ever offered for a poisoned action, and the case never reaches `DONE`.
+Mutation-asserted as described above.
+
+**T3** — replay across a store round-trip and a fresh executor: no second effect, one
+`ActionRecord`, byte-identical result, `DUPLICATE_SUPPRESSED` on the timeline. A companion test
+books a second appointment differing only in `reason` — a `VALUE`-class argument no rule conditions
+on — proving suppression keys on the arguments rather than the tool.
+
+**T4** — a planner that never converges stops at the SDK's bound, at exactly the number of node
+executions it was given, with two different bounds tested so the number is not a coincidence of the
+graph's shape. Case `FAILED`, zero external effects, and the cycle is asserted to have actually
+cycled. `@pytest.mark.timeout(30)` plus `timeout_method = "thread"` is what makes a hang fail
+rather than wait.
+
+### Next
+
+Commit 7 as originally numbered: the event simulator and JSON fixtures, then `cli.py`, the README
+pass, and restoring `[project.scripts]`. The resume-across-a-restart story is already true and
+tested; what it lacks is a way to *drive* it from a terminal.
+
+
+---
+
 ## Open decisions
 
-Carry these forward. Nothing here is blocking commit 6 except where it says so.
+Carry these forward. Nothing here is blocking the next commit except where it says so.
 
 1. **Model provider benchmark — CLOSED 2026-08-11, on measurement.** Full results and reasoning in
    [`model-benchmark.md`](model-benchmark.md); the session 4 entry above summarises them.
@@ -976,10 +1269,16 @@ Carry these forward. Nothing here is blocking commit 6 except where it says so.
    and extraction to Nova 2 Lite. gpt-4o-mini stays wired as the fallback and is within noise of
    Nova 2 Lite on planning.
 
-   What remains open is deliberately narrower and needs commit 6: **nothing here measured
-   multi-turn planning inside the graph, or behaviour after a policy denial re-enters the loop.**
-   Those are the behaviours the architecture actually rests on, and a single-call benchmark cannot
-   see them. Re-examine the choice once the bounded replan cycle exists.
+   What remains open is deliberately narrower: **nothing here measured multi-turn planning inside
+   the graph, or behaviour after a policy denial re-enters the loop.** Those are the behaviours the
+   architecture actually rests on, and a single-call benchmark cannot see them.
+
+   **The cycle now exists** (session 6), so this is ready to be measured rather than waiting on
+   infrastructure. What is still unmeasured is whether a real planner, handed
+   `(tool_name, ReasonCode)` for a refused proposal, proposes something *different* or reproposes
+   the same thing with the value spelled another way. The mock always does what its script says;
+   the bounded replan cycle is what stops a real one looping, and the bound firing is a worse
+   outcome than a planner that reads the refusal. Budget a run against Nova 2 Lite.
 2. **`ReasonCode` vocabulary — now six. Grown once, deliberately.** New codes are added centrally
    to the enum, never as free text on a rule, and every addition is recorded here. See
    *The sixth reason code* under session 2 for why `AUTHORITY_NOT_TRUSTED` was added rather than
@@ -991,30 +1290,56 @@ Carry these forward. Nothing here is blocking commit 6 except where it says so.
    Unlike the authority case, both denials are irremediable in the same way and want the same
    guidance, so one code serves them; `matched_rule_id is None` separates them in the timeline.
 3. **`WAITING_EXTERNAL` is in the state machine but has no producer yet.** Nothing transitions into
-   it until a tool can genuinely block on a third party. It is tested as a table entry only. Either
-   wire it in a later session or note in the README that it is reserved.
+   it until a tool can genuinely block on a third party. It is tested as a table entry only, and
+   the graph has no edge into it. **Noted in the README as reserved** (session 6); wiring it is a
+   later session's work.
 4. **Approval expiry is unmodelled.** `Approval` has `PENDING` / `APPROVED` / `REJECTED` and no
    timeout. A case can sit in `AWAITING_HUMAN` forever. The `AWAITING_HUMAN → FAILED` edge exists
-   for it; nothing drives it. Fine for the hackathon spine; flag it in the README as known.
-5. **Verification is not yet specified.** `VERIFYING` exists and `DONE` is reachable only from it,
-   but what "verified" *means* per action type is undefined. T1 needs a concrete answer, even a
-   mock one. Decide when writing the verify node.
+   for it; nothing drives it. **Flagged in the README as known** (session 6).
+
+   Session 6 adds one detail worth carrying: a case in `AWAITING_HUMAN` has no satisfied outgoing
+   edge, so `run_case` returns `COMPLETED` with the case parked. Nothing polls it. Expiry would
+   therefore need a driver outside the graph — a scheduled sweep over
+   `store.list_by_state(AWAITING_HUMAN)` — rather than a node.
+5. **Verification — CLOSED 2026-08-12.** *Verified means the effect that was performed is the
+   effect that was authorised.* The idempotency key re-derived from the approved arguments must
+   equal the key the action was recorded under, the argument digests must match, and every field
+   the typed result echoes back must equal the argument policy allowed. Per action type, in
+   `careloop/graph/verify.py`, drift-checked against `REGISTRY.external_effect_tools` at import.
+
+   What it deliberately does **not** claim is that the effect reached a real system — there is no
+   real system in this build, and a check that pretended otherwise would be a green tick with
+   nothing behind it. Verification closes the loop between decision and execution, not between
+   execution and the world. Stated in the README as well, because an unstated limitation reads as
+   a claim.
 6. **Repo visibility.** Private now, public at submission (2026-09-14). Nothing in the history
    contains secrets; the `.gitignore` covers `.env`. Re-check before flipping.
-7. **The executor ledger is not durable, and invariant 8 says `CaseStore` is.** The ledger lives in
-   one `MockExternalExecutor` instance, so it suppresses replays within a run and nothing wider.
-   The durable record is `Case.actions` — `ActionRecord` already carries `idempotency_key`,
-   `args_digest` and `result`, and `Case.action_for(key)` already exists. **Blocking for T3 if T3
-   spans a restart or a resumed case**: the execute node must consult `case.action_for(key)` before
-   calling the tool and must write an `ActionRecord` after, with the ledger as the in-run
-   optimisation rather than the source of truth. Decide when writing the execute node in commit 6.
-8. **`ExecutionResult` becomes model-visible in commit 6** if these callables are wrapped as Strands
-   tools, since a tool result is returned to the planner. It carries `idempotency_key`,
-   `action_type` and the payload — no trust levels, rule ids or allowlist contents, so it does not
-   breach invariant 6 as written. Confirm rather than assume when the hook lands, and check the same
-   question for `Document`, whose whole body is attacker-controlled text by design.
-9. **Fact promotion must REPLACE the untrusted fact, not append alongside it. BLOCKING for
-   commit 6/7.** Surfaced by delta D5 in session 5, and it is a bug rather than a style preference.
+7. **The durable ledger — CLOSED 2026-08-12.** The execute node consults `case.action_for(key)`
+   before dispatching and writes an `ActionRecord` after; the `MockExternalExecutor` ledger is an
+   in-run optimisation and no longer the source of truth.
+
+   T3 asserts it across a genuine process boundary: the case is serialised, rehydrated into a store
+   that has never seen it, and driven by a **fresh executor with an empty ledger**. If suppression
+   came from the ledger, that test would book a second appointment.
+8. **`ExecutionResult` model-visibility — CLOSED 2026-08-12, as "no".** The premise was that
+   wrapping the callables as Strands tools would return their results to the planner. It does not,
+   because CareLoop has no agent event loop: both agents drive the provider directly and hold no
+   tools, so **there is no tool-result-to-model channel at all**. `ExecutionResult` and `Document`
+   are read by graph nodes and written to the timeline; neither is ever rendered into a prompt.
+
+   The one thing that *is* model-visible at the tool boundary is the hook's `cancel_tool` string,
+   and that carries a literal from the closed `ReasonCode` vocabulary — covered by
+   `tests/test_policy_hook.py`, which runs the reason-purity leak detector over it.
+9. **Fact promotion must REPLACE, not append — CLOSED 2026-08-12.** `careloop/state/evidence.py`
+   substitutes the promoted fact at its original's index and is the only promotion API a node has,
+   so appending is not a mistake a caller can make. Two guards make a regression loud: the fact must
+   already be on the case, and `PromotionIneffective` is raised if another fact would still carry
+   the same value below the target level.
+
+   The test that matters asserts through the **engine**, and
+   `tests/test_evidence.py::TestTheAssertionThatWouldNotHaveCaught` pins why: it builds the case the
+   wrong way and shows "a `CONTROLLED` fact exists" passing while `resolve_trust` still returns
+   `UNTRUSTED`. The original analysis is kept below because the reasoning is the durable part.
 
    Trust resolution takes the **lowest** trust level among every fact whose *value* matches the
    argument — session 2 recorded that, and it is deliberate, because it is what stops a poisoned
@@ -1034,12 +1359,33 @@ Carry these forward. Nothing here is blocking commit 6 except where it says so.
    `CONTROLLED`. A `CONTROLLED` fact is present on the case in both.
 
    The evidence node must therefore rebuild `case.facts` with the promoted fact **in place of** its
-   original, not in addition to it. A test in commit 6 must assert that a promoted value resolves
-   `CONTROLLED` through the *engine*, not merely that a `CONTROLLED` fact exists on the case —
-   those are different assertions and only the first would fail today.
+   original, not in addition to it. A test must assert that a promoted value resolves `CONTROLLED`
+   through the *engine*, not merely that a `CONTROLLED` fact exists on the case — those are
+   different assertions and only the first would have failed.
+10. **The decision-cache TOCTOU carried from session 2 — CLOSED 2026-08-12.** The key carries
+    `case.version`, `case.state` and a fingerprint over the case's facts, not just
+    `(case_id, tool, args)`. Uncanonicalizable arguments are never cached at all. See
+    `careloop/policy/gate.py` and the session 6 entry.
+11. **The `args_approved` rule clause is new vocabulary, and the next addition should clear the
+    same bar.** Condition clauses are now six: `case_state_in`, `case_state_not_in`,
+    `arg_trust_below`, `arg_trust_at_least`, `args_present`, `args_approved`. The last was added
+    because a `REQUIRE_HUMAN` rule without it is unsatisfiable — policy is evaluated once to route
+    and once at the tool boundary, so an unconditional one parks the case again after the caregiver
+    decides.
+
+    It is the first clause that reads something other than the arguments and the case's state or
+    facts, and that is worth watching: a condition vocabulary that grows to reach arbitrary case
+    internals becomes a second policy language. Anything further should be argued the way
+    `AUTHORITY_NOT_TRUSTED` was.
 
 ## Standing risks
 
+- **The three-day resume is a `CaseStore` reconstruction across a process boundary, not a Strands
+  session restore.** Invariant 8 implies it; session 6 made it true and tested. A case parked on a
+  Friday and approved on a Monday resumes because `DispatchNode` routes on a case loaded from the
+  store — nothing about the graph's execution state needs to survive, and nothing does. The resume
+  session should inherit this stated rather than rediscover it, and should not reach for Strands
+  session persistence to solve a problem the store already solves.
 - **The mock model is the only model the tests ever see.** Everything green means the spine is
   correct, not that a real model produces well-formed intents. The first real-provider run is a
   genuine unknown; budget time for it.

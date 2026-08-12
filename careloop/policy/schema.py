@@ -66,6 +66,26 @@ class Condition(BaseModel):
     args_present: tuple[str, ...] = ()
     """Holds when the call supplies every named argument with a non-empty value."""
 
+    args_approved: bool | None = None
+    """Holds when a caregiver's approval covering exactly these arguments is (or is not) recorded.
+
+    ``None`` — the default — means the clause is absent and approval is not consulted at all.
+    ``False`` holds when no granted approval covers the call; ``True`` holds when one does.
+
+    This clause exists because a ``REQUIRE_HUMAN`` rule without it can never be satisfied. Policy
+    is evaluated twice — once to route the proposal while the case is ``PLANNING``, once at the
+    tool boundary while it is ``EXECUTING`` — and an unconditional ``REQUIRE_HUMAN`` fires at both,
+    so the caregiver's decision would park the case a second time and the action could never
+    happen. Writing it as a *condition* keeps the fix in ``rules.yaml``: the alternative was a
+    Python branch in the execute node that skipped the gate when an approval existed, which is a
+    rule encoded in code and a bypass around the enforcement point in one move.
+
+    The approval is matched on the canonical argument digest, so it authorises one specific call.
+    It is also strictly weaker than the ``DENY`` rules, which are evaluated first: **an approval
+    cannot launder an untrusted destination**, because the denial never becomes a question a human
+    is asked.
+    """
+
     @property
     def referenced_args(self) -> frozenset[str]:
         """Every argument name this condition mentions, whatever the clause."""

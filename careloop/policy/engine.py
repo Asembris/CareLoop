@@ -33,6 +33,7 @@ from careloop.policy.verdicts import Decision, ReasonCode, Verdict
 from careloop.provenance.canonical import canonical_value
 from careloop.provenance.trust import TrustLevel, at_least
 from careloop.state.case import Case
+from careloop.tools.idempotency import UncanonicalizableArgument, args_digest
 from careloop.tools.registry import REGISTRY, ToolRegistry
 
 
@@ -82,7 +83,24 @@ def _condition_holds(
         if canonical_value(args.get(arg_name)) in (None, ""):
             return False
 
-    return True
+    if condition.args_approved is None:
+        return True
+    return approved(args, case) is condition.args_approved
+
+
+def approved(args: Mapping[str, object], case: Case) -> bool:
+    """Whether ``case`` carries a granted approval covering exactly ``args``.
+
+    Fails closed twice over. Arguments with no canonical form cannot be digested, so they cannot
+    match an approval and are reported unapproved rather than raising — a call that cannot be
+    identified has not been authorised. And the digest covers *every* argument, so an approval
+    granted for one body does not authorise the same email with a different one.
+    """
+    try:
+        digest = args_digest(args)
+    except UncanonicalizableArgument:
+        return False
+    return case.is_approved(digest)
 
 
 #: The order in which effects are considered. Fixed here, never read from YAML.
@@ -193,4 +211,4 @@ def default_engine() -> PolicyEngine:
     return PolicyEngine(default_rules(), REGISTRY)
 
 
-__all__ = ["PolicyEngine", "canonical_value", "default_engine", "resolve_trust"]
+__all__ = ["PolicyEngine", "approved", "canonical_value", "default_engine", "resolve_trust"]

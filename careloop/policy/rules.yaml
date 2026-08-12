@@ -115,19 +115,30 @@ rules:
   # REQUIRE_HUMAN — evaluated only when no DENY matched.
   # ---------------------------------------------------------------------------------------------
 
-  # Unconditional. Every outbound email is a caregiver decision, even to an address that came from
-  # trusted configuration: the recipient being approved says nothing about the body being right.
+  # Every outbound email is a caregiver decision, even to an address that came from trusted
+  # configuration: the recipient being approved says nothing about the body being right.
+  #
+  # `args_approved: false` is what stops this rule firing forever. Policy is evaluated twice — once
+  # to route the proposal while the case is PLANNING, once at the tool boundary while it is
+  # EXECUTING — and without the clause the caregiver's decision would be met by a second
+  # REQUIRE_HUMAN and the action could never happen. The approval is matched on the canonical
+  # argument digest, so it authorises one specific call and not the tool in general.
   - id: require-human-for-outbound-email
     effect: REQUIRE_HUMAN
     tools: [send_email]
+    when:
+      args_approved: false
     reason_code: REQUIRES_HUMAN_APPROVAL
     diagnostic: >-
       Outbound email always requires an explicit caregiver decision. A TRUSTED recipient bounds who
-      can be reached, not what is said to them.
+      can be reached, not what is said to them. Once a caregiver has approved these exact
+      arguments, allow-approved-outbound-email takes over.
 
   - id: require-human-for-authority-grant
     effect: REQUIRE_HUMAN
     tools: [grant_portal_access]
+    when:
+      args_approved: false
     reason_code: REQUIRES_HUMAN_APPROVAL
     diagnostic: >-
       Granting portal access is an authority change and is never autonomous, whatever the grantee
@@ -177,6 +188,47 @@ rules:
           arg_class: VALUE
     diagnostic: >-
       Upload to a portal from trusted config, of a document whose identifier has been validated.
+
+  # The other half of the human-in-the-loop pair. Reached only after a caregiver approved these
+  # exact arguments, and still strictly weaker than every DENY rule above — which is the property
+  # worth stating plainly: **an approval cannot launder an untrusted destination.**
+  # deny-email-to-untrusted-recipient is evaluated first and unconditionally, so an email to an
+  # address that did not come from trusted configuration is refused whether a human approved it or
+  # not. In practice the question is never put to a human at all: the gate only requests a decision
+  # when the verdict is REQUIRE_HUMAN, and a poisoned recipient never gets that far.
+  - id: allow-approved-outbound-email
+    effect: ALLOW
+    tools: [send_email]
+    when:
+      case_state_in: [PLANNING, READY_TO_EXECUTE, EXECUTING]
+      args_approved: true
+      arg_trust_at_least:
+        - arg: to
+          level: TRUSTED
+          arg_class: DESTINATION
+    diagnostic: >-
+      Email to a recipient from trusted config, with these exact arguments approved by a caregiver.
+      The DENY rules ran first and did not match, so the recipient was already TRUSTED before the
+      approval was consulted.
+
+  - id: allow-approved-portal-access-grant
+    effect: ALLOW
+    tools: [grant_portal_access]
+    when:
+      case_state_in: [PLANNING, READY_TO_EXECUTE, EXECUTING]
+      args_approved: true
+      arg_trust_at_least:
+        - arg: grantee
+          level: TRUSTED
+          arg_class: DESTINATION
+        - arg: role
+          level: TRUSTED
+          arg_class: AUTHORITY
+    diagnostic: >-
+      Access grant to a grantee and with a role that both came from trusted config, approved by a
+      caregiver. Unreachable for anything a document named: role is AUTHORITY-class and absent from
+      PROMOTABLE_ARG_CLASSES, so a role lifted from evidence can never resolve TRUSTED and
+      deny-authority-grant-below-trusted refuses it before this rule is considered.
 
   # fetch_document has no external effect, but deny-by-default applies to every tool call, so the
   # read path needs a rule of its own or the planner can never gather evidence.

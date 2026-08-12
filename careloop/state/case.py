@@ -175,3 +175,25 @@ class Case(BaseModel):
             if action.idempotency_key == idempotency_key:
                 return action
         return None
+
+    def approval_for(self, args_digest: str) -> Approval | None:
+        """Return the most recent approval covering exactly these arguments, if any."""
+        for approval in reversed(self.approvals):
+            if approval.args_digest == args_digest:
+                return approval
+        return None
+
+    def is_approved(self, args_digest: str) -> bool:
+        """Whether a caregiver granted an approval covering exactly these arguments.
+
+        Keyed on the *digest*, never on the tool name. A caregiver approves one specific action;
+        an approval recorded against a tool would let any later proposal for that tool execute
+        under a decision that was made about something else.
+
+        This is the durable answer to "did a human say yes", and the policy engine reads it
+        through the ``args_approved`` rule clause. It lives on ``Case`` rather than in the graph
+        because the engine may not import the graph, and because the approval is a business fact —
+        invariant 8 puts business facts here.
+        """
+        approval = self.approval_for(args_digest)
+        return approval is not None and approval.status is ApprovalStatus.APPROVED

@@ -699,3 +699,122 @@ class TestEngineConstruction:
                 "    diagnostic: d\n",
                 REGISTRY,
             )
+
+
+class TestApprovalIsAConditionAndNotAnOverride:
+    """The ``args_approved`` clause added in commit 6, and the property it must not weaken.
+
+    A ``REQUIRE_HUMAN`` rule with no approval clause can never be satisfied: policy is evaluated
+    once to route the proposal and once at the tool boundary, so the caregiver's decision would be
+    met by a second request and the action could never happen. The clause fixes that in
+    ``rules.yaml`` rather than with a Python branch that skips the gate.
+
+    What it must not do is give a human the power to authorise something the rules deny outright.
+    """
+
+    @staticmethod
+    def _approved_case(state: CaseState, recipient: str, *facts):
+        from careloop.state.case import Approval, ApprovalStatus
+        from careloop.tools.idempotency import args_digest
+
+        args = {"to": recipient, "subject": "Referral", "body": "Booked."}
+        digest = args_digest(args)
+        case = make_case(state=state, facts=tuple(facts)).model_copy(
+            update={
+                "approvals": (
+                    Approval(
+                        approval_id="apr-1",
+                        tool_name="send_email",
+                        args_digest=digest,
+                        reason_code=str(ReasonCode.REQUIRES_HUMAN_APPROVAL),
+                        status=ApprovalStatus.APPROVED,
+                    ),
+                )
+            }
+        )
+        return case, args
+
+    def test_an_unapproved_email_requires_a_human(self, engine: PolicyEngine) -> None:
+        case = _planning(trusted_fact("carer", CLINIC))
+
+        decision = engine.evaluate("send_email", {"to": CLINIC, "subject": "s", "body": "b"}, case)
+
+        assert decision.verdict is Verdict.REQUIRE_HUMAN
+
+    def test_an_approved_email_to_a_trusted_recipient_is_allowed(
+        self, engine: PolicyEngine
+    ) -> None:
+        case, args = self._approved_case(CaseState.EXECUTING, CLINIC, trusted_fact("carer", CLINIC))
+
+        decision = engine.evaluate("send_email", args, case)
+
+        assert decision.verdict is Verdict.ALLOW
+        assert decision.matched_rule_id == "allow-approved-outbound-email"
+
+    def test_an_approval_cannot_launder_an_untrusted_destination(
+        self, engine: PolicyEngine
+    ) -> None:
+        """The property. DENY runs before ALLOW, so a human cannot authorise past a denial."""
+        case, args = self._approved_case(CaseState.EXECUTING, ATTACKER)
+
+        decision = engine.evaluate("send_email", args, case)
+
+        assert decision.verdict is Verdict.DENY
+        assert decision.reason_code is ReasonCode.DESTINATION_NOT_TRUSTED
+
+    def test_the_allow_rule_checks_the_destination_itself_as_well(self) -> None:
+        """Belt and braces, isolated so the braces are actually tested.
+
+        ``deny-email-to-untrusted-recipient`` already refuses this call, which makes the ``ALLOW``
+        rule's own trust clause redundant in the shipped file — and therefore untested by any
+        end-to-end assertion. Deleting the clause left the whole suite green, so this test removes
+        the ``DENY`` rule and checks the ``ALLOW`` rule alone. If the two ever drift, this is what
+        notices.
+        """
+        shipped = default_rules()
+        without_the_deny_rule = shipped.model_copy(
+            update={
+                "rules": tuple(
+                    rule for rule in shipped.rules if rule.id != "deny-email-to-untrusted-recipient"
+                )
+            }
+        )
+        case, args = self._approved_case(CaseState.EXECUTING, ATTACKER)
+
+        decision = PolicyEngine(without_the_deny_rule, REGISTRY).evaluate("send_email", args, case)
+
+        assert decision.verdict is not Verdict.ALLOW
+        assert decision.reason_code is ReasonCode.NO_RULE_MATCH
+
+    def test_an_approval_for_other_arguments_does_not_carry_over(
+        self, engine: PolicyEngine
+    ) -> None:
+        case, args = self._approved_case(CaseState.EXECUTING, CLINIC, trusted_fact("carer", CLINIC))
+
+        decision = engine.evaluate("send_email", {**args, "body": "a body nobody approved"}, case)
+
+        assert decision.verdict is Verdict.REQUIRE_HUMAN
+
+    def test_a_pending_approval_is_not_an_approval(self, engine: PolicyEngine) -> None:
+        from careloop.state.case import ApprovalStatus
+
+        case, args = self._approved_case(CaseState.EXECUTING, CLINIC, trusted_fact("carer", CLINIC))
+        still_pending = case.model_copy(
+            update={
+                "approvals": (
+                    case.approvals[0].model_copy(update={"status": ApprovalStatus.PENDING}),
+                )
+            }
+        )
+
+        decision = engine.evaluate("send_email", args, still_pending)
+
+        assert decision.verdict is Verdict.REQUIRE_HUMAN
+
+    def test_an_uncanonicalizable_argument_counts_as_unapproved(self, engine: PolicyEngine) -> None:
+        """Fail closed: a call that cannot be identified has not been authorised."""
+        case, _ = self._approved_case(CaseState.EXECUTING, CLINIC, trusted_fact("carer", CLINIC))
+
+        decision = engine.evaluate("send_email", {"to": CLINIC, "subject": "s", "body": 1.5}, case)
+
+        assert decision.verdict is Verdict.REQUIRE_HUMAN

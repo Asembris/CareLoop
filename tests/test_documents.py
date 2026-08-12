@@ -10,11 +10,11 @@ from __future__ import annotations
 import pytest
 
 from careloop.tools.documents import (
-    FIXTURE_DOCUMENTS,
     POISONED_DOCUMENT_ID,
     DocumentNotFound,
     DocumentStore,
     default_document_store,
+    fixture_documents,
 )
 from careloop.tools.results import ActionResult, Document
 
@@ -45,14 +45,14 @@ class TestDocumentStore:
     def test_membership_length_and_ids(self, store: DocumentStore) -> None:
         assert "doc-0001-referral" in store
         assert "doc-9999" not in store
-        assert len(store) == len(FIXTURE_DOCUMENTS)
-        assert store.ids == {document.document_id for document in FIXTURE_DOCUMENTS}
+        assert len(store) == len(fixture_documents())
+        assert store.ids == {document.document_id for document in fixture_documents()}
 
     def test_iteration_yields_every_document(self, store: DocumentStore) -> None:
         assert {document.document_id for document in store} == store.ids
 
     def test_duplicate_document_ids_are_rejected(self) -> None:
-        document = FIXTURE_DOCUMENTS[0]
+        document = fixture_documents()[0]
         with pytest.raises(ValueError, match="declared twice"):
             DocumentStore([document, document])
 
@@ -73,12 +73,12 @@ class TestDocumentStore:
 
 class TestFixtures:
     def test_every_fixture_has_pages(self) -> None:
-        assert all(document.pages for document in FIXTURE_DOCUMENTS)
-        assert all(page.strip() for document in FIXTURE_DOCUMENTS for page in document.pages)
+        assert all(document.pages for document in fixture_documents())
+        assert all(page.strip() for document in fixture_documents() for page in document.pages)
 
     def test_every_fixture_records_a_source_document(self) -> None:
         """Facts extracted from these carry ``source_doc``; an empty one breaks provenance."""
-        assert all(document.source_doc for document in FIXTURE_DOCUMENTS)
+        assert all(document.source_doc for document in fixture_documents())
 
     def test_the_benign_referral_carries_no_instruction_to_act(self) -> None:
         """The clean document must be genuinely clean, or T1 and T2 stop being distinguishable."""

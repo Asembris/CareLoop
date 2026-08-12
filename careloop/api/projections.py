@@ -48,6 +48,7 @@ from typing import Final
 from pydantic import BaseModel
 
 from careloop.api.models import (
+    RESPONSE_MODELS,
     ActionView,
     ApprovalView,
     CaseCard,
@@ -473,6 +474,15 @@ def check_every_response_field_has_a_source(
     model_table = SOURCE_MODELS if models is None else models
 
     problems: list[str] = []
+    if sources is None and (unlisted := sorted(set(RESPONSE_MODELS) - set(source_table))):
+        # Otherwise a response model could escape the check entirely by having no entry, which is
+        # the same hole in the other direction: no declared origin at all rather than one missing.
+        problems.append(
+            f"{', '.join(model.__name__ for model in unlisted)} declare no SOURCES entry, so "
+            f"nothing checks where their fields come from — add one, empty if every field is "
+            f"derived"
+        )
+
     for view, view_sources in source_table.items():
         view_derived = set(derived_table.get(view, {}))
         declared = set(view_sources) | view_derived

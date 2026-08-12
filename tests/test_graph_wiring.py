@@ -1,0 +1,370 @@
+"""The node contract, the edge conditions, and the bounds.
+
+Structure only — driving a case end to end is ``tests/test_case_run.py``. What is checked here is
+the wiring the SDK will not check for us: that a node returns something the graph's input builder
+accepts, that every edge branches on the persisted case rather than on node output, and that the
+three bounds are actually set on the built graph.
+"""
+
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+from helpers import FIXED_NOW, make_case
+from strands.agent import AgentResult
+from strands.multiagent.base import MultiAgentResult, Status
+
+from careloop.agents.schemas import TriageCategory, TriageResult, Urgency
+from careloop.graph.builder import (
+    EXECUTION_TIMEOUT,
+    MAX_NODE_EXECUTIONS,
+    NODE_IDS,
+    NODE_TIMEOUT,
+    build_graph,
+)
+from careloop.graph.conditions import when_case_is, when_case_is_not
+from careloop.graph.context import RunContext, latest_proposal, prior_denials
+from careloop.graph.nodes import DeterministicNode, DispatchNode, TriageNode
+from careloop.graph.trusted import trusted_facts
+from careloop.llm.mock import mock_model
+from careloop.policy.verdicts import ReasonCode
+from careloop.state import Case, CaseState, InMemoryCaseStore, TimelineKind
+from careloop.state.machine import append_event
+
+REFERRAL = "doc-0001-referral"
+
+
+def opened_case(state: CaseState = CaseState.NEW) -> Case:
+    return Case(
+        case_id="case-0001",
+        event_id="evt-0001",
+        state=state,
+        facts=trusted_facts(now=FIXED_NOW),
+        created_at=FIXED_NOW,
+        updated_at=FIXED_NOW,
+    )
+
+
+def context_for(case: Case, **kwargs) -> RunContext:
+    store = InMemoryCaseStore()
+    store.create(case)
+    return RunContext(
+        case_id=case.case_id,
+        store=store,
+        event_text="Referral received for Enid Marlowe.",
+        document_ids=(REFERRAL,),
+        now=lambda: FIXED_NOW,
+        **kwargs,
+    )
+
+
+class TestTheNodeContract:
+    def test_a_node_returns_a_multi_agent_result_the_graph_accepts(self) -> None:
+        node = DispatchNode("dispatch", context_for(opened_case()))
+
+        result = asyncio.run(node.invoke_async("ignored"))
+
+        assert isinstance(result, MultiAgentResult)
+        assert result.status is Status.COMPLETED
+
+    def test_the_inner_result_is_an_agent_result_and_not_a_bare_string(self) -> None:
+        """Spike finding 5: a bare ``str`` fails deep inside the graph, not at the call site."""
+        node = DispatchNode("dispatch", context_for(opened_case()))
+
+        result = asyncio.run(node.invoke_async("ignored"))
+
+        assert isinstance(result.results["dispatch"].result, AgentResult)
+
+    def test_the_wrapper_has_no_branches(self) -> None:
+        """If the wrapper accumulates logic, "deterministic nodes" stops being a claim about it.
+
+        The wrapper's whole job is to run the body and wrap the answer. Every decision belongs in
+        a ``run``, where it is ordinary readable Python rather than something hidden inside an
+        SDK-shaped adapter.
+        """
+        import inspect
+        import textwrap
+
+        body = textwrap.dedent(inspect.getsource(DeterministicNode.invoke_async))
+        code = "\n".join(
+            line for line in body.splitlines() if not line.lstrip().startswith(("#", '"""', "'''"))
+        )
+        statements = code.split('"""')[-1]
+
+        for branch in ("if ", "elif ", "for ", "while ", "try:", "match "):
+            assert branch not in statements, f"the node wrapper branches on {branch!r}"
+
+    def test_the_base_node_refuses_to_run_without_a_body(self) -> None:
+        node = DeterministicNode("bare", context_for(opened_case()))
+
+        with pytest.raises(NotImplementedError):
+            asyncio.run(node.run())
+
+    def test_a_node_ignores_the_task_it_is_handed(self) -> None:
+        """Business facts come from the store. A node steered by prose is a node an upstream
+        model can steer."""
+        context = context_for(opened_case())
+        node = DispatchNode("dispatch", context)
+
+        one = asyncio.run(node.invoke_async("do something else entirely"))
+        two = asyncio.run(node.invoke_async(""))
+
+        assert str(one.results["dispatch"].result) == str(two.results["dispatch"].result)
+
+
+class TestNodesWriteThroughTheStore:
+    def test_triage_commits_its_transition(self) -> None:
+        context = context_for(
+            opened_case(),
+            triage=_triage_returning("Referral for cardiology follow-up."),
+        )
+        node = TriageNode("triage", context)
+
+        asyncio.run(node.run())
+
+        stored = context.current_case()
+        assert stored.state is CaseState.GATHERING_EVIDENCE
+        assert stored.summary == "Referral for cardiology follow-up."
+
+    def test_triage_records_no_facts(self) -> None:
+        """Model output never becomes a policy input; the node docstring has the two reasons."""
+        case = opened_case()
+        context = context_for(case, triage=_triage_returning("Referral."))
+
+        asyncio.run(TriageNode("triage", context).run())
+
+        assert context.current_case().facts == case.facts
+
+    def test_dispatch_writes_nothing_at_all(self) -> None:
+        context = context_for(opened_case())
+        before = context.current_case()
+
+        asyncio.run(DispatchNode("dispatch", context).run())
+
+        assert context.current_case() == before
+
+
+class TestEdgeConditionsReadThePersistedCase:
+    def test_a_condition_holds_for_the_state_the_store_carries(self) -> None:
+        context = context_for(opened_case(CaseState.PLANNING))
+
+        assert when_case_is(context, CaseState.PLANNING)(None)
+        assert not when_case_is(context, CaseState.DONE)(None)
+
+    def test_it_follows_the_case_rather_than_being_fixed_at_build_time(self) -> None:
+        context = context_for(opened_case(CaseState.NEW))
+        condition = when_case_is(context, CaseState.GATHERING_EVIDENCE)
+        assert not condition(None)
+
+        moved = context.current_case().model_copy(
+            update={"state": CaseState.GATHERING_EVIDENCE, "version": 1}
+        )
+        context.store.save(moved, expected_version=0)
+
+        assert condition(None)
+
+    def test_the_graph_state_argument_is_ignored(self) -> None:
+        """Routing on graph execution state would be routing on what nodes returned."""
+        context = context_for(opened_case(CaseState.PLANNING))
+        condition = when_case_is(context, CaseState.PLANNING)
+
+        assert condition(None) == condition("anything at all")
+
+    def test_the_complement_condition_excludes_what_it_names(self) -> None:
+        context = context_for(opened_case(CaseState.DONE))
+
+        assert not when_case_is_not(context, CaseState.DONE)(None)
+        assert when_case_is_not(context, CaseState.FAILED)(None)
+
+
+class TestTheGraphIsBoundedBySdkPrimitives:
+    def test_all_three_bounds_are_set(self) -> None:
+        graph = build_graph(context_for(opened_case()))
+
+        assert graph.max_node_executions == MAX_NODE_EXECUTIONS
+        assert graph.execution_timeout == EXECUTION_TIMEOUT
+        assert graph.node_timeout == NODE_TIMEOUT
+
+    def test_the_bounds_are_overridable_for_a_test_that_needs_a_tight_one(self) -> None:
+        graph = build_graph(
+            context_for(opened_case()),
+            max_node_executions=4,
+            execution_timeout=1.0,
+            node_timeout=0.5,
+        )
+
+        assert (graph.max_node_executions, graph.execution_timeout, graph.node_timeout) == (
+            4,
+            1.0,
+            0.5,
+        )
+
+    def test_no_module_under_careloop_hand_rolls_an_execution_counter(self) -> None:
+        """Invariant 5. The cycle is a real cycle and the SDK is what stops it."""
+        from pathlib import Path
+
+        package = Path(__file__).resolve().parent.parent / "careloop"
+        for module in package.rglob("*.py"):
+            source = module.read_text(encoding="utf-8")
+            assert "max_iterations" not in source
+            assert "loop_count" not in source
+
+
+class TestTheGraphShape:
+    def test_every_node_is_present(self) -> None:
+        graph = build_graph(context_for(opened_case()))
+
+        assert set(graph.nodes) == set(NODE_IDS)
+
+    def test_dispatch_is_the_only_entry_point(self) -> None:
+        graph = build_graph(context_for(opened_case()))
+
+        assert [node.node_id for node in graph.entry_points] == ["dispatch"]
+
+    def test_the_replan_cycle_exists_in_both_directions(self) -> None:
+        graph = build_graph(context_for(opened_case()))
+        edges = {(edge.from_node.node_id, edge.to_node.node_id) for edge in graph.edges}
+
+        assert ("plan", "gate") in edges
+        assert ("gate", "plan") in edges
+
+    def test_verification_failure_routes_back_to_planning(self) -> None:
+        graph = build_graph(context_for(opened_case()))
+        edges = {(edge.from_node.node_id, edge.to_node.node_id) for edge in graph.edges}
+
+        assert ("verify", "plan") in edges
+
+    def test_nothing_leaves_verify_except_the_replan_edge(self) -> None:
+        """DONE ends a run by having no satisfied outgoing edge, not by a terminal node."""
+        graph = build_graph(context_for(opened_case()))
+        out_of_verify = {
+            edge.to_node.node_id for edge in graph.edges if edge.from_node.node_id == "verify"
+        }
+
+        assert out_of_verify == {"plan"}
+
+    def test_the_gate_can_reach_execution_and_the_planner_and_nothing_else(self) -> None:
+        graph = build_graph(context_for(opened_case()))
+        out_of_gate = {
+            edge.to_node.node_id for edge in graph.edges if edge.from_node.node_id == "gate"
+        }
+
+        assert out_of_gate == {"execute", "plan"}
+
+    def test_dispatch_can_resume_into_every_non_terminal_stage(self) -> None:
+        graph = build_graph(context_for(opened_case()))
+        out_of_dispatch = {
+            edge.to_node.node_id for edge in graph.edges if edge.from_node.node_id == "dispatch"
+        }
+
+        assert out_of_dispatch == {"triage", "evidence", "plan", "execute", "verify"}
+
+    def test_every_proposal_is_gated_unconditionally(self) -> None:
+        """The plan → gate edge carries no condition: the planner does not choose to be checked."""
+        graph = build_graph(context_for(opened_case()))
+        plan_to_gate = next(
+            edge
+            for edge in graph.edges
+            if (edge.from_node.node_id, edge.to_node.node_id) == ("plan", "gate")
+        )
+
+        assert plan_to_gate.condition is None
+
+
+class TestReadingTheCaseBack:
+    def test_a_proposal_round_trips_through_the_timeline(self) -> None:
+        case = append_event(
+            make_case(),
+            kind=TimelineKind.PLAN_PROPOSED,
+            actor="planner",
+            summary="proposed book_appointment",
+            payload={
+                "tool_name": "book_appointment",
+                "args": {"provider_id": "P", "patient_id": "PT", "slot_start": "S", "reason": "r"},
+                "rationale": "because",
+            },
+            now=FIXED_NOW,
+        )
+
+        proposal = latest_proposal(case)
+
+        assert proposal.tool_name == "book_appointment"
+        assert proposal.args["provider_id"] == "P"
+
+    def test_the_most_recent_proposal_wins(self) -> None:
+        case = make_case()
+        for tool in ("send_email", "book_appointment"):
+            case = append_event(
+                case,
+                kind=TimelineKind.PLAN_PROPOSED,
+                actor="planner",
+                summary=f"proposed {tool}",
+                payload={"tool_name": tool, "args": {}, "rationale": ""},
+                now=FIXED_NOW,
+            )
+
+        assert latest_proposal(case).tool_name == "book_appointment"
+
+    def test_a_case_with_no_proposal_has_none(self) -> None:
+        assert latest_proposal(make_case()) is None
+
+    def test_denials_carry_the_tool_and_the_reason_code_and_nothing_else(self) -> None:
+        case = append_event(
+            make_case(),
+            kind=TimelineKind.POLICY_DENY,
+            actor="policy",
+            summary="DENY for send_email",
+            diagnostic="deny-email-to-untrusted-recipient matched on to=attacker@evil.example",
+            payload={
+                "tool_name": "send_email",
+                "reason_code": "DESTINATION_NOT_TRUSTED",
+                "matched_rule_id": "deny-email-to-untrusted-recipient",
+            },
+            now=FIXED_NOW,
+        )
+
+        assert prior_denials(case) == (("send_email", ReasonCode.DESTINATION_NOT_TRUSTED),)
+
+    def test_repeated_denials_collapse(self) -> None:
+        case = make_case()
+        for _ in range(4):
+            case = append_event(
+                case,
+                kind=TimelineKind.POLICY_DENY,
+                actor="policy",
+                summary="DENY",
+                payload={"tool_name": "send_email", "reason_code": "DESTINATION_NOT_TRUSTED"},
+                now=FIXED_NOW,
+            )
+
+        assert len(prior_denials(case)) == 1
+
+    def test_an_allow_is_not_a_denial(self) -> None:
+        case = append_event(
+            make_case(),
+            kind=TimelineKind.POLICY_ALLOW,
+            actor="policy",
+            summary="ALLOW",
+            payload={"tool_name": "book_appointment", "verdict": "ALLOW", "reason_code": ""},
+            now=FIXED_NOW,
+        )
+
+        assert prior_denials(case) == ()
+
+
+def _triage_returning(summary: str):
+    from careloop.agents.triage import TriageAgent
+
+    return TriageAgent(
+        mock_model(
+            structured=[
+                TriageResult(
+                    category=TriageCategory.APPOINTMENT,
+                    urgency=Urgency.SOON,
+                    summary=summary,
+                    patient_id="PT-4417",
+                )
+            ]
+        )
+    )

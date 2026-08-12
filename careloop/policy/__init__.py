@@ -6,6 +6,12 @@ from careloop.policy.engine import (
     default_engine,
     resolve_trust,
 )
+from careloop.policy.gate import (
+    PolicyDenied,
+    PolicyGate,
+    decision_cache_key,
+    facts_fingerprint,
+)
 from careloop.policy.loader import (
     RULES_PATH,
     PolicyConfigError,
@@ -26,14 +32,18 @@ __all__ = [
     "Condition",
     "Decision",
     "PolicyConfigError",
+    "PolicyDenied",
     "PolicyEngine",
+    "PolicyGate",
     "ReasonCode",
     "Rule",
     "RuleSet",
     "Verdict",
     "canonical_value",
+    "decision_cache_key",
     "default_engine",
     "default_rules",
+    "facts_fingerprint",
     "load_rules",
     "load_rules_from_mapping",
     "load_rules_from_text",

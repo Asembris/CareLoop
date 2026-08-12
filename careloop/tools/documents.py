@@ -89,7 +89,11 @@ FIXTURE_DOCUMENTS: Final[tuple[Document, ...]] = (
             "Referring clinician: Dr. A. Okonkwo\n",
             "Reason for referral: intermittent atrial fibrillation, for cardiology review.\n"
             "Requested service: outpatient cardiology consultation.\n"
-            "Preferred window: within six weeks.\n\n"
+            "Preferred window: within six weeks.\n"
+            # Document-sourced, so it enters the case UNTRUSTED and has to be validated before any
+            # booking can use it. That promotion is the trust model's remediable leg, and the
+            # referral is where the value it operates on comes from.
+            "Offered appointment: 2026-09-03T09:30:00\n\n"
             "Please contact the practice on 0117 496 0112 with any queries.\n",
         ),
     ),

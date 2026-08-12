@@ -1531,6 +1531,266 @@ should replace it rather than grow alongside it.
 
 ---
 
+## Session 8 — 2026-08-12
+
+### Position
+
+Branch `main`. `origin/main` is at `b39f917`; everything from session 5 onward is **unpushed**.
+
+| Commit | Subject | Pushed |
+|---|---|---|
+| `5cedbf8` | Add proposal_for and latest_delivery as the graph layer's named timeline readers | no |
+| `add0731` | Add API response models and the projection layer that decides what a browser sees | no |
+| `f765e7e` | Serve the dashboard read surface over FastAPI with the three-section partition | no |
+| `1b63f3f` | Accept an inbound event, schedule the run, and make in-flight work observable | no |
+| `33e0906` | Approve and reject a pending decision and carry the case forward | no |
+| `2067ffc` | Drive the full T1 arc through HTTP alongside the direct-call version | no |
+| `09264d0` | Pin the two readers a projection could silently swap | no |
+| `ad99fee` | Close the surviving mutation: refuse a decision while a run is in flight | no |
+| — | Record commit 8 in the session log | no |
+
+**1408 passed, 2 skipped.** `ruff check` and `ruff format --check` clean.
+
+### Done — commit 8: `careloop/api/`
+
+Seven endpoints, all of them things a judge will see on screen. Nothing in this package evaluates
+policy, transitions a case or promotes a fact; the only thing it originates is *when* a run happens,
+and that is stated in the package docstring so the next session does not read it as a precedent for
+more.
+
+**The success criterion is met and is a test.** `tests/test_api_t1.py` drives event → Working →
+Needs You → one approve → Completed with a citation-bearing timeline, and a sweep over its own
+syntax tree fails if the module names `open_case`, `approve`, `run_case` or any other runner
+function. A test that reached for `approve` directly would be asserting the graph works, which
+`test_case_run.py` already does.
+
+### Invariant 6 over HTTP — the line moves axis, and that is the point
+
+Invariant 6 withholds rule ids and trust levels from the *model* because denial text re-enters the
+planner's prompt: an interpolated reason is a self-inflicted injection channel and a named rule is a
+map of the defence. **A browser proposes nothing and nothing it renders re-enters a prompt.** So the
+line here is drawn on a different axis — not *what would help an attacker plan*, but **what is
+unbounded free text that nobody constrains**.
+
+Consequences, all deliberate:
+
+| Exposed | Because |
+|---|---|
+| fact `trust_level` and `citation` | the trust badge next to `referral.pdf p.2` **is** the demo |
+| `matched_rule_id` on gate verdicts | the named declarative rule is what a judge came to see |
+| the pending decision's proposed args | a caregiver cannot approve what they cannot see |
+| `PLAN_PROPOSED` args in the timeline | a judge watching the planner take the bait and get refused |
+
+**Withheld: `TimelineEvent.diagnostic`, wholesale.** Its own docstring says it may hold anything
+useful to a human reading the audit trail, *including raw argument values and rule internals* — so
+the withholding follows the field's stated contract rather than inventing one. Roughly a dozen call
+sites write it and nothing constrains the next. Withheld rather than filtered, because a filter over
+free text is the sanitiser this project refuses everywhere else: `fetch_document` does not clean the
+poisoned fixture and the prompt framing quotes untrusted content rather than escaping it.
+
+`payload` is projected through an **allowlist**, so a key a future writer adds is invisible until
+somebody decides about it — and a static AST scan over every `payload={...}` literal under
+`careloop/` fails if a shipped writer emits one the allowlist does not name, so "dropped" cannot go
+unnoticed. The allowlist is also checked in the other direction, against stale entries.
+
+The sweep uses a **canary** rather than searching for real diagnostic text: every diagnostic is
+rewritten to carry a token nothing else could produce, and every projection is serialized and
+searched. Searching for `deny-email-to-untrusted-recipient` would have fired on the
+`matched_rule_id` the API exposes on purpose — the canary distinguishes the *field* from its
+*contents*, which is the property being tested.
+
+### Serialization is not a second source of truth — two import-time checks
+
+**Nothing vanishes.** Every field of `Case`, `Fact`, `Provenance`, `Approval`, `ActionRecord` and
+`TimelineEvent` is either projected into some response model or listed in `WITHHELD` with a reason.
+Adding `Case.assigned_to` and forgetting the API fails on import rather than showing up as a field
+the dashboard silently never renders. Source paths are dotted (`Fact.provenance.source_doc`) and the
+resolver walks the whole chain, which is what lets a nested model be flattened without its own
+fields going undecided.
+
+**Nothing is invented.** Every response field either names the stored field it comes from or is
+listed in `DERIVED` with what it is derived from, and every `ResponseModel` must have a `SOURCES`
+entry — otherwise a model with no declared origins escapes the check by omission. On top of that,
+response fields carry **no default and no `default_factory`**, which is invariant 9's rule for tool
+result fields applied for a related reason: there it stops a result inventing a timestamp, here it
+stops a response inventing anything at all.
+
+Both checks take their tables as parameters. A guard that can only be run against the shipped
+tables is a guard whose failure path is untested, and this is exactly where `MappingProxyType`
+first blocked `monkeypatch.setitem` — the fix was better design rather than a mutable table.
+
+### The three sections, and why `working` is defined as the remainder
+
+`needs_you = {AWAITING_HUMAN}`, `completed = AT_REST_STATES`, `working =` everything else.
+
+`completed` reuses `AT_REST_STATES` rather than listing `{DONE, FAILED}` afresh, because that name
+already means exactly "the graph will move this case no further" and a second list would be a second
+answer. `FAILED` lands there with `DONE` and is told apart by the `state` field every card carries —
+a failed case is finished, not in progress.
+
+`working` is **the remainder**, so the partition cannot develop a hole. An eleventh `CaseState`
+joins it automatically and `check_sections_partition_every_state` still passes, which is the safe
+direction: a case visible in the wrong column beats a case that has silently vanished from the one
+screen a caregiver looks at. The check is still non-vacuous — it is driven over hand-built tables
+with a hole and with an overlap, and over a correct one.
+
+### Execution model — 202, and the beat it exists for
+
+The verbs return **`202 Accepted`** with a run id and schedule the run as one in-process `asyncio`
+task. No queue, no worker, no websocket.
+
+Nothing had to be built to make in-flight work *observable*, only to stop it being hidden: every
+node commits its transition before it finishes — session 6 pinned `EXECUTING` as persisted before
+the tool boundary — so a dashboard polling `GET /api/cases` watches the case move. A synchronous
+endpoint throws that away: the caller blocks for the whole run and everything appears at once, so
+Working is a column no case can ever be caught in. That is the demo beat, and it is now
+`test_2_the_case_is_visible_in_working_while_the_run_is_going`.
+
+`?wait=<seconds>` blocks until the run settles. Tests use it instead of polling or sleeping. It is
+**shielded**: `wait_for` cancels what it waits on, and a caller giving up must not kill work the
+store is about to be asked about.
+
+**The run registry is execution context, not business facts, and invariant 8 is untouched.** Whether
+an action happened is `case.actions`; whether a human approved is `case.approvals`; a run that
+raised leaves the case `FAILED` with a reason on its timeline. Losing the registry on restart costs
+the node trace and nothing else, and a test drives a fresh app over the same store to show every
+case question still answered.
+
+`RunRecord.error` carries the raised type's **name** and never its message. A message is assembled
+wherever the failure happened and can carry argument values; the type name says what kind of thing
+went wrong without becoming a channel, and the timeline has the detail.
+
+### Two things running it found that reading would not have
+
+1. **A bare `TestClient` starts a fresh event loop per request.** The task a 202 schedules is
+   orphaned the moment that request returns, so a run could never settle and a test would see
+   `RUNNING` forever and conclude the registry was broken. Context-managing the client runs the
+   lifespan and keeps one loop alive across the block, which is what a real server does. Recorded in
+   `api_helpers.api_client`'s docstring because the failure looks like a bug in the code under test.
+   The app also gained a lifespan that **drains in-flight runs on shutdown**, so the context-managed
+   form is meaningful rather than a test artefact.
+2. **An ordering test flaked on the Windows clock.** Two cases created in one test shared an
+   `updated_at`, because the clock ticks about every 15ms — the same resolution trap that moved
+   invariant 9's no-clock guard from behavioural comparison onto the source in session 3. Fixed by
+   passing `now` explicitly rather than by loosening the assertion.
+
+A third, smaller: the first version of "an approval does not bypass the gate" asserted a
+`POLICY_ALLOW` after the approval. There is none — on the resume path the case dispatches straight
+to execute and the re-check happens at the tool boundary, which writes no timeline entry on success.
+Replaced with the property that actually holds and is load-bearing: **the effect's `args_digest`
+equals the approval's**, so what was executed is exactly what was approved.
+
+### Deltas from the approved plan
+
+All six approved deltas shipped as described. Three more, all small:
+
+| # | Delta | Status |
+|---|---|---|
+| D1 | Decision embedded in the list card; no `GET /decisions` | approved |
+| D2 | `latest_delivery` in the graph layer | approved, **and grew a second reader** |
+| D3 | Cost per case not exposed | approved |
+| D4 | `POST /api/events` requires a client-supplied `case_id` | approved |
+| D5 | Open vs reopen routed on stored state; in-flight is 409 | approved |
+| D6 | `fastapi` runtime, `httpx2` dev | approved, **`httpx2` not `httpx`** |
+| **D7** | **`proposal_for(case, digest)` alongside `latest_delivery`** | **found during implementation** |
+| **D8** | **`?wait` on `GET /api/runs/{id}` as well as on the verbs** | **found during implementation** |
+| **D9** | **Commits 1 and 2 swapped** | **mechanical** |
+
+**D7.** An approval records only the digest, deliberately, so anything *showing* a caregiver what
+they are approving has to come back through the timeline to the proposal that digest came from.
+`latest_proposal` would nearly always give the same answer and is wrong in principle: an approval is
+about one specific call, and a card showing one set of arguments while the button executed another
+is exactly what the digest exists to prevent. Both readers live beside `latest_proposal` in
+`graph/context.py`, and the API-reads-the-timeline-in-one-place sweep is what keeps them the only
+route in.
+
+**D6, corrected.** The pinned starlette warns that driving its `TestClient` with `httpx` is
+deprecated. Verified in a clean virtualenv that `TestClient` works against `httpx2` alone and emits
+no warning, rather than assumed — the alternative was silencing it locally while CI, which installs
+`pyproject.toml` and not the local tree, kept emitting it. Same class of local/CI divergence as
+session 4's `openai` failure.
+
+**D9.** The projection layer imports `proposal_for`, so the graph-layer readers had to land first
+for each commit to be green on its own.
+
+### The sweep that keeps D2 from becoming a back door
+
+Requested at plan approval, and it is three assertions rather than one:
+
+- No module in `careloop/api/` other than `projections.py` reads `.timeline`.
+- Within `projections.py`, only `case_detail` and `payload_keys_in` do — so the timeline is touched
+  to *project* it and never to fish something out of it.
+- The detector is proven against a synthetic handler that walks the entries, and proven not to fire
+  on a docstring that mentions them.
+
+Anything wanting something out of the timeline calls a named reader in `graph/context.py`. Without
+this the next route handler quietly walks `case.timeline` itself and projects audit data with no
+allowlist anywhere near it.
+
+### `careloop/api/` may name `reopen_case`, and that is not an exception
+
+`tests/test_reopen.py`'s sweep covers `agents/`, `tools/`, `policy/` and the graph's own nodes. The
+API is not on that list and should not be: the rule is *the agent can never leave `DONE`; the world
+can*, and an inbound HTTP delivery **is** the world. This is written into the package docstring so
+it reads as a decision rather than an oversight.
+
+### Guards proven non-vacuous by mutation
+
+Sixteen mutations, each applied to a clean tree, suite re-run, reverted. **Fifteen turned the suite
+red; one survived, and it was a real gap.**
+
+| Mutation | Result |
+|---|---|
+| `TimelineEventView` gains a `diagnostic` field | red at import |
+| the payload allowlist becomes a passthrough | 1 failed |
+| `FAILED` is dropped from every section | red at import |
+| a response field gains a default | red at import |
+| the stored-field decision check is disabled | 1 failed |
+| the response-field source check is disabled | 1 failed |
+| a route handler reads `case.timeline` directly | 1 failed |
+| `resume_event` reads `case.event_id` instead of `latest_delivery` | 1 failed |
+| the decision card reads the latest proposal instead of the approved one | 1 failed |
+| `?wait` is ignored and every verb blocks until settled | 1 failed |
+| the caregiver header stops being required | 1 failed |
+| the run error carries the exception message rather than its type | 1 failed |
+| two concurrent runs of one case are allowed | 1 failed |
+| a case in flight accepts a new inbound event | 1 failed |
+| the sections listing drops one state | 1 failed |
+| **an approval is recorded even when a run is already in flight** | **survived** |
+
+Two of these — `resume_event` reading `case.event_id`, and the decision card reading
+`latest_proposal` — were foreseen as gaps and closed with tests *before* the pass, so they are
+listed as mutations that found nothing new rather than as saves.
+
+**The survivor, and what was wrong.** `decide` checks for an in-flight run before recording the
+decision, and nothing tested it. The window is narrow and real: the gate node commits
+`AWAITING_HUMAN` and the pending approval, and only *then* does the graph finish and the run settle.
+In between, the case is parked and the run is still going — a dashboard polling once a second can
+land there and a caregiver can click. Without the check, `approve` would release the case to
+`READY_TO_EXECUTE` while the graph still held a version it was about to write.
+
+It could not be reached through HTTP alone, because a parked case refuses a new delivery and so no
+second run can start. Closed with three tests: one driving `decide` directly against a registry
+holding an occupying run, asserting the case's **version is unchanged** and the approval is still
+`PENDING`; one over HTTP showing the refusal is a `409` and not the `404` an unknown approval id
+would otherwise get, which pins the *ordering*; and one vacuity test showing the same request
+succeeds once the run settles.
+
+### Not built, deliberately
+
+- **No `GET /api/cases/{id}/decisions`.** The card carries its decision, so the dashboard would
+  never call it (D1).
+- **No cost figure** (D3, and open decision 16 below).
+- **No websockets, no background worker, no persistence layer.** None of them has a demo beat.
+
+### Next
+
+The React frontend. Everything it needs is now served, and the shape of the three sections plus the
+decision card is fixed by `CaseSections` rather than by agreement. After that: AgentCore, DeepTeam,
+`cli.py` and `[project.scripts]`, which have now slipped two sessions.
+
+---
+
 ## Open decisions
 
 Carry these forward. Nothing here is blocking the next commit except where it says so.
@@ -1685,6 +1945,39 @@ Carry these forward. Nothing here is blocking the next commit except where it sa
     lands the demo script should be replaced by it rather than kept alongside — two things that
     build a `RunContext` is one too many, and the one with tests behind it should be the one that
     ships.
+
+    **Session 8 makes this worse, not better.** There are now *three* things that build a
+    `RunContext`: the demo script, the test helpers, and `careloop/api/deps.py`'s context factory.
+    The API's is the one with a real reason to exist — it is how a deployment injects providers —
+    so `cli.py` should be built over `create_app`'s factory rather than as a fourth.
+16. **Cost per case is not exposed, and the choice is live rather than lapsed.** The plan listed it
+    as an "under the hood" demo beat and session 8 declined to ship it, for the reason the benchmark
+    rubric was not edited after seeing results: **nothing records token usage on a case**, so the
+    API would have to invent it, and against the mock every figure would read `$0.0000` — a number
+    that means nothing is worse than an absence.
+
+    What it would take, and it is not a UI change: the graph layer stamps usage on the timeline when
+    a model call returns, probably as a payload on the existing agent-facing entries, and the API
+    projects it like anything else. That is a deliberate session's work with two things to decide
+    first — whether usage belongs on `Case` at all under invariant 8, and what a run that used the
+    mock should report rather than zero. `strands-agents==1.51.0` surfaces usage through Bedrock's
+    `structured_output` and **not** through the OpenAI one (session 4), so the estimate-and-flag
+    machinery `bench/` already has would be needed again.
+
+    The under-the-hood panel ships with what the case genuinely holds: gate verdicts with their rule
+    ids, the graph nodes a run traversed, and the external-effect count.
+17. **The API's run registry is in memory, and that is a decision rather than a shortcut.** It holds
+    a run's state and the nodes it traversed — execution context, which invariant 8 explicitly says
+    is not consulted for business facts. Every durable question has a store-backed answer, and
+    `TestTheRegistryIsNotABusinessFact` drives a fresh app over the same store to prove it.
+
+    What is genuinely lost on restart is the node trace for runs already finished, and a caller
+    waiting on `?wait` gets nothing back. Both are acceptable for a single-process demo and neither
+    is acceptable for more than one API instance — a second instance would not see the first's runs
+    and `in_flight_for` would stop refusing concurrent runs, which is the guard that stops two runs
+    of one case racing on the store's compare-and-set. **Horizontal scaling therefore needs this
+    moved into the store, or a lock that is,** and that is an architecture decision rather than an
+    optimisation.
 
 ## Standing risks
 

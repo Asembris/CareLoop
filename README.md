@@ -120,13 +120,51 @@ record of what has already happened is on the case rather than in the executor's
 a structural sweep fails the build if any node, agent, tool or policy module so much as names
 `reopen_case`. `tests/test_resume.py` runs all three phases as real subprocesses.
 
+## The HTTP surface
+
+`careloop/api/` serves the dashboard. Seven endpoints, and every one maps to something on screen:
+
+| | |
+|---|---|
+| `GET /api/cases` | the three sections — Needs You, Working, Completed |
+| `GET /api/cases/{id}` | state, facts with provenance, approvals, actions, the timeline |
+| `POST /api/events` | "an email just arrived": open or reopen a case and start a run |
+| `POST /api/cases/{id}/decisions/{approval_id}/approve` | one click on a Needs You card |
+| `POST /api/cases/{id}/decisions/{approval_id}/reject` | the other button; back to the planner |
+| `GET /api/runs/{run_id}` | which graph nodes a run went through |
+| `GET /api/health` | liveness |
+
+**The API decides nothing.** It projects stored cases and calls `open_case`, `reopen_case`,
+`approve`, `reject` and `run_case` — the same functions `scripts/resume_demo.py` calls. The one
+thing it originates is *when* a run happens.
+
+**The verbs return `202`, not the finished case.** A graph run takes seconds against a real
+provider, and a synchronous endpoint would mean the Working section was a column no case could ever
+be seen in — the caller blocks for the whole run and everything appears at once. Every node commits
+its transition before it finishes, so polling `GET /api/cases` shows a case moving through
+`GATHERING_EVIDENCE`, `PLANNING` and `EXECUTING` as it goes. `?wait=<seconds>` blocks until the run
+settles for callers that would rather not poll; an expired wait never cancels the run.
+
+**What a browser is told, and what it is not.** Fact trust levels, `referral.pdf p.2` citations and
+the `matched_rule_id` on a gate verdict are all exposed — they are what the dashboard exists to
+show, and a browser is not the component being tempted. `TimelineEvent.diagnostic` is withheld
+wholesale: it is unbounded free text whose own contract permits raw argument values and rule
+internals. Withheld rather than filtered, for the same reason `fetch_document` does not clean the
+poisoned fixture. Timeline payloads are projected through an allowlist, so a new payload key is
+invisible to the API until somebody decides about it.
+
+**`X-Caregiver` is an audit identity, not authentication.** It records who approved something.
+Nothing is verified, so a missing header is `400` and never `401` — `401` would claim a check that
+is not happening. Real authentication belongs in front of this layer and does not exist yet.
+
 ## Status
 
-Sessions 1–7 — the spine runs end to end, on real documents, across real process boundaries. A
-case goes `NEW → DONE` through a bounded Strands graph, with the policy gate enforcing at the tool
-boundary, a caregiver approval parking and resuming the case, idempotent replay across a process
-restart, a non-converging planner terminated by the SDK's own loop bound, and a finished case
-reopened weeks later by an inbound event. Mock tools, mock model, offline tests at $0.
+Sessions 1–8 — the spine runs end to end, on real documents, across real process boundaries, and a
+browser can now drive the whole arc. A case goes `NEW → DONE` through a bounded Strands graph, with
+the policy gate enforcing at the tool boundary, a caregiver approval parking and resuming the case,
+idempotent replay across a process restart, a non-converging planner terminated by the SDK's own
+loop bound, and a finished case reopened weeks later by an inbound event. Mock tools, mock model,
+offline tests at $0.
 
 Not yet: frontend, AWS deployment, real email, a CLI.
 
@@ -138,6 +176,13 @@ Known and deliberately unfinished:
   tool can genuinely block on a third party yet.
 - **The mock model is the only model the tests ever see.** Green means the spine is correct, not
   that a real provider produces well-formed intents.
+- **Cost per case is not reported.** Nothing records token usage on a case, so the API would have
+  to invent it — and against the mock every figure would read `$0.0000`, which is worse than an
+  absence. Exposing it means stamping usage on the timeline in the graph layer, which is a
+  deliberate change rather than something the UI layer should improvise.
+- **The API's run registry is in memory.** It holds which graph nodes a run traversed, which is
+  execution context rather than a business fact — losing it on restart costs the node trace and
+  nothing the store owns.
 
 ## Development
 

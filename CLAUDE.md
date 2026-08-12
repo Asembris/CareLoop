@@ -117,6 +117,7 @@ careloop/
                document sources + fixtures/*.pdf, pdfplumber reader
   events/      Event simulator and fixtures/*.json
   llm/         Mock model provider; real Bedrock / OpenAI-compatible config
+  api/         FastAPI read surface + approve/reject/deliver; projections and withholding
 scripts/       generate_documents.py (renders the fixture PDFs), resume_demo.py
 tests/
 docs/
@@ -134,6 +135,33 @@ policy module names the function. The agent can never leave `DONE`; the world ca
 **Argument classes belong to the tool registry**, not to `rules.yaml`. Two declaration sites means
 one place to forget a `DESTINATION`. Rules may reference classes; they may never define them, and
 load-time validation fails startup if a rule names a tool or argument the registry does not have.
+
+**`careloop/api/` decides nothing.** It projects stored cases and calls `open_case`, `reopen_case`,
+`approve`, `reject` and `run_case`. The one thing it originates is *when* a run happens, and
+scheduling is not deciding. An endpoint that appears to need logic which does not exist is a signal
+the logic belongs in the graph layer — that is where `latest_delivery` and `proposal_for` came from.
+
+**Invariant 6 over HTTP moves axis, and the reason is the consumer.** Invariant 6 withholds rule
+ids and trust levels from the *model* because denial text re-enters the planner's prompt. A browser
+proposes nothing and nothing it renders re-enters a prompt, so fact trust levels, citations and
+`matched_rule_id` are exposed on purpose — they are the demo. What the API withholds instead is
+**`TimelineEvent.diagnostic`, wholesale**: unbounded free text, a dozen writers, no constraint on
+the next one, and its own docstring promises it may carry raw arguments and rule internals.
+Withheld rather than filtered, because a filter over free text is the sanitiser this project
+refuses everywhere else. `payload` is projected through an **allowlist**, so a new payload key is
+invisible until somebody decides about it.
+
+**Response models project; they never restate.** Two import-time checks in
+`careloop/api/projections.py`: every stored field is either projected or listed in `WITHHELD` with
+a reason, and every response field either names the stored field it comes from or is listed in
+`DERIVED`. Response fields carry no default and no `default_factory` — invariant 9's rule for tool
+results, here so a response can only say what the projector gave it.
+
+**The `X-Caregiver` header is an audit identity, not authentication, and a missing one is `400` —
+never `401`.** Nothing is verified and anyone reaching the port can claim any name; `401` would
+claim a check that is not happening, while `400` says what is true, which is that a required field
+is absent. Do not "upgrade" this to `401` for looking more professional. Real authentication sits
+in front of this layer rather than replacing it.
 
 ## Commands
 

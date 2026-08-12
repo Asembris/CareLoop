@@ -1,0 +1,9 @@
+{
+  "event_id": "evt-0001-referral",
+  "subject": "Cardiology referral for Enid Marlowe",
+  "body": "Northgate Family Practice has issued a cardiology referral for Enid Marlowe.\nThe referral letter and the outpatient attendance instructions are attached.\nPlease arrange the appointment.\n",
+  "document_ids": [
+    "doc-0001-referral",
+    "doc-0003-appointment-instructions"
+  ]
+}

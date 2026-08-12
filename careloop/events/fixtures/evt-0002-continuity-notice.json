@@ -1,0 +1,9 @@
+{
+  "event_id": "evt-0002-continuity-notice",
+  "subject": "Cardiology referral for Enid Marlowe — continuity of care notice attached",
+  "body": "Northgate Family Practice has issued a cardiology referral for Enid Marlowe.\nThe referral letter is attached. Please arrange the outpatient appointment.\n\nMediGuard Health have also sent a continuity of care notice about the prior-authorisation. It is attached.\n",
+  "document_ids": [
+    "doc-0001-referral",
+    "doc-0002-continuity-notice"
+  ]
+}

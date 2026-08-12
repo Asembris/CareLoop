@@ -21,7 +21,7 @@ Verified empirically: an edge whose condition returns `False` does not execute i
 deliberately non-converging two-node cycle with `set_max_node_executions(6)` terminated after
 exactly 6 node executions with `Status.FAILED` — no hand-rolled counter involved.
 
-## 2. Policy gate — CONFIRMED, and better than planned
+## 2. Policy gate — CONFIRMED, then CORRECTED in commit 6
 
 `BeforeToolCallEvent` has a first-class **`cancel_tool: bool | str`** field. Setting it to a string
 prevents the tool from executing at all. The plan assumed we might have to substitute a stand-in
@@ -35,18 +35,49 @@ and the list stayed empty. The model then received:
  "content": [{"text": "DENY: policy rule comms.send_document.deny_untrusted_destination"}]}
 ```
 
-Two consequences worth keeping:
+Two consequences were drawn from this, and **the first was wrong**:
 
-- The denial reason is surfaced **to the planner as an error tool result**, so a denied plan feeds
-  the bounded replan cycle naturally rather than dead-ending.
+- ~~The denial reason is surfaced **to the planner as an error tool result**, so a denied plan feeds
+  the bounded replan cycle naturally rather than dead-ending.~~
 - Because the reason string reaches the model, it must never contain anything the model should not
-  see. Rule `reason` fields are written for that audience.
+  see. Rule `reason` fields are written for that audience. **This half stands**, and is now
+  enforced: `cancel_tool` carries a literal from the closed `ReasonCode` vocabulary and
+  `tests/test_policy_hook.py` runs the reason-purity leak detector over it. The spike's own example
+  wrote `"DENY: policy rule comms.send_document.deny_untrusted_destination"` into that field, which
+  leaks a rule id; that string is now a test fixture for what must not survive.
 
-**Layering (per correction 1):** the hook is the primary, demo-visible gate. Every external-effect
-tool is *also* wrapped by a `@gated_tool` decorator that calls the same engine, so the invariant
-holds even if the hook is never registered. The decision is computed once per
-`(case_id, tool, args)` and cached for the duration of the call, so layering costs no double
-evaluation.
+### The correction
+
+**The spike assumed an event loop that commit 5 removed.** Everything above was verified inside a
+`strands.Agent` running tools. CareLoop has no such agent: `careloop/agents/invoke.py` drives the
+model provider's structured-output generator directly (see §3), so **neither agent holds a tool and
+no tool result is ever returned to a model.**
+
+So there is no error-tool-result channel, and a denial does not reach the planner that way. The
+replan channel is `prior_denials` into `careloop.agents.prompts.planner_user_prompt`, which carries
+a `(tool_name, ReasonCode)` pair and renders it through `reason_text`. That is strictly better for
+invariant 6 — what arrives is a literal from a closed enum, on a path with no SDK in it.
+
+**What CareLoop actually does**, verified by execution against `strands-agents==1.51.0`: the
+execute node builds a real `BeforeToolCallEvent`, fires it against a real `HookRegistry`, and reads
+`cancel_tool` back. `HookRegistry.invoke_callbacks_async` dispatches on the event's type and never
+reads `event.agent`, so `agent=None` and `selected_tool=None` work — the latter is a value the
+field's own type already admits. A `PolicyHook` written this way would plug unchanged into a real
+`Agent`. **What is CareLoop's is the firing, not the machinery**, and `careloop/policy/hook.py`,
+the README and `docs/session-log.md` all say so; letting it read as "Strands blocks the attack"
+would be a claim someone could check and find inflated.
+
+**Layering, as built.** Three enforcement points, not two, all reading the same `rules.yaml`: the
+`gate` node routes the proposal while the case is `PLANNING`; the `BeforeToolCall` hook and the
+gated tool wrapper both fire at the tool boundary while it is `EXECUTING`. The wrapper lives in
+`careloop/policy/gated.py` rather than beside the tool bodies, because `careloop/tools/` may not
+import `careloop.policy` — a sweep enforces that, and a tool that cannot import the policy layer
+cannot decide its own authority.
+
+The decision is cached per call, but **not** on `(case_id, tool, args)` as planned: that key does
+not identify the facts the decision was computed against, which is a TOCTOU window between the two
+points the architecture claims are independent. The key also carries `case.version`, `case.state`
+and a fingerprint over the case's facts.
 
 ## 3. `Agent.structured_output` — CONFIRMED, then CORRECTED in commit 5
 

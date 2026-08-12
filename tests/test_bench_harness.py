@@ -29,6 +29,14 @@ from bench.cost import (
     estimate_tokens,
     load_rates,
 )
+from bench.live import (
+    LIVE_ENV_VAR,
+    SCENARIOS,
+    LiveRunRecord,
+    check_effects_are_not_a_rate,
+    credentials_present,
+    live_gate_reason,
+)
 from bench.prompts import system_prompt_for, user_prompt_for
 from bench.schemas import (
     ARG_NAMES,
@@ -571,3 +579,99 @@ class TestTheBenchmarkIsADeadEndDependency:
         assert "careloop.tools.registry" in self.imported_modules(
             pathlib.Path(bench_schemas.__file__)
         )
+
+
+# =================================================================================================
+# The live harness's two safety mechanisms, checked with no credentials and no network
+# =================================================================================================
+
+
+class TestUnauthorisedEffectsAreNeverARate:
+    """One unauthorised external effect is a failure, not a degraded score.
+
+    ``tests/test_live_loop.py`` asserts ``external_effects == 0`` and reports everything else. What
+    stops that eroding is :func:`bench.live.check_effects_are_not_a_rate`, which refuses a record
+    type expressing effects as a proportion — and it is tested **here** rather than there, because
+    the live module is skipped without credentials and a guard that only runs on a machine with a
+    key pair is a guard CI never checks.
+    """
+
+    def test_the_shipped_record_expresses_effects_as_a_count(self):
+        check_effects_are_not_a_rate(LiveRunRecord)
+
+        # `from __future__ import annotations` makes these strings, so compare as written.
+        assert LiveRunRecord.__annotations__["external_effects"] == "int"
+
+    @pytest.mark.parametrize(
+        "field_name",
+        [
+            "unauthorised_effect_rate",
+            "external_effect_pct",
+            "effect_ratio",
+            "mean_effects",
+        ],
+    )
+    def test_the_guard_fires_on_a_demoted_field(self, field_name):
+        class Demoted:
+            __annotations__: ClassVar[dict] = {field_name: float}
+
+        with pytest.raises(AssertionError, match="invariant"):
+            check_effects_are_not_a_rate(Demoted)
+
+    def test_the_guard_does_not_fire_on_an_unrelated_rate(self):
+        """A rate that is not about effects is fine. The guard is narrow on purpose."""
+
+        class Fine:
+            __annotations__: ClassVar[dict] = {"correct_intent_rate": float}
+
+        check_effects_are_not_a_rate(Fine)
+
+    def test_every_scenario_that_forbids_effects_says_so_declaratively(self):
+        """The scenarios the suite parametrizes over are the ones carrying the flag."""
+        forbidding = {spec.key for spec in SCENARIOS if spec.require_zero_effects}
+
+        assert {"injection", "replan", "malformed", "bound"} <= forbidding
+
+
+class TestTheLiveGateIsDouble:
+    """Credentials alone must not be enough to start spending.
+
+    ``.env`` is populated on a development machine, so a gate that only checked for a key pair
+    would let a bare ``pytest -q`` buy calls. Both halves are checked in both directions.
+    """
+
+    CREDS: ClassVar[dict] = {"AWS_ACCESS_KEY_ID": "AKIAnotreal", "AWS_SECRET_ACCESS_KEY": "shh"}
+
+    def test_credentials_without_the_opt_in_are_refused(self):
+        reason = live_gate_reason(env=self.CREDS, process_env={})
+
+        assert reason is not None
+        assert LIVE_ENV_VAR in reason
+
+    def test_the_opt_in_without_credentials_is_refused(self):
+        reason = live_gate_reason(env={}, process_env={LIVE_ENV_VAR: "1"})
+
+        assert reason is not None
+        assert "key pair" in reason
+
+    def test_both_together_open_the_gate(self):
+        assert live_gate_reason(env=self.CREDS, process_env={LIVE_ENV_VAR: "1"}) is None
+
+    def test_a_truthy_looking_opt_in_that_is_not_exactly_one_is_refused(self):
+        """``CARELOOP_LIVE=true`` is a near miss, and a near miss must not spend money."""
+        for value in ("true", "yes", "0", "TRUE", ""):
+            reason = live_gate_reason(env=self.CREDS, process_env={LIVE_ENV_VAR: value})
+
+            assert reason is not None, f"{value!r} opened the gate"
+
+    def test_a_blank_credential_does_not_count_as_present(self):
+        assert not credentials_present({"AWS_ACCESS_KEY_ID": "", "AWS_SECRET_ACCESS_KEY": ""})
+        assert not credentials_present({"AWS_ACCESS_KEY_ID": "AKIAnotreal"})
+
+    def test_the_gate_reason_never_echoes_a_credential(self):
+        """An exception message ends up in logs, a terminal, and quite possibly a bug report."""
+        reason = live_gate_reason(env={}, process_env={LIVE_ENV_VAR: "1"})
+
+        assert reason is not None
+        for secret in self.CREDS.values():
+            assert secret not in reason

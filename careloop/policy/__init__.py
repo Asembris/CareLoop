@@ -12,6 +12,13 @@ from careloop.policy.gate import (
     decision_cache_key,
     facts_fingerprint,
 )
+from careloop.policy.gated import (
+    GATED_MARKER,
+    GatedToolSet,
+    ReservedToolName,
+    check_no_reserved_collision,
+    gated_tool,
+)
 from careloop.policy.hook import (
     PolicyHook,
     fire_before_tool_call,
@@ -32,26 +39,31 @@ from careloop.policy.schema import ArgTrust, Condition, Rule, RuleSet
 from careloop.policy.verdicts import REASON_TEXT, Decision, ReasonCode, Verdict, reason_text
 
 __all__ = [
+    "GATED_MARKER",
     "REASON_TEXT",
     "RULES_PATH",
     "ArgTrust",
     "Condition",
     "Decision",
+    "GatedToolSet",
     "PolicyConfigError",
     "PolicyDenied",
     "PolicyEngine",
     "PolicyGate",
     "PolicyHook",
     "ReasonCode",
+    "ReservedToolName",
     "Rule",
     "RuleSet",
     "Verdict",
     "canonical_value",
+    "check_no_reserved_collision",
     "decision_cache_key",
     "default_engine",
     "default_rules",
     "facts_fingerprint",
     "fire_before_tool_call",
+    "gated_tool",
     "load_rules",
     "load_rules_from_mapping",
     "load_rules_from_text",

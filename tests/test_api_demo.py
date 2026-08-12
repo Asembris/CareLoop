@@ -29,6 +29,7 @@ from fastapi.testclient import TestClient
 from helpers import FIXED_NOW
 
 import careloop
+from careloop.api import app as app_module
 from careloop.api.app import create_app
 from careloop.api.demo import (
     DEMO_SCENARIOS,
@@ -178,6 +179,35 @@ class TestAScenarioRunsTheNormalPath:
         case = store.get(DEMO_SCENARIOS["injection"].case_id)
         assert case.actions == ()
         assert case.state is not CaseState.DONE
+
+    def test_both_routes_go_through_the_one_delivery_function(self, monkeypatch) -> None:
+        """Not "the outcomes match" but "it is literally the same call".
+
+        The indistinguishability test above would still pass if the demo route grew its own copy of
+        the delivery logic that happened to behave the same today. This one would not: the spy is
+        installed on ``careloop.api.app.deliver``, and a second implementation would not touch it.
+        Both routes are driven so the spy is proven to be on the shared path rather than a
+        demo-only one.
+        """
+        scenario = DEMO_SCENARIOS["referral"]
+        seen: list[tuple[str, str]] = []
+        real = app_module.deliver
+
+        async def spy(deps, case_id, event_id, *, wait):
+            seen.append((case_id, event_id))
+            return await real(deps, case_id, event_id, wait=wait)
+
+        monkeypatch.setattr(app_module, "deliver", spy)
+
+        with demo_client(InMemoryCaseStore(), intent("book_appointment", **BOOKING)) as client:
+            client.post("/api/demo/scenarios/referral?wait=5")
+        with demo_client(InMemoryCaseStore(), intent("book_appointment", **BOOKING)) as client:
+            client.post(
+                "/api/events?wait=5",
+                json={"case_id": scenario.case_id, "event_id": scenario.event_id},
+            )
+
+        assert seen == [(scenario.case_id, scenario.event_id)] * 2
 
     def test_an_unknown_scenario_is_a_404_that_lists_the_real_ones(self) -> None:
         with demo_client(InMemoryCaseStore()) as client:

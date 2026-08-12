@@ -41,8 +41,8 @@ from strands.telemetry.metrics import EventLoopMetrics
 from careloop.graph.context import (
     Proposal,
     RunContext,
+    approval_for,
     approval_id_for,
-    is_approved,
     latest_proposal,
 )
 from careloop.graph.extract import record_document, validate_and_promote
@@ -199,7 +199,9 @@ class EvidenceNode(DeterministicNode):
             document = self.context.tools.call("fetch_document", {"document_id": document_id})
             case = record_document(case, document, now=self.context.now())
 
-        case = validate_and_promote(case, now=self.context.now())
+        case = validate_and_promote(
+            case, now=self.context.now(), documents=self.context.tools.documents
+        )
         case = transition(
             case,
             CaseState.PLANNING,
@@ -407,17 +409,37 @@ class ExecuteNode(DeterministicNode):
     def _approval_problem(self, case: Case, proposal: Proposal) -> str | None:
         """Why this proposal may not be executed under the case's approvals, if it may not.
 
-        A case that was never parked needs no approval. One that was must carry an approval for
-        **these exact arguments** — otherwise a proposal made after the caregiver decided would
-        execute under a decision about something else.
+        Two questions, both answered from the durable record rather than by re-deriving policy.
+
+        An outstanding decision stops everything: a case released for execution while a caregiver
+        is still being asked something is a contradiction, whatever the question was about.
+
+        Otherwise, the only proposals that need an approval are the ones the gate **parked**, and
+        an approval exists for exactly those — :func:`~careloop.graph.nodes._request_approval`
+        records it against the argument digest at the moment the gate decides ``REQUIRE_HUMAN``.
+        So an approval covering these arguments must be ``APPROVED``, and a proposal with no
+        approval at all is one the gate allowed outright.
+
+        **This was case-scoped until commit 7 and that was a latent bug**, found by running the
+        resume rather than by reading the code. The old rule was "a case with any approval needs an
+        approval for every action", which holds for a case that does one thing and breaks the
+        moment a case does two: a reopened case whose first action needed a caregiver and whose
+        second is autonomous was refused for want of an approval nobody should have been asked for.
+        Digest-scoping matches what an approval has meant everywhere else since commit 6 — it
+        authorises specific arguments, not a tool and not a case.
+
+        What this does **not** do is decide whether an unapproved action may proceed. That is
+        ``rules.yaml``'s ``args_approved`` clause, evaluated at the tool boundary a few lines
+        below. This guard's own contribution is to refuse *before* the case transitions to
+        ``EXECUTING``, and to name the approval rather than report a disagreement between two
+        enforcement points.
         """
-        for approval in case.approvals:
-            if approval.status is ApprovalStatus.PENDING:
-                return "an approval is still outstanding"
-        if not case.approvals:
-            return None
-        if not is_approved(case, proposal.digest):
-            return "no caregiver approval covers the arguments being executed"
+        if case.pending_approval() is not None:
+            return "an approval is still outstanding"
+
+        approval = approval_for(case, proposal.digest)
+        if approval is not None and approval.status is not ApprovalStatus.APPROVED:
+            return "the caregiver did not approve the arguments being executed"
         return None
 
     def _fail(self, case: Case, base: int, reason: str) -> str:

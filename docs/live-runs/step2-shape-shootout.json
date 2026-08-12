@@ -1,0 +1,510 @@
+{
+  "reps": 8,
+  "adapted_prompt": false,
+  "cells": [
+    {
+      "shape": "B_map",
+      "title": "tool_name + rationale + args as a string map",
+      "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+      "constrained_decoding": false,
+      "summary": {
+        "n": 8,
+        "valid": 8,
+        "usable": 8,
+        "schema_failures": 0,
+        "argument_defects": 0,
+        "misquoted": 0,
+        "errors": 0,
+        "tools_proposed": [
+          "book_appointment"
+        ],
+        "misquoted_arguments": []
+      },
+      "input_tokens": 15384,
+      "output_tokens": 1175,
+      "cost_usd": 0.007553,
+      "trials": [
+        {
+          "shape": "B_map",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": true,
+          "usable": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "intermittent atrial fibrillation, for cardiology review.",
+            "slot_start": "2026-09-03T09:30:00"
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "misquoted": [],
+          "error": "",
+          "latency_ms": 2373.7
+        },
+        {
+          "shape": "B_map",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": true,
+          "usable": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "intermittent atrial fibrillation, for cardiology review",
+            "slot_start": "2026-09-03T09:30:00"
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "misquoted": [],
+          "error": "",
+          "latency_ms": 2193.4
+        },
+        {
+          "shape": "B_map",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": true,
+          "usable": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "intermittent atrial fibrillation, for cardiology review.",
+            "slot_start": "2026-09-03T09:30:00"
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "misquoted": [],
+          "error": "",
+          "latency_ms": 1332.1
+        },
+        {
+          "shape": "B_map",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": true,
+          "usable": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "intermittent atrial fibrillation, for cardiology review.",
+            "slot_start": "2026-09-03T09:30:00"
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "misquoted": [],
+          "error": "",
+          "latency_ms": 1293.5
+        },
+        {
+          "shape": "B_map",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": true,
+          "usable": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "intermittent atrial fibrillation, for cardiology review.",
+            "slot_start": "2026-09-03T09:30:00"
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "misquoted": [],
+          "error": "",
+          "latency_ms": 1182.3
+        },
+        {
+          "shape": "B_map",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": true,
+          "usable": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "intermittent atrial fibrillation, for cardiology review.",
+            "slot_start": "2026-09-03T09:30:00"
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "misquoted": [],
+          "error": "",
+          "latency_ms": 1397.0
+        },
+        {
+          "shape": "B_map",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": true,
+          "usable": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "intermittent atrial fibrillation, for cardiology review.",
+            "slot_start": "2026-09-03T09:30:00"
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "misquoted": [],
+          "error": "",
+          "latency_ms": 1214.2
+        },
+        {
+          "shape": "B_map",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": true,
+          "usable": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "intermittent atrial fibrillation, for cardiology review.",
+            "slot_start": "2026-09-03T09:30:00"
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "misquoted": [],
+          "error": "",
+          "latency_ms": 1503.3
+        }
+      ]
+    },
+    {
+      "shape": "D_list",
+      "title": "tool_name + rationale + args as name/value pairs",
+      "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+      "constrained_decoding": false,
+      "summary": {
+        "n": 8,
+        "valid": 8,
+        "usable": 8,
+        "schema_failures": 0,
+        "argument_defects": 0,
+        "misquoted": 0,
+        "errors": 0,
+        "tools_proposed": [
+          "book_appointment"
+        ],
+        "misquoted_arguments": []
+      },
+      "input_tokens": 16072,
+      "output_tokens": 1326,
+      "cost_usd": 0.008137,
+      "trials": [
+        {
+          "shape": "D_list",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": true,
+          "usable": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "intermittent atrial fibrillation",
+            "slot_start": "2026-09-03T09:30:00"
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "misquoted": [],
+          "error": "",
+          "latency_ms": 1600.5
+        },
+        {
+          "shape": "D_list",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": true,
+          "usable": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "intermittent atrial fibrillation, for cardiology review.",
+            "slot_start": "2026-09-03T09:30:00"
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "misquoted": [],
+          "error": "",
+          "latency_ms": 1378.1
+        },
+        {
+          "shape": "D_list",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": true,
+          "usable": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "intermittent atrial fibrillation, for cardiology review",
+            "slot_start": "2026-09-03T09:30:00"
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "misquoted": [],
+          "error": "",
+          "latency_ms": 1284.4
+        },
+        {
+          "shape": "D_list",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": true,
+          "usable": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "intermittent atrial fibrillation, for cardiology review.",
+            "slot_start": "2026-09-03T09:30:00"
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "misquoted": [],
+          "error": "",
+          "latency_ms": 1322.2
+        },
+        {
+          "shape": "D_list",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": true,
+          "usable": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "intermittent atrial fibrillation, for cardiology review",
+            "slot_start": "2026-09-03T09:30:00"
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "misquoted": [],
+          "error": "",
+          "latency_ms": 1571.9
+        },
+        {
+          "shape": "D_list",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": true,
+          "usable": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "intermittent atrial fibrillation, for cardiology review",
+            "slot_start": "2026-09-03T09:30:00"
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "misquoted": [],
+          "error": "",
+          "latency_ms": 2043.0
+        },
+        {
+          "shape": "D_list",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": true,
+          "usable": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "intermittent atrial fibrillation, for cardiology review.",
+            "slot_start": "2026-09-03T09:30:00"
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "misquoted": [],
+          "error": "",
+          "latency_ms": 1485.4
+        },
+        {
+          "shape": "D_list",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": true,
+          "usable": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "intermittent atrial fibrillation, for cardiology review",
+            "slot_start": "2026-09-03T09:30:00"
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "misquoted": [],
+          "error": "",
+          "latency_ms": 2081.6
+        }
+      ]
+    },
+    {
+      "shape": "E_two_call",
+      "title": "Two calls: choose the tool, then fill that tool's arguments",
+      "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+      "constrained_decoding": false,
+      "summary": {
+        "n": 8,
+        "valid": 8,
+        "usable": 8,
+        "schema_failures": 0,
+        "argument_defects": 0,
+        "misquoted": 0,
+        "errors": 0,
+        "tools_proposed": [
+          "book_appointment"
+        ],
+        "misquoted_arguments": []
+      },
+      "input_tokens": 30328,
+      "output_tokens": 1394,
+      "cost_usd": 0.012583,
+      "trials": [
+        {
+          "shape": "E_two_call",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": true,
+          "usable": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "intermittent atrial fibrillation, for cardiology review.",
+            "slot_start": "2026-09-03T09:30:00"
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "misquoted": [],
+          "error": "",
+          "latency_ms": 2197.0
+        },
+        {
+          "shape": "E_two_call",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": true,
+          "usable": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "intermittent atrial fibrillation, for cardiology review.",
+            "slot_start": "2026-09-03T09:30:00"
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "misquoted": [],
+          "error": "",
+          "latency_ms": 1963.9
+        },
+        {
+          "shape": "E_two_call",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": true,
+          "usable": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "intermittent atrial fibrillation, for cardiology review.",
+            "slot_start": "2026-09-03T09:30:00"
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "misquoted": [],
+          "error": "",
+          "latency_ms": 2737.8
+        },
+        {
+          "shape": "E_two_call",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": true,
+          "usable": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "intermittent atrial fibrillation, for cardiology review.",
+            "slot_start": "2026-09-03T09:30:00"
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "misquoted": [],
+          "error": "",
+          "latency_ms": 2766.2
+        },
+        {
+          "shape": "E_two_call",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": true,
+          "usable": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "intermittent atrial fibrillation, for cardiology review.",
+            "slot_start": "2026-09-03T09:30:00"
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "misquoted": [],
+          "error": "",
+          "latency_ms": 3129.2
+        },
+        {
+          "shape": "E_two_call",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": true,
+          "usable": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "intermittent atrial fibrillation, for cardiology review.",
+            "slot_start": "2026-09-03T09:30:00"
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "misquoted": [],
+          "error": "",
+          "latency_ms": 2264.3
+        },
+        {
+          "shape": "E_two_call",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": true,
+          "usable": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "intermittent atrial fibrillation, for cardiology review.",
+            "slot_start": "2026-09-03T09:30:00"
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "misquoted": [],
+          "error": "",
+          "latency_ms": 2041.3
+        },
+        {
+          "shape": "E_two_call",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": true,
+          "usable": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "intermittent atrial fibrillation, for cardiology review.",
+            "slot_start": "2026-09-03T09:30:00"
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "misquoted": [],
+          "error": "",
+          "latency_ms": 2275.8
+        }
+      ]
+    }
+  ]
+}

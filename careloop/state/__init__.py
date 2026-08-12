@@ -9,6 +9,12 @@ from careloop.state.case import (
     TimelineEvent,
     TimelineKind,
 )
+from careloop.state.evidence import (
+    FactNotOnCase,
+    PromotionIneffective,
+    promote_fact,
+    record_fact,
+)
 from careloop.state.machine import (
     TERMINAL_STATES,
     TRANSITIONS,
@@ -32,13 +38,17 @@ __all__ = [
     "CaseNotFound",
     "CaseState",
     "CaseStore",
+    "FactNotOnCase",
     "IllegalTransition",
     "InMemoryCaseStore",
+    "PromotionIneffective",
     "SqliteCaseStore",
     "TimelineEvent",
     "TimelineKind",
     "VersionConflict",
     "append_event",
     "is_legal",
+    "promote_fact",
+    "record_fact",
     "transition",
 ]

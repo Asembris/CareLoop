@@ -6,6 +6,7 @@ import pytest
 from helpers import make_case
 
 from careloop.state import (
+    AT_REST_STATES,
     TERMINAL_STATES,
     TRANSITIONS,
     Case,
@@ -16,6 +17,7 @@ from careloop.state import (
     is_legal,
     transition,
 )
+from careloop.state.machine import REOPEN_FROM, REOPEN_TO
 
 ALL_STATES = list(CaseState)
 
@@ -35,21 +37,71 @@ def test_no_state_transitions_to_itself() -> None:
 
 
 @pytest.mark.parametrize("state", ALL_STATES)
-def test_failed_is_reachable_from_every_non_terminal_state(state: CaseState) -> None:
-    """A case must always have somewhere to go when it breaks."""
-    if state in TERMINAL_STATES:
-        pytest.skip(f"{state} is terminal")
+def test_failed_is_reachable_from_every_state_still_in_flight(state: CaseState) -> None:
+    """A case must always have somewhere to go when it breaks.
+
+    Skips states **at rest** rather than states that are strictly terminal. That distinction
+    appeared in commit 7 with the reopen: ``DONE`` gained an outgoing transition and so left
+    ``TERMINAL_STATES``, but it is still a state the graph will not move a case out of, and a
+    finished case has no need of a route to ``FAILED``. The property this test is about is
+    in-flight cases having somewhere to go, and ``AT_REST_STATES`` is that set.
+    """
+    if state in AT_REST_STATES:
+        pytest.skip(f"{state} is at rest")
     assert CaseState.FAILED in TRANSITIONS[state]
 
 
 def test_done_is_reachable_only_from_verifying() -> None:
-    """This is what makes 'did not reach DONE via the unsafe path' structural, not observational."""
+    """This is what makes 'did not reach DONE via the unsafe path' structural, not observational.
+
+    Unchanged by the reopen, and deliberately so: invariant 4 is about how a case *enters* ``DONE``,
+    and the reopen is an edge out of it.
+    """
     sources = [state for state, targets in TRANSITIONS.items() if CaseState.DONE in targets]
     assert sources == [CaseState.VERIFYING]
 
 
-def test_terminal_states_are_exactly_done_and_failed() -> None:
-    assert sorted(TERMINAL_STATES) == [CaseState.DONE, CaseState.FAILED]
+def test_only_failed_is_strictly_terminal() -> None:
+    """``DONE`` left this set in commit 7. Recorded rather than quietly adjusted.
+
+    Before the reopen, ``TERMINAL_STATES`` carried two meanings at once — "nothing may leave" and
+    "the graph is finished with this" — and they were the same set. They are not the same idea, and
+    the reopen separated them. ``FAILED`` is the only state nothing may leave.
+    """
+    assert sorted(TERMINAL_STATES) == [CaseState.FAILED]
+
+
+def test_at_rest_is_done_and_failed() -> None:
+    """What ``TERMINAL_STATES`` meant before, under the name that says what it means."""
+    assert sorted(AT_REST_STATES) == [CaseState.DONE, CaseState.FAILED]
+
+
+def test_done_has_exactly_one_way_out_and_it_is_the_reopen() -> None:
+    """The whole of the reopen's blast radius on the transition table.
+
+    ``GATHERING_EVIDENCE`` and nothing else, so a finished case cannot be pushed back to planning,
+    execution or failure. Which code may make this move is a separate question, answered
+    structurally in ``tests/test_reopen.py``: no node, agent, tool or policy module may name
+    ``reopen_case``, so the agent can never leave ``DONE`` and only the world can.
+    """
+    assert TRANSITIONS[CaseState.DONE] == frozenset({CaseState.GATHERING_EVIDENCE})
+    assert (REOPEN_FROM, REOPEN_TO) == (CaseState.DONE, CaseState.GATHERING_EVIDENCE)
+
+
+@pytest.mark.parametrize("to", ALL_STATES)
+def test_done_refuses_every_outbound_move_except_the_reopen(to: CaseState) -> None:
+    """``DONE`` is no longer swept by the terminal-state test, so it is swept here.
+
+    Without this, removing ``DONE`` from ``TERMINAL_STATES`` would have quietly stopped anything
+    checking that a finished case cannot be moved wherever a caller likes.
+    """
+    case = make_case(state=CaseState.DONE)
+
+    if to is CaseState.GATHERING_EVIDENCE:
+        assert transition(case, to, reason="reopen", actor="system").state is to
+    else:
+        with pytest.raises(IllegalTransition):
+            transition(case, to, reason="escape attempt", actor="test")
 
 
 @pytest.mark.parametrize("frm", ALL_STATES)

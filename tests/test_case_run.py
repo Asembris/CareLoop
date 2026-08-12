@@ -700,7 +700,7 @@ class TestT4LoopBound:
         result, _ = self._never_converges()
 
         assert result.case.state is CaseState.FAILED
-        assert result.case.is_terminal
+        assert result.case.is_at_rest
 
     def test_the_failure_says_what_happened(self) -> None:
         result, _ = self._never_converges()

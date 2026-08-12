@@ -42,6 +42,7 @@ class TimelineKind(StrEnum):
     """Kinds of audit-timeline entry."""
 
     CASE_CREATED = "CASE_CREATED"
+    CASE_REOPENED = "CASE_REOPENED"
     STATE_TRANSITION = "STATE_TRANSITION"
     EVIDENCE_RECORDED = "EVIDENCE_RECORDED"
     EVIDENCE_DUPLICATE_SKIPPED = "EVIDENCE_DUPLICATE_SKIPPED"
@@ -149,8 +150,17 @@ class Case(BaseModel):
     failure_reason: str | None = None
 
     @property
-    def is_terminal(self) -> bool:
-        """Whether the case has reached a state it can never leave."""
+    def is_at_rest(self) -> bool:
+        """Whether the graph will move this case no further.
+
+        ``DONE`` or ``FAILED``. Called ``is_terminal`` until commit 7, and renamed rather than
+        redefined when ``DONE`` gained an outgoing transition: a finished case is at rest but no
+        longer terminal, and every existing caller meant "at rest". ``FAILED`` is terminal in the
+        strict sense and :data:`careloop.state.machine.TERMINAL_STATES` is where that lives.
+
+        Only an inbound event can move a case out of ``DONE``, through
+        :func:`careloop.graph.runner.reopen_case`. Nothing inside the graph can.
+        """
         return self.state in (CaseState.DONE, CaseState.FAILED)
 
     def next_seq(self) -> int:

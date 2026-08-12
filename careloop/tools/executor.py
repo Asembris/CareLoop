@@ -1,10 +1,18 @@
-"""The mock external executor.
+"""The external executor, and the mock handlers it ships with.
 
 Every external effect in CareLoop happens here and nowhere else. The four effectful tools are thin
 wrappers that build an argument mapping, derive an idempotency key, and hand both to
 :meth:`MockExternalExecutor.invoke`; none of them can reach the outside world by another route.
 Concentrating the effect in one object is what makes "did this action happen?" a question with a
 single, checkable answer — the ledger — rather than a question about four call sites.
+
+**One of those handlers is now real, and the class keeps its name anyway.** ``handlers`` has been a
+constructor argument since this module was written, and
+:func:`careloop.tools.clinic.clinic_executor` uses it to route ``book_appointment`` to a genuine
+external service while the other three stay simulated. What this class contributes — the ledger,
+replay suppression, the key-collision guard — is the same either way, and it is named for the
+handlers it *defaults* to. Renaming it across every call site to describe a mapping the caller
+chooses would move a lot of code to say less.
 
 **Replay suppression.** ``invoke`` looks the key up first. On a hit it returns the recorded result
 with outcome :attr:`ExecutionOutcome.DUPLICATE_SUPPRESSED` and does not execute. The ledger grows
@@ -173,10 +181,15 @@ _check_handlers_cover_the_registry()
 
 
 class MockExternalExecutor:
-    """Simulates every external effect, and remembers each one exactly once.
+    """Performs every external effect, and remembers each one exactly once.
 
     A plain class rather than a model: this is a service with mutable state, not a value. Every
     record it produces is a frozen model, so nothing it hands out can be edited behind its back.
+
+    Simulates the effect only as far as its handlers do. With :data:`DEFAULT_HANDLERS` nothing
+    leaves the process; with the mapping :func:`careloop.tools.clinic.clinic_executor` builds, a
+    booking is a real HTTP call to a real service. The ledger means the same thing in both cases,
+    which is what lets one replay assertion cover both.
     """
 
     def __init__(self, handlers: Mapping[str, Handler] | None = None) -> None:

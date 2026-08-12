@@ -12,6 +12,12 @@ from careloop.policy.gate import (
     decision_cache_key,
     facts_fingerprint,
 )
+from careloop.policy.hook import (
+    PolicyHook,
+    fire_before_tool_call,
+    policy_registry,
+    tool_use_id,
+)
 from careloop.policy.loader import (
     RULES_PATH,
     PolicyConfigError,
@@ -35,6 +41,7 @@ __all__ = [
     "PolicyDenied",
     "PolicyEngine",
     "PolicyGate",
+    "PolicyHook",
     "ReasonCode",
     "Rule",
     "RuleSet",
@@ -44,11 +51,14 @@ __all__ = [
     "default_engine",
     "default_rules",
     "facts_fingerprint",
+    "fire_before_tool_call",
     "load_rules",
     "load_rules_from_mapping",
     "load_rules_from_text",
+    "policy_registry",
     "reason_text",
     "resolve_trust",
+    "tool_use_id",
     "uncovered_external_tools",
     "unknown_rule_tools",
 ]

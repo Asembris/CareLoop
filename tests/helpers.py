@@ -11,8 +11,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from careloop.provenance import Fact, Provenance, TrustLevel
+from careloop.policy import ReasonCode, Verdict, default_rules
+from careloop.provenance import ArgClass, Fact, Provenance, TrustLevel
 from careloop.state import Case, CaseState
+from careloop.tools import REGISTRY
 
 FIXED_NOW = datetime(2026, 8, 11, 12, 0, 0, tzinfo=UTC)
 
@@ -56,3 +58,46 @@ def make_fact(
 def trusted_fact(key: str, value: str) -> Fact:
     """A fact that came from trusted configuration rather than from document content."""
     return make_fact(key, value, TrustLevel.TRUSTED, source_doc="trusted-config")
+
+
+# -- the leak detector ---------------------------------------------------------------------------
+#
+# Shared rather than duplicated. Two enforcement points now produce model-visible text — the
+# denial the planner is shown in its next prompt, and the ``cancel_tool`` string the
+# ``BeforeToolCall`` hook sets — and a second copy of this token set is a second place for one of
+# them to drift out of invariant 6's reach.
+
+
+def forbidden_tokens() -> frozenset[str]:
+    """Every structured token invariant 6 forbids from reaching a model.
+
+    Argument *names* are deliberately absent: invariant 6 does not list them, and the model
+    already knows them because it is the caller.
+    """
+    return frozenset(
+        frozenset(level.value for level in TrustLevel)
+        | frozenset(cls.value for cls in ArgClass)
+        | frozenset(verdict.value for verdict in Verdict)
+        | frozenset(code.value for code in ReasonCode)
+        | frozenset(state.value for state in CaseState)
+        | default_rules().rule_ids
+        | REGISTRY.names
+    )
+
+
+def leaked_tokens(text: str, forbidden: frozenset[str] | None = None) -> frozenset[str]:
+    """Structured tokens present in ``text``.
+
+    Case-sensitive on purpose. An interpolated ``StrEnum`` renders as its uppercase member value,
+    which is the actual signature of a leak; matching case-insensitively would flag ordinary
+    English ("value", "done", "new") and force the reason texts into contortions that buy nothing.
+
+    Plain substring matching, so tokens that contain one another both report — ``UNTRUSTED``
+    also trips ``TRUSTED``. Over-detection is the safe direction for a leak detector: it can
+    reject an innocent string, never accept a leaking one.
+    """
+    return frozenset(
+        token
+        for token in (forbidden if forbidden is not None else forbidden_tokens())
+        if token in text
+    )

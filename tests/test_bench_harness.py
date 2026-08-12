@@ -30,6 +30,7 @@ from bench.cost import (
     load_rates,
 )
 from bench.live import (
+    ATTACKER_DESTINATIONS,
     LIVE_ENV_VAR,
     SCENARIOS,
     LiveRunRecord,
@@ -49,7 +50,7 @@ from bench.schemas import (
 from bench.scoring import aggregate, score_task
 from bench.tasks import Task, TaskSet, load_task_files, load_tasks
 from careloop.provenance.trust import ArgClass
-from careloop.tools.documents import POISONED_DOCUMENT_ID
+from careloop.tools.documents import POISONED_DOCUMENT_ID, default_document_store
 from careloop.tools.registry import REGISTRY
 
 
@@ -513,8 +514,6 @@ class TestTheShippedTaskSet:
     def test_expected_extraction_values_actually_appear_in_their_documents(self):
         # An expectation that no document supports would make every candidate fail identically
         # and the metric would say nothing.
-        from careloop.tools.documents import default_document_store
-
         store = default_document_store()
         for task in load_tasks().of_kind("extraction"):
             body = "\n".join(store.get(task.document_id).pages)
@@ -626,11 +625,47 @@ class TestUnauthorisedEffectsAreNeverARate:
 
         check_effects_are_not_a_rate(Fine)
 
-    def test_every_scenario_that_forbids_effects_says_so_declaratively(self):
-        """The scenarios the suite parametrizes over are the ones carrying the flag."""
+    def test_the_scenarios_that_cannot_legitimately_act_forbid_every_effect(self):
+        """``require_zero_effects`` is kept only where zero genuinely is zero.
+
+        Session B narrowed it. It used to cover the injection scenarios too, which was right for
+        as long as the planner produced nothing and no effect could be legitimate; once the
+        planner worked, a correct run of a poisoned case booked the appointment the referral asked
+        for and the flag called that a breach.
+        """
         forbidding = {spec.key for spec in SCENARIOS if spec.require_zero_effects}
 
-        assert {"injection", "replan", "malformed", "bound"} <= forbidding
+        assert forbidding == {"malformed", "bound"}
+
+    def test_every_scenario_carrying_the_poisoned_document_forbids_its_destinations(self):
+        """The assertion that replaced it, and it must cover every poisoned case."""
+        poisoned = {
+            spec.key for spec in SCENARIOS if POISONED_DOCUMENT_ID in spec.event.document_ids
+        }
+        forbidding = {spec.key for spec in SCENARIOS if spec.forbid_attacker_destinations}
+
+        assert poisoned, "no scenario carries the poisoned document at all"
+        assert poisoned <= forbidding, f"{sorted(poisoned - forbidding)} carry it and permit it"
+
+    def test_exactly_one_scenario_requires_a_denial_and_it_is_the_forced_one(self):
+        """Requiring a denial where a legitimate action exists would require a model to misbehave.
+
+        Only the scenario whose event carries the poisoned document *alone* can demand a refusal
+        without that, so the flag is pinned to it rather than left to spread.
+        """
+        requiring = [spec for spec in SCENARIOS if spec.require_denial]
+
+        assert [spec.key for spec in requiring] == ["injection_only"]
+        assert requiring[0].event.document_ids == (POISONED_DOCUMENT_ID,)
+
+    def test_a_scenario_exists_that_reaches_the_caregiver_decision(self):
+        """The beat that had no live coverage at all until session B."""
+        requiring = [spec for spec in SCENARIOS if spec.require_approval]
+
+        assert requiring, "no live scenario exercises REQUIRE_HUMAN"
+        assert all(spec.approve_pending for spec in requiring), (
+            "a scenario that requires an approval must also grant one, or it can never finish"
+        )
 
 
 class TestTheLiveGateIsDouble:
@@ -675,3 +710,36 @@ class TestTheLiveGateIsDouble:
         assert reason is not None
         for secret in self.CREDS.values():
             assert secret not in reason
+
+
+class TestTheAttackerValuesAreTheOnesTheDocumentAsksFor:
+    """Vacuity for ``tests/test_live_loop.py``: a drifted payload list would match nothing.
+
+    ``ATTACKER_DESTINATIONS`` is partly literal, because two of the three are written into the
+    document's body rather than exported as constants. If the fixture is reworded and this list is
+    not, every assertion above would go on passing while checking for strings nobody is being
+    asked to send anything to.
+
+    It lives here rather than beside the live tests for session A's reason: a guard that only runs
+    on a machine with a key pair is a guard CI never checks.
+    """
+
+    def test_every_payload_appears_in_the_shipped_poisoned_document(self) -> None:
+        text = default_document_store().get(POISONED_DOCUMENT_ID).text
+
+        missing = [payload for payload in ATTACKER_DESTINATIONS if payload not in text]
+        assert missing == [], (
+            f"{missing} no longer appears in the poisoned document, so the injection assertions "
+            f"are checking for something the attack does not ask for"
+        )
+
+    def test_the_list_covers_all_three_legs_of_the_trust_model(self) -> None:
+        """An address, a portal and a role — a destination, a second destination, an authority."""
+        assert len(ATTACKER_DESTINATIONS) == 3
+        assert any("@" in payload for payload in ATTACKER_DESTINATIONS)
+        assert any(payload.startswith("PORTAL-") for payload in ATTACKER_DESTINATIONS)
+        assert "records_admin" in ATTACKER_DESTINATIONS
+
+
+# Runs without either gate: it reads a fixture and asserts nothing about a model.
+TestTheAttackerValuesAreTheOnesTheDocumentAsksFor.pytestmark = []

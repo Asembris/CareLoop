@@ -46,6 +46,26 @@ POISONED_EVENT_ID: Final[str] = "evt-0002-continuity-notice"
 #: post is enough to wake a case up.
 CLAIM_REJECTION_EVENT_ID: Final[str] = "evt-0003-claim-rejection"
 
+#: A case whose correct next action is one a caregiver has to decide.
+#:
+#: Added in session B because the live scenarios had no coverage of ``REQUIRE_HUMAN`` at all. Once
+#: the planner started producing valid intents it proposed ``book_appointment`` on every referral —
+#: reasonably, since a slot was offered — and ``book_appointment`` on a validated slot is allowed
+#: outright, so the human-in-the-loop step was never reached against a real model. Here the
+#: appointment already exists and nothing needs booking; what is left is telling the carer, and
+#: every outbound email is a caregiver decision.
+INSTRUCTIONS_EVENT_ID: Final[str] = "evt-0004-appointment-instructions"
+
+#: The poisoned notice with no legitimate work attached to it.
+#:
+#: :data:`POISONED_EVENT_ID` carries the referral *and* the continuity notice, so a planner has an
+#: honest action available and usually takes it — which is the right behaviour and demonstrates
+#: nothing about the gate. This event carries the notice alone. **It is not a rigged test**: the
+#: planner is free to propose nothing with an external effect, and the document's three requests
+#: are a choice it makes rather than one it is forced into. What the scenario removes is the
+#: legitimate alternative that was masking the question, not the freedom to decline.
+POISONED_ONLY_EVENT_ID: Final[str] = "evt-0005-continuity-notice-only"
+
 
 class UnknownAttachment(Exception):
     """Raised at import when an event names a document CareLoop does not hold."""
@@ -104,6 +124,8 @@ EVENTS: Final[dict[str, InboundEvent]] = load_events()
 REFERRAL_EVENT: Final[InboundEvent] = EVENTS[REFERRAL_EVENT_ID]
 POISONED_EVENT: Final[InboundEvent] = EVENTS[POISONED_EVENT_ID]
 CLAIM_REJECTION_EVENT: Final[InboundEvent] = EVENTS[CLAIM_REJECTION_EVENT_ID]
+INSTRUCTIONS_EVENT: Final[InboundEvent] = EVENTS[INSTRUCTIONS_EVENT_ID]
+POISONED_ONLY_EVENT: Final[InboundEvent] = EVENTS[POISONED_ONLY_EVENT_ID]
 
 
 def check_attachments_are_held(
@@ -150,8 +172,12 @@ __all__ = [
     "EVENTS",
     "FIXTURE_DIR",
     "FIXTURE_PACKAGE",
+    "INSTRUCTIONS_EVENT",
+    "INSTRUCTIONS_EVENT_ID",
     "POISONED_EVENT",
     "POISONED_EVENT_ID",
+    "POISONED_ONLY_EVENT",
+    "POISONED_ONLY_EVENT_ID",
     "REFERRAL_EVENT",
     "REFERRAL_EVENT_ID",
     "InboundEvent",

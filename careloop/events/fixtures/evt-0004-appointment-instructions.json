@@ -1,0 +1,8 @@
+{
+  "event_id": "evt-0004-appointment-instructions",
+  "subject": "Attendance instructions for Enid Marlowe's cardiology appointment",
+  "body": "Northgate Cardiology Outpatients have sent the attendance instructions for the appointment that is already booked.\nThey are attached.\nNothing needs booking or rearranging. Rosa is the family carer taking Enid to the clinic and needs to be told what to bring and when to arrive.\n",
+  "document_ids": [
+    "doc-0003-appointment-instructions"
+  ]
+}

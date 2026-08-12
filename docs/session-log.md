@@ -1974,6 +1974,240 @@ cost two cents, and they are the only thing in this repository that would have c
 
 ---
 
+## Session B — 2026-08-12
+
+Fix the planner schema, then re-decide the model on evidence. **The model decision did not need
+reopening: the schema was the whole cause.**
+
+### Position
+
+Branch `main`. `origin/main` is at `571726c`; everything is pushed except the session-log and
+findings commit.
+
+| Commit | Subject |
+|---|---|
+| `7041eab` | Add the schema shootout harness holding the provider constant |
+| `ef6aae7` | Classify a proposal that satisfies the schema but misquotes the evidence |
+| `abcd9f8` | Record the schema shootout: every narrow shape succeeds where the flat one fails |
+| `b9c1667` | Reshape PlannerIntent to a tool name and an argument map |
+| `3bf8bd4` | Close a vacuous guard: a normalising transcription check the near-miss tests missed |
+| `aadd78b` | Describe the argument map in the planner system prompt |
+| `2cc06c3` | Assert effects against the gate rather than against zero, and add the forced injection and approval scenarios |
+| `bd5b206` | Count a caregiver approval as an authorisation, not only a policy allow |
+| `5a8018b` | Park a case for a caregiver when every action has been refused |
+| `4d7bfc2` | Record the session B live run: every scenario green on a real model |
+| `571726c` | Cover the live record reader offline, closing two mutation survivors |
+
+**1575 passed, 37 skipped locally; 1573 passed, 39 skipped in a clean `.[dev]`-only virtualenv.**
+`ruff check` and `ruff format --check` clean in both. Verified under `pytest` and `python -m
+pytest`, with every credential unset and `AWS_CONFIG_FILE` pointed at `/nonexistent`. **34 live
+tests pass against real models** with both gates open.
+
+Total live spend: **~$0.14** against a $2.00 ceiling.
+
+### The headline
+
+**The system now works against a real model.** 0/15 valid planner intents in session A; 23/23 in
+session B, zero unexplained errors, zero effects the gate did not authorise, zero effects reaching
+an attacker destination across 14 poisoned runs. Full detail in
+[`live-loop-findings.md`](live-loop-findings.md).
+
+The cause was **session 5's delta D6**, not the model. Thirteen required fields, one per argument
+across every tool; a model that picks `book_appointment` fills its four and omits the other seven.
+
+### Two things established offline, at $0, before any paid call
+
+Both changed what the session was, and both were verified by execution rather than by reading.
+
+**`model_json_schema()` is not what the provider receives.** `BedrockModel.structured_output`
+converts through `convert_pydantic_to_tool_spec`, whose `_flatten_schema` keeps `type`,
+`properties`, `title`, `description` and `required` and **drops `$defs`**. The approved plan's
+discriminated union therefore reaches Bedrock as `oneOf` over five dangling `$ref` pointers; as a
+`RootModel` it reaches Bedrock as `{"type": "object", "properties": {}}`. **Neither raises.** The
+union was dropped on this, and both shapes are kept in `bench/intent_shapes.py` as the vacuity
+proof for `tests/test_provider_tool_spec.py`. Now an environment fact in `CLAUDE.md`.
+
+**A cross-provider comparison cannot diagnose a schema.** `strands.models.openai` reaches
+structured output through `client.beta.chat.completions.parse` — OpenAI *strict* Structured
+Outputs, where decoding is constrained so every required field must be emitted. `gpt-4o-mini`
+physically could not reproduce the failure, and scored 8/8 on the schema Nova scored 0/8 on. The
+brief's step 1 as specified would have produced a confident wrong answer. Replaced with the
+experiment that does split it: **provider held constant, only the shape varying.**
+
+### The shootout
+
+`bench/intent_shapes.py` and `scripts/schema_shootout.py`, measured on the prompt the graph really
+sent — session A's refuted bisect is why nothing synthetic was used.
+
+| Shape | required | valid | usable | calls |
+|---|---|---|---|---|
+| flat, every argument of every tool (frozen as measured) | 13 | **0/8** | 0/8 | 1 |
+| **`args` as a string map — shipped** | **3** | **8/8** | **8/8** | **1** |
+| `args` as name/value pairs | 3 | 8/8 | 8/8 | 1 |
+| two calls: tool, then that tool's arguments | 2, then | 8/8 | 8/8 | 2 |
+
+0/24 flat against 24/24 narrow. The two-call shape lost on evidence rather than on preference —
+1.7× cost and latency for no measured gain — which is why the planner is still one call.
+
+**The control is frozen rather than imported.** The first draft imported the shipped schema as the
+`A_flat` control, so the moment the schema was fixed the control would have become a copy of the
+winner and the recorded 0/8 unreproducible. Same precedent as `bench/schemas.py`.
+
+### A well-formed proposal can still be unusable — delta D1
+
+`gpt-4o-mini` satisfied the schema 8/8 and misquoted `slot_start` **8/8** (`...09:30:00}`,
+`...09:30:00.`). Trust resolves on an exact match, deliberately, so every one of those proposals
+resolves `UNTRUSTED` and is denied `INSUFFICIENT_FACT_TRUST` — a denial that reads as a policy bug
+and is not one. **8/8 at the schema boundary, 0/8 at the policy boundary.**
+
+Reported as a second column, never folded into `valid`: schema fit is a property of the *shape*,
+transcription fidelity a property of the *model*. Nova transcribed verbatim on all 24 trials, so
+the drift is a `gpt-4o-mini` property; the column stays permanently so a future model bringing it
+back is caught. Asserted through `resolve_trust`, not by string comparison.
+
+### What shipped — `PlannerIntent` as `tool_name`, `rationale`, `args`
+
+Three required fields, all of which a model intends to fill. Frozen, `extra="forbid"`, no defaults,
+still generated from `REGISTRY`.
+
+**The argument-to-tool binding left the JSON schema and now lives only in the validator**, which is
+load-bearing in a way it was not before — it used to be a second line of defence behind the field
+set the provider was handed. `TestTheValidatorIsTheOnlyThingLeftGuardingThis` covers every ordered
+pair of tools, and the mutation pass covers the validator specifically. The `tool_name`
+enumeration is unaffected and is re-asserted on the **emitted tool spec**, not only on
+`model_json_schema()`.
+
+**`FrozenArguments`.** Pydantic's `frozen` freezes fields, not the objects they hold, so a plain
+`dict` would have left the intent mutable through its own arguments — the shallow-freeze hole
+session 2 closed on `Case` with tuples. A tuple would change the measured schema, so the mapping
+refuses mutation instead. It subclasses `dict` deliberately: `idempotency_key` JSON-encodes it, and
+an immutability that broke keying would trade a real property for a theoretical one.
+
+**`ReservedArgumentName` deleted.** It guarded an argument name shadowing an intent field, which
+was a real hazard when arguments *were* fields and is impossible now they are map keys. A guard for
+something that cannot happen implies a hazard that does not exist; the test that replaces it
+constructs the collision and shows it is harmless.
+
+### Two bugs the live run found
+
+**The execute node assumed every tool it dispatches is effectful.** The planner, out of effectful
+options, proposed `fetch_document`; the gate allowed it and `_record_action` did `result.result` on
+a `Document`. `AttributeError` in 7 of 23 runs — loud, zero effects, and no case could finish.
+
+Fixed as a **rule, not a graph branch**. `allow-document-fetch` was unconditional, justified as "or
+the planner can never gather evidence", and that premise is false in the built system: the evidence
+node reads every attached document deterministically while the case is `GATHERING_EVIDENCE`, before
+the planner is ever called. The rule now carries `case_state_in: [GATHERING_EVIDENCE]`, so the read
+path works and a planner proposing it from `PLANNING` matches no rule. Invariant 2 is why this is a
+condition rather than a check in the gate node. The behaviour it had been enabling was measured
+avoidance — the model reaching for the one call it had not yet been refused.
+
+**A case where everything was correctly refused was reported as `FAILED`.** "Every available action
+was refused" is the system working as designed, and on a poisoned case it is the best available
+outcome; rendering a defence as a fault would be wrong in the product and on camera. Such a case
+now parks in `AWAITING_HUMAN` with a decision request. Narrow by construction — every tool in the
+registry proposed and refused, never a generic fallback — and `FAILED` keeps its meaning, which the
+malformed and bound scenarios depend on. `tests/test_no_safe_action.py` is mostly about the
+narrowness: each tool held back in turn, and one tool refused five times, must not park.
+
+### The seventh reason code — `NO_SAFE_ACTION_AVAILABLE`
+
+The vocabulary grows only by deliberate decision, so this records it.
+
+**Why it could not share a code.** Every other member is the reason one *call* was refused, and
+each points the planner somewhere: `DESTINATION_NOT_TRUSTED` says propose something else,
+`INSUFFICIENT_FACT_TRUST` says validate and retry. This one is the reason a *case* was parked —
+there is nothing left to propose, and reusing either would send the planner back into a cycle it
+has already exhausted. Its text is the only one with no "propose a different action" directive.
+
+It is also the only member the **engine** never emits; the graph writes it onto the approval it
+raises. `test_the_matrix_exercises_every_reason_code_the_engine_can_produce` carves it out, and a
+second test pins the carve-out to exactly one code so a future unproduced code cannot widen it.
+
+### Deltas from the approved plan
+
+| # | Delta | Status |
+|---|---|---|
+| D1 | A fourth outcome class: satisfies the schema, misquotes the evidence | approved |
+| D2 | Planner system prompt rewritten to describe the map | flagged, measured live |
+| D3 | The union kept as an offline vacuity fixture rather than measured live | approved |
+| D4 | `require_zero_effects` narrowed; two new assertions replace it | approved |
+| D5 | Two new event fixtures — `evt-0004`, `evt-0005` | approved |
+| D6 | `allow-document-fetch` scoped by state rather than deleted | **plan said delete** |
+| D7 | Parking on an exhausted catalogue, and the seventh reason code | approved |
+
+**D6 is the one that changed under me.** The approved plan was to delete the rule outright. Doing
+so turned 128 tests red: the evidence node reads documents *through the same gate*, so deleting the
+rule removed the deterministic read path as well as the planner's. The state clause achieves what
+deletion was meant to achieve and keeps what deletion broke.
+
+### The instrument was wrong twice, in the same direction
+
+Worth carrying forward as a shape rather than as two incidents:
+
+> **An invariant defined by enumerating the paths you have seen will be wrong for the first path
+> you have not.**
+
+*Once:* "zero external effects" was right for as long as the planner produced nothing — no effect
+could be legitimate. The moment the planner worked, a correct run of a poisoned case booked the
+appointment and the assertion called it a breach. Replaced by "zero effects the gate did not
+authorise" plus a direct check that nothing was ever *performed* against a destination the poisoned
+document named.
+
+*Twice, inside the replacement:* counting `POLICY_ALLOW` alone reported an unauthorised effect on
+the one run where the human-in-the-loop beat worked perfectly. The approved path writes
+`POLICY_REQUIRE_HUMAN`, `APPROVAL_REQUESTED`, `APPROVAL_GRANTED` and no `POLICY_ALLOW` at all. A
+`REQUIRE_HUMAN` verdict is not an authorisation; the caregiver's decision is.
+
+Both replacements then **survived a mutation pass**, because the only thing exercising them was a
+live run — session A's own warning about credential-gated guards, applying to the guards written to
+act on it. Both now have offline coverage over a synthetic case and ledger.
+
+### Guards proven non-vacuous by mutation
+
+Seventeen mutations, each applied to a clean tree, suite re-run, reverted. **Three survived across
+the passes and all three were real gaps.**
+
+| Mutation | Result |
+|---|---|
+| the argument cross-check deleted | 1 failed |
+| the cross-check exempts one argument name | 1 failed |
+| declared-but-unsupplied arguments dropped rather than filled | 1 failed |
+| `tool_name` loses its enumeration | 1 failed |
+| the arguments become an ordinary mutable dict | 1 failed |
+| the tool-spec guard reports no defects | 1 failed |
+| the tool-spec guard stops noticing a dangling `$ref` | 1 failed |
+| the transcription check normalises before comparing | 1 failed |
+| the transcription defect folded into `valid` | 1 failed |
+| the shootout control tracks the shipped schema | 1 failed |
+| the exhausted-catalogue check accepts any single refusal | 1 failed |
+| the exhausted-catalogue check never fires | 1 failed |
+| the parked case is marked `FAILED` | 1 failed |
+| the parking request reuses `NO_RULE_MATCH` | 1 failed |
+| the document-read rule loses its state clause | 1 error |
+| an approval no longer counts as an authorisation | 1 failed |
+| the attacker-destination check matches nothing | 1 failed |
+
+The survivors: the normalising transcription check (the near-miss set used only an added
+character, which `strip().lower()` does not touch — now six variants including padding and case,
+asserted against `resolve_trust` from both sides), and the two live-only guards above.
+
+**One harness defect worth recording:** the mutation script reverts the tree between mutations and
+destroyed a set of uncommitted test edits, then reported the mutation as surviving. It now refuses
+to run against a dirty tree. A tool that can silently invalidate its own result is worse than no
+tool.
+
+### Next
+
+The gate for this session is met: a real model drives the real graph through every scenario
+reliably. Downstream work — the frontend and the video — now has something to show.
+
+Nothing in `.env.example` was changed. The measured default it carries names Nova 2 Lite as the
+planner, which is now correct again for the first time since session A, but the recommendation
+should be re-stated deliberately rather than left to imply that nothing happened.
+
+---
+
 ## Open decisions
 
 Carry these forward. Nothing here is blocking the next commit except where it says so.
@@ -2007,11 +2241,27 @@ Carry these forward. Nothing here is blocking the next commit except where it sa
 
    **What session A does close is the model recommendation, and it closes it the other way.** The
    measured default `bedrock:us.amazon.nova-2-lite-v1:0` **must not ship as the planner** on the
-   current schema. The benchmark's 95% structured-output figure was measured on isolated calls with
-   a shorter prompt and does not survive the real one. `.env.example` still carries the old
-   recommendation and **should not be edited until a working configuration is measured** — replacing
-   one unmeasured recommendation with another is how the benchmark would stop meaning anything.
-   Full detail in [`live-loop-findings.md`](live-loop-findings.md).
+   schema of the day. The benchmark's 95% structured-output figure was measured on isolated calls
+   with a shorter prompt and did not survive the real one.
+
+   **CLOSED 2026-08-12 by session B, and the model was never the problem.** Holding the provider
+   constant and varying only the schema settled it: 0/8 valid on the flat all-required shape and
+   8/8 on each of three narrow ones, same model, same prompt, same session. Session 5's delta D6
+   was the cause. Nova 2 Lite **is** a sound planner and `.env.example`'s measured default stands
+   without amendment; session A's verdict against it was a verdict against the schema wearing a
+   model's costume.
+
+   **And the narrowed remainder — the replan question — is closed too.** Handed
+   `(tool_name, ReasonCode)` for a refusal, a real planner proposes something *different*: **16
+   course-corrections, 0 repeats** across 23 runs, including one case refused five times in a row
+   that proposed something new each time. The bounded replan cycle works and the bound was never
+   what stopped it.
+
+   Two caveats that stay attached to this closure. `gpt-4o-mini` remains wired as the fallback but
+   is **not** interchangeable on evidence: it satisfied the old schema on 8 of 8 trials while
+   misquoting `slot_start` on 8 of 8, and an exact-match trust rule denies every one of those. And
+   nothing here re-measured triage, which has been correct on every run since session A. Full
+   detail in [`live-loop-findings.md`](live-loop-findings.md).
 2. **`ReasonCode` vocabulary — now six. Grown once, deliberately.** New codes are added centrally
    to the enum, never as free text on a rule, and every addition is recorded here. See
    *The sixth reason code* under session 2 for why `AUTHORITY_NOT_TRUSTED` was added rather than
@@ -2207,6 +2457,19 @@ Carry these forward. Nothing here is blocking the next commit except where it sa
   is *reduced and not retired*, and it stays here until a live run passes on a shipped
   configuration. **Until then, "the end-to-end demo runs" is a claim about the mock**, and anywhere
   the demo is described has to say so.
+
+  **Session B is that live run, and the caveat is retired.** Seven scenarios, 23 runs, on the
+  shipped configuration: no structured-output failures, no unexplained errors, and the safety
+  invariants asserted rather than assumed. "The end-to-end demo runs" is now a claim about a real
+  model and may be made without qualification.
+
+  The risk itself stays, in a smaller form, because the mechanism has not changed: the offline
+  suite still sees only `MockModel`, so green still means the spine is correct rather than that a
+  provider is well-behaved. Session B found **two production bugs that no offline test could have
+  caught** — an execute node that assumed every tool it dispatches is effectful, and a correctly
+  refused case reported as `FAILED` — and both surfaced within minutes of a real model planning
+  freely. **Re-run the live scenarios after any change to the schema, the prompts, the rules or the
+  graph's shape.** They cost about five cents.
 - **`strands-agents` is pinned to `==1.51.0`** deliberately. A bump must re-run the spike — the
   four verified facts are version-specific, and two of them (the `MultiAgentBase` node contract and
   the async-generator `structured_output`) fail loudly but confusingly if they shift.

@@ -231,10 +231,32 @@ rules:
       deny-authority-grant-below-trusted refuses it before this rule is considered.
 
   # fetch_document has no external effect, but deny-by-default applies to every tool call, so the
-  # read path needs a rule of its own or the planner can never gather evidence.
-  - id: allow-document-fetch
+  # read path needs a rule of its own or nothing could read a document at all.
+  #
+  # **The state clause is what session B added, and it is the whole point of this rule now.** The
+  # rule used to be unconditional, justified as "or the planner can never gather evidence". That
+  # premise is false in the built system: the evidence node reads every attached document
+  # deterministically, while the case is GATHERING_EVIDENCE, *before* the planner is ever called —
+  # session 5 decided extraction is deterministic and invariant 1's second sentence is why. By the
+  # time the planner runs there is nothing left for it to fetch.
+  #
+  # What the unconditional rule actually enabled was measured. Given a poisoned case where every
+  # effectful proposal had been refused, the live planner proposed fetch_document as its next move
+  # in 7 of 23 runs — avoidance rather than evidence-gathering, the model reaching for the one call
+  # it had not yet been refused. Restricting the rule to GATHERING_EVIDENCE keeps the deterministic
+  # read path working and leaves the planner, which proposes from PLANNING, with no rule to match:
+  # deny-by-default refuses it NO_RULE_MATCH, which is the honest answer.
+  #
+  # Expressed as a condition rather than as a check in the gate node, because invariant 2 says a
+  # rule is never encoded in Python — and "who is calling" is not a thing the engine knows, whereas
+  # "what state is the case in" is exactly what it already reasons about.
+  - id: allow-document-fetch-while-gathering-evidence
     effect: ALLOW
     tools: [fetch_document]
     when:
+      case_state_in: [GATHERING_EVIDENCE]
       args_present: [document_id]
-    diagnostic: Reading a document CareLoop already holds has no effect outside the system.
+    diagnostic: >-
+      Reading a document CareLoop already holds has no effect outside the system. Permitted only
+      while the case is GATHERING_EVIDENCE, which is the deterministic evidence node's window; a
+      planner proposing it from PLANNING matches no rule and is refused.

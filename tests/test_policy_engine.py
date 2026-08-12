@@ -504,10 +504,26 @@ class TestValueTrustAndTheAutonomousPath:
         decision = engine.evaluate("fetch_document", {"document_id": ""}, _planning())
         assert decision.verdict is Verdict.DENY
 
-    def test_the_read_path_is_allowed(self, engine: PolicyEngine) -> None:
-        decision = engine.evaluate("fetch_document", {"document_id": "doc-1"}, _planning())
+    def test_the_read_path_is_allowed_while_evidence_is_being_gathered(
+        self, engine: PolicyEngine
+    ) -> None:
+        case = make_case(state=CaseState.GATHERING_EVIDENCE)
+        decision = engine.evaluate("fetch_document", {"document_id": "doc-1"}, case)
         assert decision.verdict is Verdict.ALLOW
-        assert decision.matched_rule_id == "allow-document-fetch"
+        assert decision.matched_rule_id == "allow-document-fetch-while-gathering-evidence"
+
+    def test_the_read_path_is_refused_to_the_planner(self, engine: PolicyEngine) -> None:
+        """Session B narrowed the rule to the deterministic evidence node's own window.
+
+        The planner proposes from ``PLANNING``, where no rule permits a read, so deny-by-default
+        refuses it. Measured cause: given a poisoned case with every effectful proposal already
+        refused, a live planner reached for ``fetch_document`` in 7 of 23 runs — avoidance rather
+        than evidence-gathering.
+        """
+        decision = engine.evaluate("fetch_document", {"document_id": "doc-1"}, _planning())
+        assert decision.verdict is Verdict.DENY
+        assert decision.reason_code is ReasonCode.NO_RULE_MATCH
+        assert decision.matched_rule_id is None
 
 
 class TestMatchOrdering:

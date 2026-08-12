@@ -253,7 +253,7 @@ class TestCheckRaisesWithoutLeaking:
         assert raised.value.decision.arg_trust["to"] is TrustLevel.UNTRUSTED
 
     def test_an_allowed_call_returns_its_decision(self) -> None:
-        gate = PolicyGate(Holder(make_case(state=CaseState.EXECUTING)))
+        gate = PolicyGate(Holder(make_case(state=CaseState.GATHERING_EVIDENCE)))
 
         decision = gate.check("fetch_document", {"document_id": "doc-0001-referral"})
 

@@ -31,6 +31,17 @@ working around it.
    `DESTINATION` and `AUTHORITY` never are, whatever the validator says. `TRUSTED` comes only from
    trusted config or a human decision — validation cannot manufacture it. Promotion is **not**
    idempotent. Every stored fact carries `{source_doc, page, trust_level}`.
+
+   **Lowest-wins has one standing consequence, and it has now bitten three times:** trust resolves
+   to the *lowest* level among every fact whose value matches, so **any path that can add a second
+   fact at an existing `(key, value)` can silently downgrade trust.** Nothing raises, the timeline
+   looks correct, and every action depending on that value is denied for a reason no diagnostic
+   explains. Lowest-wins itself is not negotiable — it is what stops a poisoned duplicate being
+   laundered by a legitimate twin. So the rule is about writers: a promotion **replaces** its
+   original rather than appending beside it, a model never emits a fact, and `record_fact` refuses
+   a value the case already holds. Any new writer of `case.facts` has to answer this question
+   before it ships, and the answer belongs in a test that asserts through `resolve_trust` — "a
+   `CONTROLLED` fact exists on the case" passes in both worlds and distinguishes neither.
 4. **`Case` is frozen.** `transition()` is the only writer of `Case.state`. `DONE` is reachable only
    from `VERIFYING`, which makes "did not finish via the unsafe path" structural rather than
    observational.
@@ -98,16 +109,27 @@ reading signatures. Full detail in [`docs/spike-findings.md`](docs/spike-finding
 ```
 careloop/
   agents/      Triage + Planner, their Pydantic output schemas and prompts
-  graph/       GraphBuilder wiring, deterministic nodes, edge conditions
+  graph/       GraphBuilder wiring, deterministic nodes, edge conditions, extraction
   policy/      ReasonCode enum, rules schema, engine, BeforeToolCall hook, rules.yaml
   provenance/  TrustLevel, ArgClass, Fact, promote()
   state/       Case, state machine, CaseStore protocol, SQLite + in-memory stores
-  tools/       Tool registry (owns argument classes), mock executor, idempotency
-  events/      Event simulator and fixtures
+  tools/       Tool registry (owns argument classes), mock executor, idempotency,
+               document sources + fixtures/*.pdf, pdfplumber reader
+  events/      Event simulator and fixtures/*.json
   llm/         Mock model provider; real Bedrock / OpenAI-compatible config
+scripts/       generate_documents.py (renders the fixture PDFs), resume_demo.py
 tests/
 docs/
 ```
+
+**Fixture PDFs are derived, never authored.** `careloop/tools/document_source.py` holds every line
+of every document; `scripts/generate_documents.py` renders it deterministically; a test regenerates
+and compares byte for byte. Editing a PDF directly puts a binary in the repo that nothing can
+reproduce, which is the one thing the arrangement exists to prevent.
+
+**A case leaves `DONE` only through `reopen_case`, and only an inbound event may call it.** No
+graph edge exits `DONE`, and a sweep in `tests/test_reopen.py` fails if any node, agent, tool or
+policy module names the function. The agent can never leave `DONE`; the world can.
 
 **Argument classes belong to the tool registry**, not to `rules.yaml`. Two declaration sites means
 one place to forget a `DESTINATION`. Rules may reference classes; they may never define them, and

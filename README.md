@@ -57,6 +57,35 @@ Each of the two tool-boundary layers is proven sufficient on its own: `tests/tes
 runs the attack with only the hook, then with only the wrapper, then with neither — and the last
 one lands, which is what makes the first two mean something.
 
+## Documents, and what extraction will not do
+
+The fixture documents are **real PDFs** — a clinic referral, appointment instructions, an
+explanation of benefits, a claim rejection, a receipt, and an insurer's continuity notice carrying
+an embedded instruction. They live in `careloop/tools/fixtures/`, and every byte of them is
+generated from text in `careloop/tools/document_source.py` by `scripts/generate_documents.py`, so
+the repo carries no binary a reviewer cannot read. A test regenerates them and compares byte for
+byte, which is what keeps that true.
+
+Text comes out through pdfplumber, one page at a time, and every extracted fact records
+`{source_doc, page, trust_level}`. The timeline says so in as many words:
+
+```
+EVIDENCE_RECORDED  recorded Fact(slot_start, UNTRUSTED, from=referral.pdf) — source: referral.pdf p.2
+FACT_PROMOTED      promoted Fact(slot_start, CONTROLLED, from=referral.pdf)
+```
+
+Extraction is **deterministic**: anchored patterns scoped by document kind, per-kind schema
+validation, and cross-document checks that withhold promotion when documents disagree. No model
+reads a document. Three fields are deliberately **not** extracted, because they cannot be done
+deterministically and pretending otherwise would be worse than admitting it:
+
+- the clinical reason for a referral, as prose;
+- the *intent* of a letter — whether a notice is informational or is asking for something;
+- the identity of a provider from letterhead, rather than from a printed identifier.
+
+Reaching for a model to read any of them would be an architecture change under invariant 1, and
+has to be argued as one rather than slipped in as an improvement to extraction.
+
 ## What verification does and does not prove
 
 `DONE` is reachable only from `VERIFYING`, and verification means one specific thing: **the effect
@@ -68,14 +97,38 @@ It does **not** prove the effect reached a real system, because in this build th
 system — the executor is a mock. Verification closes the loop between decision and execution, not
 between execution and the world. That gap is real and is named here rather than papered over.
 
+## The resume, as a thing you can run
+
+The behaviour the architecture is built around: a case suspended, the process gone, and weeks later
+an external event reopening the **same case** and finishing it. Three separate processes, sharing
+nothing but a SQLite file:
+
+```bash
+python scripts/resume_demo.py --phase 1 --db case.sqlite3 --now 2026-09-04T16:40:00+00:00
+python scripts/resume_demo.py --phase 2 --db case.sqlite3 --now 2026-09-07T09:15:00+00:00
+python scripts/resume_demo.py --phase 3 --db case.sqlite3 --now 2026-09-21T11:02:00+00:00
+python scripts/resume_demo.py --timeline --db case.sqlite3
+```
+
+A referral parks for a caregiver decision and the process exits. On the Monday a new process
+resumes it, sends the approved email, and finishes. A fortnight later a claim rejection arrives
+asking for a payment receipt; the same case reopens, reads three new documents, uploads the
+receipt, and finishes again — with the first email **not** sent a second time, because the durable
+record of what has already happened is on the case rather than in the executor's memory.
+
+**Only the world can reopen a finished case; the agent cannot.** No graph edge leaves `DONE`, and
+a structural sweep fails the build if any node, agent, tool or policy module so much as names
+`reopen_case`. `tests/test_resume.py` runs all three phases as real subprocesses.
+
 ## Status
 
-Sessions 1–6 — the spine runs end to end. A case goes `NEW → DONE` through a bounded Strands
-graph, with the policy gate enforcing at the tool boundary, a caregiver approval parking and
-resuming the case, idempotent replay across a process restart, and a non-converging planner
-terminated by the SDK's own loop bound. Mock tools, mock model, offline tests at $0.
+Sessions 1–7 — the spine runs end to end, on real documents, across real process boundaries. A
+case goes `NEW → DONE` through a bounded Strands graph, with the policy gate enforcing at the tool
+boundary, a caregiver approval parking and resuming the case, idempotent replay across a process
+restart, a non-converging planner terminated by the SDK's own loop bound, and a finished case
+reopened weeks later by an inbound event. Mock tools, mock model, offline tests at $0.
 
-Not yet: frontend, AWS deployment, real document parsing, real email, a CLI.
+Not yet: frontend, AWS deployment, real email, a CLI.
 
 Known and deliberately unfinished:
 

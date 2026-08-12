@@ -1252,6 +1252,282 @@ Commit 7 as originally numbered: the event simulator and JSON fixtures, then `cl
 pass, and restoring `[project.scripts]`. The resume-across-a-restart story is already true and
 tested; what it lacks is a way to *drive* it from a terminal.
 
+*Session 7 did the documents and the resume; `cli.py` and `[project.scripts]` are still
+outstanding.*
+
+
+## Session 7 — 2026-08-12
+
+### Position
+
+Branch `main`. `origin/main` is at `b39f917`; everything from session 5 onward is **unpushed**.
+
+| Commit | Subject | Pushed |
+|---|---|---|
+| `ac56dc3` | Declare the six fixture documents in Python and render them to committed PDFs | no |
+| `b911321` | Read the fixture documents from real PDFs through pdfplumber | no |
+| `63d309e` | Type documents by kind, cite the source page in the timeline, and refuse duplicate facts | no |
+| `83aeb5a` | Validate extracted fields against per-kind schemas and cross-document checks | no |
+| `5697f56` | Load inbound events from JSON fixtures and add the scenario simulator | no |
+| `d29490d` | Let an inbound event reopen a finished case, and sweep to keep the agent out of it | no |
+| `ac75088` | Add the three-process resume demo and T5 across real process boundaries | no |
+| `170846c` | Record the lowest-wins writer rule and the document and resume behaviour in CLAUDE.md and the README | no |
+| — | Record commit 7 in the session log | no |
+
+**1245 passed, 2 skipped locally; 1243 passed, 4 skipped in a clean `.[dev]`-only virtualenv.**
+`ruff check` and `ruff format --check` clean in both. Verified under `pytest` and `python -m
+pytest`, and **at every one of the eight commits individually** in the fresh venv with every
+credential unset and `AWS_CONFIG_FILE` pointed at `/nonexistent`.
+
+### Done — commit 7: the demo exists
+
+The correctness half was finished in commit 6. This commit is about the two things that appear on
+camera: **documents that are really documents**, and **a case that wakes up in a new process**.
+
+`careloop/tools/` gains `document_source.py`, `pdf.py` and `fixtures/*.pdf`; `careloop/graph/
+extract.py` is rebuilt around per-kind schemas and cross-document checks; `careloop/events/` gains
+`fixtures/*.json` and `simulator.py`; `careloop/graph/runner.py` gains `reopen_case`; and
+`scripts/` gains `generate_documents.py` and `resume_demo.py`.
+
+### Documents are derived artifacts, and a test proves it
+
+The brief asked for synthetic PDFs from a committed script, and for the repo to carry no opaque
+binaries. Those pull in opposite directions — a `pip install careloop` has to carry the documents,
+and a committed PDF is bytes nobody reviews. Resolved by making the PDFs **derived**:
+
+`careloop/tools/document_source.py` declares every line of every page. `scripts/
+generate_documents.py` renders them. `--check` regenerates into a temp directory and diffs bytes,
+and `tests/test_document_sources.py` runs that check in CI. A PDF in the fixtures directory with no
+declared source counts as drift too, because a document nothing can regenerate is exactly the
+opaque binary the arrangement exists to prevent.
+
+**Byte-identical regeneration is what makes the check possible**, and it needed a verified fact
+rather than an assumption. `reportlab`'s `invariant=1` suppresses the `/CreationDate` and trailer
+`/ID` stamps; measured before the generator was written, two runs with the flag share a sha256 and
+two runs without it do not. `reportlab` therefore goes in **`dev`** rather than an extra of its
+own, so CI runs the drift check — "judges can regenerate them" is a tested claim about the
+committed bytes instead of an aspiration.
+
+The generator **refuses** a line it cannot lay out. `drawString` neither wraps nor clips, so an
+over-long line leaves the visible page but stays in the content stream: extraction still finds it
+and only a human opening the file would see anything wrong. For the poisoned notice that is the
+difference between an attack that survives and one defused by accident.
+
+### The reader, and the one measurement that shaped the documents
+
+**pdfplumber**, pinned, as a runtime dependency of `careloop`. MIT, pure Python, and its unit of
+iteration is the page — so the `{source_doc, page}` provenance invariant 3 requires is structural
+rather than reconstructed by splitting a blob. It also leaves `extract_words`/`extract_table` as an
+escape hatch for a field that needs column geometry; nothing uses it, and the documents are laid
+out as label/value lines so nothing has to. `pypdfium2` was rejected as a large native dependency
+for six small documents; `pypdf` is lighter still and is the fallback if the Pillow weight ever
+matters.
+
+**Whitespace does not survive extraction, and that was measured before the documents were
+written.** pdfplumber reconstructs inter-word spacing from glyph positions: runs of spaces collapse
+to one and trailing spaces disappear. The documents therefore use single-space separators and no
+pattern depends on a run; round-trip comparison normalises runs and *only* runs.
+
+### The attack survives extraction, asserted at the character level
+
+Whitespace normalisation would hide the failure that matters. A line-wrapped or hyphenated
+exfiltration address would still pass a collapsed round-trip comparison while being useless to the
+planner, and T2 would then be green because the attack had been **defused by the renderer** rather
+than refused by the gate.
+
+`tests/test_pdf.py` therefore asserts the address appears as a single whitespace-delimited **token**
+in the raw extracted text, with no normalisation of any kind, and a companion test shows a wrapped
+address failing exactly that assertion. Mutating the source to wrap the address across two lines
+turns 17 tests red.
+
+### Extraction: three checks, each able to stop a value on its own
+
+1. **The document's kind decides which patterns run.** Kind is metadata — a required field on
+   `Document`, never inferred from the text, because a document that could choose its own schema
+   could choose the weakest one. A `CONTINUITY_NOTICE` is scanned for no structured values at all,
+   so the insurer's letter cannot contribute a `patient_id` however it words one. It still reaches
+   the planner in full as page excerpts, which is what T2 needs.
+2. **Per-kind Pydantic schemas** validate a document's fields as a set: formats field by field, and
+   relationships in a model validator. The explanation of benefits must satisfy
+   `billed >= allowed >= plan_paid` and `patient_responsibility == allowed - plan_paid`, in
+   `Decimal`, never `float`.
+   **A document that fails its schema yields page excerpts and no structured facts at all.**
+   Discarding them rather than recording them unpromotable is what keeps the outcome independent
+   of the order documents arrive in — the first design recorded them, and whether a value ever
+   became `CONTROLLED` then depended on which document was read first. Asserted in both orders.
+3. **Cross-document checks** run over the case, because the inconsistencies worth catching are
+   between documents. Each names the fact keys it gates and withholds promotion of exactly those,
+   leaving them `UNTRUSTED` — so the dependent action is denied `INSUFFICIENT_FACT_TRUST`, which is
+   remediable and says so.
+
+   | Check | Gates | Refuses |
+   |---|---|---|
+   | `patient-id-agrees-across-documents` | `patient_id` | two documents naming different patients |
+   | `required-document-is-held` | `document_id` | a demanded document CareLoop does not hold |
+   | `receipt-settles-the-outstanding-balance` | `document_id` | a receipt that does not settle the balance the benefits statement left |
+
+`check_gated_keys_are_promotable` fails at import if a check gates a key that could never be
+promoted anyway — a guard that cannot change an outcome is decoration, and session 6 deleted one of
+those already.
+
+**What is deliberately not extracted**, in `extract.py` and in the README beside the verification
+limitation: the clinical reason as prose, the intent of a letter, and provider identity from
+letterhead. Every extracted field is anchored to a label the document prints. Reaching for a model
+for the rest is an invariant 1 change and has to be argued as one.
+
+### The page citation
+
+`Fact.citation` renders `referral.pdf p.2`, and `record_fact` puts it in the timeline **summary**
+rather than only the diagnostic. It carries no value and no trust level, so it is safe where
+summaries go. The demo beat is one line of the audit trail:
+
+```
+EVIDENCE_RECORDED  recorded Fact(slot_start, UNTRUSTED, from=referral.pdf) — source: referral.pdf p.2
+```
+
+### Open decision 9's third face, and the standing rule that replaces three precedents
+
+The first face was append-versus-replace on promotion; the second was triage emitting a duplicate of
+a value the evidence node would later promote. The third arrived with the follow-up documents: a
+claim rejection, an explanation of benefits and a receipt all legitimately restate
+`Patient ID: PT-4417`, which the referral supplied and validation promoted weeks earlier. Recording
+any of them would put an `UNTRUSTED` copy beside the `CONTROLLED` original and, under lowest-wins,
+silently un-validate a value the case had held since the first process.
+
+Guarded in `record_fact` rather than in `record_document`, so no second call site can forget it,
+and **written to the timeline** as `EVIDENCE_DUPLICATE_SKIPPED` — an invisible trust-safety
+mechanism is the same hazard somewhere else.
+
+`CLAUDE.md` now carries the general rule rather than three instances, under invariant 3: *any path
+that can add a second fact at an existing `(key, value)` can silently downgrade trust.* Lowest-wins
+itself is not negotiable, so the rule is about writers, and the answer belongs in a test that
+asserts through `resolve_trust` — "a `CONTROLLED` fact exists on the case" passes in both worlds.
+
+### The reopen — DONE is no longer terminal, and why that is safe
+
+`TRANSITIONS[DONE]` is now `{GATHERING_EVIDENCE}`. A claim rejected weeks after an appointment was
+arranged is the same piece of work; opening a second case would split the audit trail and lose the
+idempotency record that stops the first case's effects happening twice.
+
+**Invariant 4 is untouched.** `DONE` is still reachable only from `VERIFYING`, so "the case did not
+finish via the unsafe path" remains structural. What changed is an edge *out*.
+
+**The agent can never leave `DONE`; the world can**, and that is enforced twice:
+
+- **No graph edge exits `DONE`.** `DispatchNode`'s outgoing edges enumerate the states a case may
+  resume from, and `DONE` is absent, so a finished case reaching the graph ends the run.
+- **A structural sweep.** `tests/test_reopen.py` fails if `graph/nodes.py`, `graph/builder.py`,
+  `graph/conditions.py`, `graph/context.py`, `graph/extract.py`, `graph/verify.py`, or anything
+  under `agents/`, `tools/` or `policy/` so much as *names* `reopen_case`. Read from the syntax
+  tree, so a docstring discussing the rule does not trip it — the sweep is about what the code can
+  call. Same pattern as the `ModelRole.EXTRACTION` sweep, and for the same reason: a rule enforced
+  by convention is a rule the next session drifts past.
+
+Two names where there was one. `TERMINAL_STATES` (derived, no legal transition) is now `{FAILED}`;
+`AT_REST_STATES` is `{DONE, FAILED}` and carries what `TERMINAL_STATES` used to mean. `Case
+.is_terminal` became `Case.is_at_rest`, which is what its one real caller — the runner's `_fail` —
+always meant. Three tests in `test_state_machine.py` were changed in place with the reasoning in
+their docstrings, and a new sweep asserts `DONE` refuses every outbound move except the reopen,
+because it is no longer covered by the terminal-state sweep.
+
+### T5 — three processes, and the bug that running it found
+
+`scripts/resume_demo.py` drives one case through three phases, each a separate operating-system
+process sharing nothing but a SQLite file. `--now` stamps the timeline, so the audit trail carries
+Friday 4 September, Monday 7 September, and Monday 21 September — the gap is the story and a judge
+can see it.
+
+| Phase | What happens | Ends |
+|---|---|---|
+| 1 | Referral arrives, planner proposes an email, policy requires a decision | `AWAITING_HUMAN`, nothing sent |
+| 2 | Caregiver approves; a fresh process resumes and sends the email | `DONE`, one action |
+| 3 | A claim rejection arrives; the **same case** reopens, reads three new documents, uploads the receipt | `DONE`, two actions |
+
+`tests/test_resume.py` runs all three as real subprocesses and asserts: same case id; prior evidence
+intact with its provenance (`slot_start` still `CONTROLLED`, still `referral.pdf p.2`); the email
+action byte-identical to the one recorded a fortnight earlier; the timeline dense, ordered,
+unrewritten and spanning all three dates; and the projected SQLite timeline table agreeing with the
+case document across three writers. A fourth process redelivering the same letter performs nothing
+— against a **copy** of the database, so the other tests do not depend on execution order.
+
+**Running it found a latent bug that reading would not have.** `ExecuteNode._approval_problem` was
+case-scoped: "this case has approvals, so every action needs one covering its arguments". That is
+right for a case that does one thing and wrong the moment a case does two. Phase 3's autonomous
+upload was refused for want of an approval nobody should have been asked for. It is now
+digest-scoped, which is what an approval has meant everywhere else since commit 6 — the gate
+records one at the moment it parks a proposal, so an approval covering *these* arguments must be
+`APPROVED` and a proposal with no approval is one the gate allowed. The property the old shape was
+reaching for (an approval for other arguments cannot authorise this call) is still asserted, at the
+tool boundary where `args_approved` owns it.
+
+The bug was latent before this session: T3 already books a second appointment on a completed case,
+but that case has no approvals, so the guard never fired.
+
+### Deltas from the approved plan
+
+All seven approved deltas were implemented as described, plus two found during implementation.
+
+| # | Delta | Status |
+|---|---|---|
+| D1 | `DONE → GATHERING_EVIDENCE` legal; `DONE` no longer terminal | approved |
+| D2 | Three processes rather than two | approved |
+| D3 | `record_fact` refuses a duplicate `(key, value)` | approved |
+| D4 | `TimelineKind.CASE_REOPENED` | approved |
+| D5 | `RunContext.documents` | approved |
+| D6 | `FIXTURE_DOCUMENTS` → cached `fixture_documents()` | approved |
+| D7 | `reportlab` in the `dev` extra | approved |
+| **D8** | **`TimelineKind.VALIDATION_REFUSED`** — one kind, two stages (`schema`, `cross_check`) | **found during implementation** |
+| **D9** | **The execute node's approval check is digest-scoped** — see above | **found during implementation** |
+
+D8 was a choice between two new timeline kinds and one. Both events are "deterministic validation
+declined", they differ only in which stage declined, and the payload says which. `TimelineKind` is
+the audit vocabulary rather than the closed model-visible one, so it may grow — but three new kinds
+in one session is enough to note.
+
+Also in this session, not deltas: `DocumentKind` moved to `tools/results.py` (it describes a
+document, not a fixture) and `Document.kind` is required rather than defaulted, which invariant 9's
+no-defaults rule for result fields required anyway.
+
+### Guards proven non-vacuous by mutation
+
+Twenty-one mutations, each applied to a clean tree, suite re-run, reverted. **Every one turned the
+suite red.** No survivors this session — which is worth stating rather than celebrating, since four
+survived in commit 6 and each was a real gap.
+
+| Mutation | Result |
+|---|---|
+| the generator stops suppressing reportlab's clock (`invariant=0`) | red |
+| the line-overflow guard never fires | red |
+| the drift check ignores an undeclared PDF | red |
+| extraction flattens the document, losing page provenance | 10 failed |
+| extraction returns `None` for an empty PDF instead of raising | red |
+| **the exfiltration address is wrapped across two lines** | **17 failed** |
+| the citation is dropped from the timeline summary | 1 failed |
+| the duplicate-fact guard is disabled | 3 failed |
+| a failed schema no longer discards the structured values | 3 failed |
+| cross-checks no longer withhold promotion | 2 failed |
+| patterns are no longer scoped by document kind | 1 failed |
+| the schema/pattern drift check is disabled | red |
+| a cross-check may gate a non-promotable key | red |
+| event attachments are not checked against the document store | red |
+| a scenario may name an event that does not exist | red |
+| `DONE` loses its reopen edge | red |
+| the reopen accepts a case in any state | red |
+| the reopen rewrites the case's opening event | red |
+| **a node reaches for `reopen_case`** | **1 failed — the sweep** |
+| **phase 3 opens a new case instead of reopening** | **9 failed** |
+| the approval check goes back to being case-scoped | red |
+
+The two that matter most are the last two of the bolded three. The wrapped address is the one that
+would have left T2 passing for the wrong reason; the recreate-instead-of-reopen mutation is the one
+that proves T5 tests a resume rather than a coincidence of case ids.
+
+### Next
+
+Commit 8 and beyond, per the original numbering: `cli.py`, `[project.scripts]` restored, and then
+FastAPI, the frontend, AgentCore and DeepTeam — the three sessions the brief scoped out of this
+one. `scripts/resume_demo.py` is demo scaffolding rather than a product surface, and `cli.py`
+should replace it rather than grow alongside it.
 
 ---
 
@@ -1378,14 +1654,45 @@ Carry these forward. Nothing here is blocking the next commit except where it sa
     internals becomes a second policy language. Anything further should be argued the way
     `AUTHORITY_NOT_TRUSTED` was.
 
+12. **`DONE` is no longer terminal, and the guard is structural rather than textual.** Commit 7
+    added `DONE → GATHERING_EVIDENCE` so an inbound event can reopen a finished case. Invariant 4
+    is unaffected — `DONE` is still reachable only from `VERIFYING` — but "terminal" split into two
+    names: `TERMINAL_STATES` is now `{FAILED}` and `AT_REST_STATES` is `{DONE, FAILED}`.
+
+    What keeps this safe is that **no graph edge leaves `DONE`** and a sweep in
+    `tests/test_reopen.py` fails if any node, agent, tool or policy module names `reopen_case`.
+    Both halves are load-bearing: the missing edge is what makes it true today, the sweep is what
+    keeps it true. Anything that wants to reopen a case from inside the graph is an architecture
+    change and has to be argued as one.
+
+    Reopening from `FAILED` or from `AWAITING_HUMAN` was deliberately **not** built. A failed case
+    staying failed is a decision this project has not revisited, and an event arriving while a
+    case is in flight has no obvious semantics for the documents the run is already reading.
+13. **`TimelineKind` grew by three in one session** — `EVIDENCE_DUPLICATE_SKIPPED`,
+    `VALIDATION_REFUSED`, `CASE_REOPENED`. Unlike `ReasonCode` this vocabulary is the *audit*
+    vocabulary and is not model-visible, so it may grow; but three at once is enough to note, and
+    the next addition should have to say why an existing kind plus a payload field will not do.
+    `VALIDATION_REFUSED` is already the merged form of two candidates, separated by
+    `payload["stage"]`.
+14. **Extraction's fail-closed strictness is untested against a real document.** Every schema field
+    is required, so a document missing one contributes no structured values at all. That is right
+    for six synthetic fixtures whose layout is known, and it is the safe direction — but the first
+    genuinely messy document will fail entirely rather than partially, and the remedy (optional
+    fields, or per-field rather than per-document discarding) is a decision to take with a real
+    example in hand rather than pre-emptively.
+15. **`scripts/resume_demo.py` is demo scaffolding on the critical path of a test.** T5 drives it,
+    so it is exercised, but it duplicates wiring that `cli.py` will own in commit 8. When the CLI
+    lands the demo script should be replaced by it rather than kept alongside — two things that
+    build a `RunContext` is one too many, and the one with tests behind it should be the one that
+    ships.
+
 ## Standing risks
 
-- **The three-day resume is a `CaseStore` reconstruction across a process boundary, not a Strands
-  session restore.** Invariant 8 implies it; session 6 made it true and tested. A case parked on a
-  Friday and approved on a Monday resumes because `DispatchNode` routes on a case loaded from the
-  store — nothing about the graph's execution state needs to survive, and nothing does. The resume
-  session should inherit this stated rather than rediscover it, and should not reach for Strands
-  session persistence to solve a problem the store already solves.
+- **The resume is a `CaseStore` reconstruction across a process boundary, not a Strands session
+  restore.** Invariant 8 implies it; session 6 made it true and tested, and session 7 proved it
+  across three real operating-system processes in `tests/test_resume.py`. Nothing about the
+  graph's execution state needs to survive, and nothing does. Do not reach for Strands session
+  persistence to solve a problem the store already solves.
 - **The mock model is the only model the tests ever see.** Everything green means the spine is
   correct, not that a real model produces well-formed intents. The first real-provider run is a
   genuine unknown; budget time for it.

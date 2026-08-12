@@ -249,9 +249,49 @@ class TestAWellFormedProposalCanStillBeUnusable:
         proposal = normalise("book_appointment", {"slot_start": "2026-09-03T09:30:00"})
         assert transcription_defects(proposal, evidence_facts(user)) == []
 
-    def test_a_stray_character_is_a_defect(self):
+    @pytest.mark.parametrize(
+        "supplied",
+        [
+            "2026-09-03T09:30:00.",
+            "2026-09-03T09:30:00}",
+            " 2026-09-03T09:30:00",
+            "2026-09-03T09:30:00 ",
+            "2026-09-03t09:30:00",
+            "2026-09-03T09:30",
+        ],
+        ids=["trailing-stop", "trailing-brace", "leading-space", "trailing-space", "case", "short"],
+    )
+    def test_every_near_miss_is_a_defect(self, supplied):
+        """The same six-variant discipline session 2 used on trust resolution itself.
+
+        Two of these — the padded ones and the case-changed one — are the difference between an
+        exact comparison and a normalising one, and a check that normalised would call them
+        faithful while the policy engine denied them. The first version of this test used only a
+        stray trailing character, which ``strip().lower()`` does not touch, so the mutation
+        survived; that is what this parametrisation is for.
+        """
         _, user = captured_prompt()
-        proposal = normalise("book_appointment", {"slot_start": "2026-09-03T09:30:00."})
+        proposal = normalise("book_appointment", {"slot_start": supplied})
+        assert transcription_defects(proposal, evidence_facts(user)) == ["slot_start"]
+
+    @pytest.mark.parametrize(
+        "supplied",
+        [" 2026-09-03T09:30:00", "2026-09-03T09:30:00 ", "2026-09-03t09:30:00"],
+        ids=["leading-space", "trailing-space", "case"],
+    )
+    def test_a_near_miss_the_engine_refuses_is_a_near_miss_here_too(self, supplied):
+        """Both sides of the comparison, so the two cannot drift into disagreeing.
+
+        If ``transcription_defects`` ever normalised, this asserts the engine still would not —
+        and therefore that the instrument would be lying about what the gate will do.
+        """
+        _, user = captured_prompt()
+        facts = evidence_facts(user)
+        case = make_case(
+            facts=(make_fact("slot_start", facts["slot_start"], TrustLevel.CONTROLLED),)
+        )
+        assert resolve_trust(supplied, case) is TrustLevel.UNTRUSTED
+        proposal = normalise("book_appointment", {"slot_start": supplied})
         assert transcription_defects(proposal, evidence_facts(user)) == ["slot_start"]
 
     def test_the_defect_is_exactly_what_the_policy_engine_would_refuse(self):

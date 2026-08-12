@@ -1,0 +1,10 @@
+{
+  "event_id": "evt-0003-claim-rejection",
+  "subject": "Claim CLM-2026-44718 has been rejected",
+  "body": "MediGuard Health have rejected the claim for Enid Marlowe's cardiology appointment.\nTheir decision notice and the explanation of benefits are attached, together with the receipt for the amount shown as patient responsibility.\nThe rejection asks for that receipt to be supplied before the claim can be settled.\n",
+  "document_ids": [
+    "doc-0006-claim-rejection",
+    "doc-0004-eob",
+    "doc-0005-receipt"
+  ]
+}

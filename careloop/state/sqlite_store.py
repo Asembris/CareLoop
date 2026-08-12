@@ -7,13 +7,32 @@ every case — which is what resume and timeline inspection will want.
 
 Compare-and-set is a conditional ``UPDATE ... WHERE version = ?`` inside a transaction, so a losing
 writer is rejected by the database rather than by a check-then-act race in Python.
+
+**One connection, shared across threads, serialised by a lock.** ``sqlite3`` refuses a connection
+used from a thread other than the one that created it unless told otherwise, and a served CareLoop
+crosses threads constantly: Starlette runs synchronous route handlers in a worker pool, so
+``GET /api/cases`` reaches the store from a different thread than the one that built it. Session C
+found that by running the thing rather than by reading it — every test until then drove the API
+over the in-memory store and SQLite from a single thread, so the combination that a deployment
+actually uses had never been exercised.
+
+``check_same_thread=False`` alone would not be enough and would be worse than the crash: the writes
+here are explicit ``BEGIN IMMEDIATE`` ... ``COMMIT`` sequences, and two of those interleaving on one
+connection would commit half of each. The lock is therefore load-bearing rather than defensive, and
+it wraps whole operations rather than statements. It does not replace the conditional update — the
+database is still what rejects a losing writer, which is what keeps the guarantee true for a second
+process the lock knows nothing about.
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
+import threading
+from collections.abc import Callable
+from functools import wraps
 from pathlib import Path
+from typing import cast
 
 from careloop.state.case import Case, CaseState, TimelineEvent
 from careloop.state.store import CaseAlreadyExists, CaseNotFound, VersionConflict
@@ -47,12 +66,32 @@ CREATE INDEX IF NOT EXISTS idx_timeline_kind ON timeline (case_id, kind);
 """
 
 
+def serialised[M: Callable[..., object]](method: M) -> M:
+    """Run ``method`` holding the store's lock.
+
+    Applied to every method of the protocol rather than to the writes alone. A read that ran
+    between a write's ``BEGIN IMMEDIATE`` and its ``COMMIT`` would see a case mid-transaction, and
+    "the store is the single source of truth" would stop being true for whoever got that answer.
+
+    ``tests/test_store.py::TestEveryStoreMethodIsSerialised`` asserts the decorator is on all of
+    them, so a method added later cannot quietly be the one that is not.
+    """
+
+    @wraps(method)
+    def guarded(self: SqliteCaseStore, *args: object, **kwargs: object) -> object:
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return cast(M, guarded)
+
+
 class SqliteCaseStore:
     """A :class:`~careloop.state.store.CaseStore` backed by SQLite."""
 
     def __init__(self, path: str | Path = ":memory:") -> None:
         self._path = str(path)
-        self._conn = sqlite3.connect(self._path, isolation_level=None)
+        self._lock = threading.RLock()
+        self._conn = sqlite3.connect(self._path, isolation_level=None, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
         if self._path != ":memory:":
@@ -62,6 +101,7 @@ class SqliteCaseStore:
 
     # -- reads ---------------------------------------------------------------
 
+    @serialised
     def get(self, case_id: str) -> Case:
         """Load a case by id."""
         row = self._conn.execute(
@@ -71,6 +111,7 @@ class SqliteCaseStore:
             raise CaseNotFound(case_id)
         return Case.model_validate_json(row["document"])
 
+    @serialised
     def list_by_state(self, state: CaseState) -> list[Case]:
         """Return all cases in ``state``, oldest first."""
         rows = self._conn.execute(
@@ -79,6 +120,7 @@ class SqliteCaseStore:
         ).fetchall()
         return [Case.model_validate_json(row["document"]) for row in rows]
 
+    @serialised
     def timeline(self, case_id: str) -> list[TimelineEvent]:
         """Return the projected timeline rows for a case, in sequence order."""
         rows = self._conn.execute(
@@ -103,6 +145,7 @@ class SqliteCaseStore:
 
     # -- writes --------------------------------------------------------------
 
+    @serialised
     def create(self, case: Case) -> Case:
         """Persist a new case."""
         try:
@@ -129,6 +172,7 @@ class SqliteCaseStore:
         self._conn.execute("COMMIT")
         return case
 
+    @serialised
     def save(self, case: Case, *, expected_version: int) -> Case:
         """Persist a changed case, guarded by ``expected_version``."""
         self._conn.execute("BEGIN IMMEDIATE")
@@ -174,6 +218,7 @@ class SqliteCaseStore:
         self._conn.execute("COMMIT")
         return case
 
+    @serialised
     def clear(self) -> int:
         """Delete every case and its timeline. See :meth:`~careloop.state.store.CaseStore.clear`.
 
@@ -190,6 +235,7 @@ class SqliteCaseStore:
         self._conn.execute("COMMIT")
         return removed
 
+    @serialised
     def close(self) -> None:
         """Close the underlying connection."""
         self._conn.close()

@@ -7,6 +7,9 @@ for as long as it behaves identically.
 
 from __future__ import annotations
 
+import threading
+from typing import ClassVar
+
 import pytest
 
 from careloop.state import (
@@ -162,6 +165,107 @@ def test_clear_leaves_no_timeline_behind(store: CaseStore, new_case: Case) -> No
 
     store.create(new_case)
     assert store.timeline(new_case.case_id) == []
+
+
+class TestTheStoreCrossesThreads:
+    """A served CareLoop reaches the store from a worker thread, and SQLite minds.
+
+    Found in session C by running a real server rather than by reading the code: Starlette runs
+    synchronous route handlers in a thread pool, so ``GET /api/cases`` arrives on a different thread
+    from the one that opened the connection, and ``sqlite3`` refused it with a 500. Every test until
+    then drove the API over the in-memory store and SQLite from one thread, so the combination a
+    deployment actually uses had never been exercised — which is why these are here rather than a
+    line in the docstring.
+    """
+
+    @staticmethod
+    def _in_a_thread(work):
+        outcome: list[object] = []
+
+        def run() -> None:
+            try:
+                outcome.append(work())
+            except BaseException as failure:
+                outcome.append(failure)
+
+        thread = threading.Thread(target=run)
+        thread.start()
+        thread.join(timeout=10)
+        assert outcome, "the worker thread produced nothing"
+        if isinstance(outcome[0], BaseException):
+            raise outcome[0]
+        return outcome[0]
+
+    def test_a_case_written_on_one_thread_reads_back_on_another(
+        self, store: CaseStore, new_case: Case
+    ) -> None:
+        store.create(new_case)
+        loaded = self._in_a_thread(lambda: store.get(new_case.case_id))
+        assert loaded.case_id == new_case.case_id
+
+    def test_a_case_written_on_another_thread_reads_back_here(
+        self, store: CaseStore, new_case: Case
+    ) -> None:
+        self._in_a_thread(lambda: store.create(new_case))
+        assert store.get(new_case.case_id).case_id == new_case.case_id
+
+    def test_every_read_survives_the_crossing(self, store: CaseStore, new_case: Case) -> None:
+        """The route handlers that broke were the list and the timeline, not only ``get``."""
+        store.create(new_case)
+        store.save(
+            transition(new_case, CaseState.GATHERING_EVIDENCE, reason="ingested", actor="system"),
+            expected_version=0,
+        )
+
+        assert (
+            self._in_a_thread(lambda: len(store.list_by_state(CaseState.GATHERING_EVIDENCE))) == 1
+        )
+        assert self._in_a_thread(lambda: len(store.timeline(new_case.case_id))) == 1
+
+
+class TestEveryStoreMethodIsSerialised:
+    """The lock is not optional on any of them, and a new method must not be the exception.
+
+    The writes are explicit ``BEGIN IMMEDIATE`` … ``COMMIT`` sequences on one connection: two of
+    them interleaving would commit half of each, which is worse than the crash that
+    ``check_same_thread`` was giving. Asserted on the decorator rather than by racing threads,
+    because a race that happens to pass is not evidence.
+    """
+
+    METHODS: ClassVar[tuple[str, ...]] = (
+        "get",
+        "list_by_state",
+        "timeline",
+        "create",
+        "save",
+        "clear",
+        "close",
+    )
+
+    def test_the_list_covers_the_protocol(self) -> None:
+        """Vacuity: a method missing from this list is a method the sweep never looks at."""
+        protocol_methods = {
+            name
+            for name in dir(CaseStore)
+            if not name.startswith("_") and callable(getattr(CaseStore, name))
+        }
+        assert protocol_methods == set(self.METHODS)
+
+    def test_every_one_of_them_holds_the_lock(self) -> None:
+        unguarded = [
+            name
+            for name in self.METHODS
+            if not hasattr(getattr(SqliteCaseStore, name), "__wrapped__")
+        ]
+        assert unguarded == []
+
+    def test_the_detector_notices_an_undecorated_method(self) -> None:
+        """Vacuity: ``__wrapped__`` is the decorator's fingerprint, so a plain method has none."""
+
+        class Undecorated:
+            def get(self) -> None: ...
+
+        assert not hasattr(Undecorated.get, "__wrapped__")
 
 
 def test_sqlite_persists_across_connections(tmp_path, new_case: Case) -> None:

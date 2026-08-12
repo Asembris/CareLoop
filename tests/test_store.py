@@ -123,6 +123,47 @@ def test_facts_and_provenance_survive_a_round_trip(
     assert loaded.facts[0].trust_level is untrusted_fact.trust_level
 
 
+def test_clear_removes_every_case_and_reports_how_many(store: CaseStore, new_case: Case) -> None:
+    """The demo reset's one primitive. See ``CaseStore.clear`` for who may call it."""
+    store.create(new_case)
+    store.create(new_case.model_copy(update={"case_id": "case-0002"}))
+
+    assert store.clear() == 2
+
+    for case_id in (new_case.case_id, "case-0002"):
+        with pytest.raises(CaseNotFound):
+            store.get(case_id)
+    assert store.list_by_state(new_case.state) == []
+
+
+def test_clear_on_an_empty_store_removes_nothing(store: CaseStore) -> None:
+    """Pressing reset twice is not an error; it is the same known state twice."""
+    assert store.clear() == 0
+
+
+def test_a_cleared_store_accepts_the_same_case_id_again(store: CaseStore, new_case: Case) -> None:
+    """What the demo needs: press a scenario, reset, press it again."""
+    store.create(new_case)
+    store.clear()
+    assert store.create(new_case).case_id == new_case.case_id
+
+
+def test_clear_leaves_no_timeline_behind(store: CaseStore, new_case: Case) -> None:
+    """The case and its timeline are one fact, and half of it is worse than none of it."""
+    store.create(new_case)
+    store.save(
+        transition(new_case, CaseState.GATHERING_EVIDENCE, reason="ingested", actor="system"),
+        expected_version=0,
+    )
+    store.clear()
+
+    with pytest.raises(CaseNotFound):
+        store.timeline(new_case.case_id)
+
+    store.create(new_case)
+    assert store.timeline(new_case.case_id) == []
+
+
 def test_sqlite_persists_across_connections(tmp_path, new_case: Case) -> None:
     """The durability claim, checked against a real file rather than a live object."""
     path = tmp_path / "careloop.sqlite3"

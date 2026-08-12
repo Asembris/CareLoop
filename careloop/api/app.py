@@ -14,7 +14,15 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, status
 
-from careloop.api.deps import ApiDeps, Caregiver, ContextFactory, Deps, sections_from
+from careloop.api.demo import DEMO_SCENARIOS
+from careloop.api.deps import (
+    ApiDeps,
+    Caregiver,
+    ContextFactory,
+    Deps,
+    clinic_context_factory,
+    sections_from,
+)
 from careloop.api.models import CaseDetail, CaseSections, DeliverEventRequest, RunView
 from careloop.api.projections import SECTIONS, case_detail, case_sections, run_view
 from careloop.api.runs import RunAlreadyInFlight, UnknownRun
@@ -34,6 +42,7 @@ from careloop.graph.runner import (
 from careloop.state.case import Case
 from careloop.state.machine import IllegalTransition
 from careloop.state.store import CaseNotFound, CaseStore
+from careloop.tools.clinic import ClinicClient
 
 API_PREFIX = "/api"
 
@@ -57,16 +66,28 @@ def create_app(
     *,
     events: EventSimulator | None = None,
     context_factory: ContextFactory | None = None,
+    clinic: ClinicClient | None = None,
+    demo: bool = False,
 ) -> FastAPI:
     """Build the app over a store.
 
     Everything the routes need arrives here. Nothing is read from module scope and nothing is
     constructed lazily on first request, so two apps in one process cannot share a store neither of
     them was given.
+
+    ``clinic`` binds every run to a real external clinic — its bookings are performed over HTTP and
+    verified by reading the clinic back. Composition, not decision: the routes are identical either
+    way, exactly as they are identical whether the model is the mock or Nova.
+
+    ``demo`` mounts the control surface under ``/api/demo``. **Off by default and explicit**: the
+    reset it exposes deletes every case, which is right in front of a judge and wrong everywhere
+    else. An app built without it does not have the routes at all rather than having them refuse.
     """
-    bound = ApiDeps(store=store, events=events or EventSimulator())
+    bound = ApiDeps(store=store, events=events or EventSimulator(), clinic=clinic, demo=demo)
     if context_factory is not None:
         bound.context_factory = context_factory
+    elif clinic is not None:
+        bound.context_factory = clinic_context_factory(clinic)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -123,21 +144,7 @@ def create_app(
         Returns 202 with a run id. ``?wait=<seconds>`` blocks until the run settles, which is what
         a test uses instead of polling; the run is not cancelled if the wait expires.
         """
-        inbound = load_event(deps.events, body.event_id)
-
-        try:
-            deps.store.get(body.case_id)
-        except CaseNotFound:
-            open_case(deps.store, inbound, case_id=body.case_id)
-        else:
-            try:
-                reopen_case(deps.store, inbound, case_id=body.case_id)
-            except CaseNotReopenable as refusal:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT, detail=str(refusal)
-                ) from None
-
-        return await schedule(deps, body.case_id, inbound, wait=wait)
+        return await deliver(deps, body.case_id, body.event_id, wait=wait)
 
     @app.post(
         f"{API_PREFIX}/cases/{{case_id}}/decisions/{{approval_id}}/approve",
@@ -191,7 +198,68 @@ def create_app(
             ) from None
         return run_view(await deps.runs.wait(run_id, wait))
 
+    if demo:
+        mount_demo(app)
     return app
+
+
+# -- the demo control surface -----------------------------------------------------------------
+
+
+def mount_demo(app: FastAPI) -> None:
+    """Add ``/api/demo`` to ``app``: reset the world, and press one of three scenarios.
+
+    **Both routes run the normal path underneath.** The scenario route calls the same
+    :func:`deliver` that ``POST /api/events`` calls, with a case id and an event id off a table —
+    so a demo case is produced by the same code, the same graph and the same gate as one a browser
+    delivered, and ``tests/test_api_demo.py`` asserts the two are indistinguishable. There is no
+    video-only branch, because a demo that does something the real flow does not is a demo that
+    lies.
+    """
+
+    @app.post(f"{API_PREFIX}/demo/reset")
+    async def reset(deps: Deps) -> dict[str, object]:
+        """Clear every case, and put the external clinic back to its seeded world.
+
+        Not a response model, for the reason ``/api/health`` is not: it projects no stored case, so
+        there is no stored field for a response field to name as its source.
+
+        **Refused while any run is in flight.** Clearing the store underneath a live graph is a
+        version conflict wearing a costume, and the run would keep going against a store nobody is
+        reading. Waiting a second and pressing again is the whole remedy.
+        """
+        if (running := deps.runs.any_in_flight()) is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"run {running.run_id} is in flight for case {running.case_id!r}; reset once "
+                    f"it settles"
+                ),
+            )
+
+        removed = deps.store.clear()
+        if deps.clinic is not None:
+            deps.clinic.reset()
+        return {
+            "cases_cleared": removed,
+            "clinic_reset": deps.clinic is not None,
+            "scenarios": sorted(DEMO_SCENARIOS),
+        }
+
+    @app.post(
+        f"{API_PREFIX}/demo/scenarios/{{key}}",
+        response_model=RunView,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def run_scenario(key: str, deps: Deps, wait: float = 0.0) -> RunView:
+        """Seed and trigger one scenario, through the ordinary delivery path."""
+        scenario = DEMO_SCENARIOS.get(key)
+        if scenario is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"no demo scenario {key!r}; known: {', '.join(sorted(DEMO_SCENARIOS))}",
+            )
+        return await deliver(deps, scenario.case_id, scenario.event_id, wait=wait)
 
 
 def load_event(events: EventSimulator, event_id: str) -> InboundEvent:
@@ -256,6 +324,29 @@ async def decide(
     return await schedule(deps, case_id, inbound, wait=wait)
 
 
+async def deliver(deps: ApiDeps, case_id: str, event_id: str, *, wait: float) -> RunView:
+    """Deliver an inbound event to a case and start a run. The one delivery path.
+
+    Extracted from the ``POST /api/events`` handler so the demo control surface can press exactly
+    this and nothing beside it. Whether the case is opened or reopened is read off the store rather
+    than decided here, and whether a reopen is allowed at all belongs to
+    :func:`careloop.graph.runner.reopen_case`.
+    """
+    inbound = load_event(deps.events, event_id)
+
+    try:
+        deps.store.get(case_id)
+    except CaseNotFound:
+        open_case(deps.store, inbound, case_id=case_id)
+    else:
+        try:
+            reopen_case(deps.store, inbound, case_id=case_id)
+        except CaseNotReopenable as refusal:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(refusal)) from None
+
+    return await schedule(deps, case_id, inbound, wait=wait)
+
+
 async def schedule(deps: ApiDeps, case_id: str, inbound: InboundEvent, *, wait: float) -> RunView:
     """Start a graph run for ``case_id`` and report where it got to.
 
@@ -277,8 +368,10 @@ __all__ = [
     "API_PREFIX",
     "create_app",
     "decide",
+    "deliver",
     "load_case",
     "load_event",
+    "mount_demo",
     "resume_event",
     "schedule",
 ]

@@ -102,6 +102,17 @@ class RunRegistry:
                 return record
         return None
 
+    def any_in_flight(self) -> RunRecord | None:
+        """Any unsettled run, whatever case it belongs to.
+
+        The case-agnostic counterpart of :meth:`in_flight_for`, and it has exactly one caller: the
+        demo reset, which is about to delete every case rather than one.
+        """
+        for record in self._records.values():
+            if record.state is RunState.RUNNING:
+                return record
+        return None
+
     def get(self, run_id: str) -> RunRecord:
         """One run.
 

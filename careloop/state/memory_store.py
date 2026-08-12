@@ -60,6 +60,13 @@ class InMemoryCaseStore:
         self._versions[case.case_id] = case.version
         return case
 
+    def clear(self) -> int:
+        """Delete every case. See :meth:`careloop.state.store.CaseStore.clear` for who may."""
+        removed = len(self._cases)
+        self._cases = {}
+        self._versions = {}
+        return removed
+
     def close(self) -> None:
         """No-op; present for interface parity."""
         return

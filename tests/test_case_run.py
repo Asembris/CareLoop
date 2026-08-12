@@ -37,6 +37,7 @@ from careloop.llm.mock import mock_model
 from careloop.policy.verdicts import ReasonCode
 from careloop.provenance import TrustLevel
 from careloop.state import Case, CaseState, InMemoryCaseStore, TimelineKind
+from careloop.state.case import Approval, ApprovalStatus
 from careloop.tools import POISONED_DOCUMENT_ID
 
 CASE_ID = "case-0001"
@@ -843,43 +844,69 @@ class TestTheExecuteNodeChecksTheApprovalItself:
 
     The policy engine already refuses an unapproved call at the tool boundary, so this guard is
     redundant in the shipped system — and therefore invisible to every end-to-end assertion, which
-    is how removing it survived a mutation. What it does that the rule cannot is refuse **before**
-    the case transitions to ``EXECUTING``, and say that the approval is the problem rather than
-    reporting a disagreement between two enforcement points.
+    is how removing it survived a mutation in commit 6. What it does that the rule cannot is refuse
+    **before** the case transitions to ``EXECUTING``, and say that the approval is the problem
+    rather than reporting a disagreement between two enforcement points.
+
+    **The guard was rewritten in commit 7, and the reason is worth keeping.** It used to ask a
+    case-scoped question — "does this case have any approvals, and if so does one cover these
+    arguments?" — which is right for a case that does one thing and wrong for a case that does two.
+    The resume (T5) does two: an email a caregiver approved, then weeks later an autonomous upload
+    on the reopened case. The old rule refused the upload for want of an approval nobody should
+    have been asked for, and it was found by running the demo rather than by reading the code.
+
+    It is now digest-scoped, which is what an approval has meant everywhere else since commit 6:
+    the gate records one at the moment it parks a proposal, so an approval covering *these*
+    arguments must be ``APPROVED``, and a proposal with no approval at all is one the gate allowed.
+    The property the old shape was reaching for — an approval for other arguments cannot authorise
+    this call — is still asserted below, at the layer that actually owns it.
     """
 
     @staticmethod
-    def _ready_with_an_approval_for_other_arguments() -> InMemoryCaseStore:
-        from careloop.state.case import Approval, ApprovalStatus
-        from careloop.state.machine import append_event, transition
+    def _approval(args: dict, status: ApprovalStatus) -> Approval:
         from careloop.tools.idempotency import args_digest
 
-        other = {**EMAIL, "body": "a body the caregiver never saw"}
+        decided = status is not ApprovalStatus.PENDING
+        return Approval(
+            approval_id="apr-under-test",
+            tool_name="send_email",
+            args_digest=args_digest(args),
+            reason_code=str(ReasonCode.REQUIRES_HUMAN_APPROVAL),
+            status=status,
+            requested_at=FIXED_NOW,
+            decided_at=FIXED_NOW if decided else None,
+            decided_by="rosa" if decided else None,
+        )
+
+    @staticmethod
+    def _ready_with(
+        approval: Approval, proposal: tuple[str, dict], *, evidence: bool = False
+    ) -> InMemoryCaseStore:
+        """A case in ``READY_TO_EXECUTE`` carrying one approval and one proposal.
+
+        ``evidence`` records and validates the referral first, for the proposals whose ``ALLOW``
+        rule needs a ``CONTROLLED`` value. Read through the real extraction path rather than
+        planted, so the fact carries the trust the engine will actually resolve.
+        """
+        from careloop.graph.extract import record_document, validate_and_promote
+        from careloop.state.machine import append_event, transition
+        from careloop.tools.documents import default_document_store
+
+        tool_name, args = proposal
         store = InMemoryCaseStore()
         case = open_case(store, REFERRAL_EVENT, case_id=CASE_ID, now=FIXED_NOW)
         base = case.version
-        case = case.model_copy(
-            update={
-                "approvals": (
-                    Approval(
-                        approval_id="apr-elsewhere",
-                        tool_name="send_email",
-                        args_digest=args_digest(other),
-                        reason_code=str(ReasonCode.REQUIRES_HUMAN_APPROVAL),
-                        status=ApprovalStatus.APPROVED,
-                        requested_at=FIXED_NOW,
-                        decided_at=FIXED_NOW,
-                        decided_by="rosa",
-                    ),
-                )
-            }
-        )
+        if evidence:
+            referral = default_document_store().get("doc-0001-referral")
+            case = record_document(case, referral, now=FIXED_NOW)
+            case = validate_and_promote(case, now=FIXED_NOW)
+        case = case.model_copy(update={"approvals": (approval,)})
         case = append_event(
             case,
             kind=TimelineKind.PLAN_PROPOSED,
             actor="planner",
-            summary="proposed send_email",
-            payload={"tool_name": "send_email", "args": dict(EMAIL), "rationale": "r"},
+            summary=f"proposed {tool_name}",
+            payload={"tool_name": tool_name, "args": dict(args), "rationale": "r"},
             now=FIXED_NOW,
         )
         for target in (
@@ -891,19 +918,24 @@ class TestTheExecuteNodeChecksTheApprovalItself:
         store.save(case, expected_version=base)
         return store
 
-    def test_an_approval_for_other_arguments_stops_the_dispatch(self) -> None:
-        store = self._ready_with_an_approval_for_other_arguments()
+    def _refused(self) -> InMemoryCaseStore:
+        """The caregiver was asked about these exact arguments and said no."""
+        return self._ready_with(
+            self._approval(EMAIL, ApprovalStatus.REJECTED), ("send_email", EMAIL)
+        )
 
-        result, context = run(store, REFERRAL_EVENT, planner_proposing(), max_node_executions=6)
+    def _run(self, store: InMemoryCaseStore):
+        return run(store, REFERRAL_EVENT, planner_proposing(), max_node_executions=6)
+
+    def test_a_refused_approval_stops_the_dispatch(self) -> None:
+        result, context = self._run(self._refused())
 
         assert context.executor.invocation_count == 0
         assert result.case.state is CaseState.FAILED
 
     def test_it_refuses_before_the_case_ever_reaches_executing(self) -> None:
         """The whole point of the guard: no transition to EXECUTING, no boundary disagreement."""
-        store = self._ready_with_an_approval_for_other_arguments()
-
-        result, _ = run(store, REFERRAL_EVENT, planner_proposing(), max_node_executions=6)
+        result, _ = self._run(self._refused())
 
         reached = {
             entry.payload["to"]
@@ -913,32 +945,54 @@ class TestTheExecuteNodeChecksTheApprovalItself:
         assert "EXECUTING" not in reached
 
     def test_and_it_says_the_approval_is_what_was_wrong(self) -> None:
-        store = self._ready_with_an_approval_for_other_arguments()
+        result, _ = self._run(self._refused())
 
-        result, _ = run(store, REFERRAL_EVENT, planner_proposing(), max_node_executions=6)
-
-        assert "approval" in (result.case.failure_reason or "")
+        assert "approve" in (result.case.failure_reason or "")
 
     def test_an_outstanding_decision_also_stops_the_dispatch(self) -> None:
         """A case released for execution while a request is still pending is a contradiction."""
-        from careloop.state.case import ApprovalStatus
-
-        store = self._ready_with_an_approval_for_other_arguments()
-        case = store.get(CASE_ID)
-        store.save(
-            case.model_copy(
-                update={
-                    "approvals": (
-                        case.approvals[0].model_copy(
-                            update={"status": ApprovalStatus.PENDING, "decided_at": None}
-                        ),
-                    )
-                }
-            ),
-            expected_version=case.version,
+        store = self._ready_with(
+            self._approval(EMAIL, ApprovalStatus.PENDING), ("send_email", EMAIL)
         )
 
-        result, context = run(store, REFERRAL_EVENT, planner_proposing(), max_node_executions=6)
+        result, context = self._run(store)
 
         assert context.executor.invocation_count == 0
         assert "outstanding" in (result.case.failure_reason or "")
+
+    def test_an_approval_for_other_arguments_is_refused_at_the_tool_boundary(self) -> None:
+        """The property the old case-scoped guard was reaching for, at the layer that owns it.
+
+        The node lets this through — no approval covers these arguments, so as far as it can tell
+        the gate allowed the call. ``require-human-for-outbound-email`` then refuses it, because
+        ``args_approved`` is matched on the digest and this approval covers a different body. An
+        approval cannot be spent on a message the caregiver never saw.
+        """
+        other = {**EMAIL, "body": "a body the caregiver never saw"}
+        store = self._ready_with(
+            self._approval(other, ApprovalStatus.APPROVED), ("send_email", EMAIL)
+        )
+
+        result, context = self._run(store)
+
+        assert context.executor.invocation_count == 0
+        assert result.case.state is CaseState.FAILED
+        assert "boundary" in (result.case.failure_reason or "")
+
+    def test_an_earlier_approval_does_not_block_a_later_autonomous_action(self) -> None:
+        """The regression the resume found, as a unit-level assertion.
+
+        A case that once needed a caregiver goes on to do something that does not. Under the
+        case-scoped rule the booking was refused; under the digest-scoped one it proceeds, because
+        the gate never parked it and no approval was ever recorded against it.
+        """
+        store = self._ready_with(
+            self._approval(EMAIL, ApprovalStatus.APPROVED),
+            ("book_appointment", BOOKING),
+            evidence=True,
+        )
+
+        result, context = self._run(store)
+
+        assert context.executor.invocation_count == 1
+        assert result.case.state is CaseState.DONE

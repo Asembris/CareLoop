@@ -36,6 +36,7 @@ from careloop.policy.verdicts import ReasonCode
 from careloop.state.case import Approval, ApprovalStatus, Case, TimelineKind
 from careloop.state.store import CaseStore
 from careloop.tools.callables import ToolSet
+from careloop.tools.documents import DocumentStore
 from careloop.tools.executor import MockExternalExecutor
 from careloop.tools.idempotency import args_digest
 
@@ -135,6 +136,15 @@ class RunContext:
     planner: PlannerAgent = field(default_factory=PlannerAgent)
     executor: MockExternalExecutor = field(default_factory=MockExternalExecutor)
 
+    documents: DocumentStore | None = None
+    """The document store the toolset reads and the cross-document checks consult.
+
+    ``None`` means the shipped fixtures. Injectable so a test can assert against a store it built
+    rather than against whatever the process happens to ship — the ``required-document-is-held``
+    check in :mod:`careloop.graph.extract` reads it, and a check whose input cannot be varied is a
+    check that can only be tested one way.
+    """
+
     now: Callable[[], datetime] = _utcnow
     """Injectable clock. ``careloop/tools/`` may not read one; the graph stamps the timeline."""
 
@@ -149,7 +159,9 @@ class RunContext:
         self.gate = PolicyGate(self.current_case)
         self.hook = PolicyHook(self.gate)
         self.hooks = policy_registry(self.hook) if self.register_hook else _empty_registry()
-        self.tools = GatedToolSet(ToolSet(self.case_id, executor=self.executor), self.gate)
+        self.tools = GatedToolSet(
+            ToolSet(self.case_id, executor=self.executor, documents=self.documents), self.gate
+        )
 
     def current_case(self) -> Case:
         """The case as the store holds it now."""

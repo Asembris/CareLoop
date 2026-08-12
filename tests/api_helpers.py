@@ -11,6 +11,7 @@ loads ``conftest.py`` rather than exporting it.
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 
@@ -124,7 +125,30 @@ def poisoned_store() -> InMemoryCaseStore:
     return store
 
 
-def factory_proposing(*proposals: PlannerIntent):
+class PausedTriage:
+    """A triage agent that will not begin until a gate is opened.
+
+    Exists so "the case is visible in Working while the run is going" can be *asserted* rather than
+    raced. On the mock model a whole run takes about a millisecond, so a test that delivers an event
+    and then asks for the dashboard will almost always find the case already parked — and a test
+    whose outcome depends on which of two threads wins proves nothing either way.
+
+    A ``threading.Event`` polled from the coroutine rather than an ``asyncio.Event``, because the
+    test thread and the app's event loop are different threads and setting an asyncio primitive
+    across that boundary needs ``call_soon_threadsafe``. Polling is cruder and is obviously correct.
+    """
+
+    def __init__(self, inner: TriageAgent, gate: threading.Event) -> None:
+        self.inner = inner
+        self.gate = gate
+
+    async def classify(self, text: str):
+        while not self.gate.is_set():
+            await asyncio.sleep(0.005)
+        return await self.inner.classify(text)
+
+
+def factory_proposing(*proposals: PlannerIntent, gate: threading.Event | None = None):
     """A context factory whose agents are scripted and whose clock is pinned.
 
     What ``create_app(context_factory=...)`` exists for: the routes are identical whether the run
@@ -132,11 +156,12 @@ def factory_proposing(*proposals: PlannerIntent):
     """
 
     def build(store, inbound: InboundEvent, case_id: str):
+        triage = triage_agent()
         return context_for(
             store,
             inbound,
             case_id=case_id,
-            triage=triage_agent(),
+            triage=PausedTriage(triage, gate) if gate is not None else triage,
             planner=planner_proposing(*proposals),
             now=lambda: FIXED_NOW,
         )
@@ -145,7 +170,9 @@ def factory_proposing(*proposals: PlannerIntent):
 
 
 @contextmanager
-def api_client(store, *proposals: PlannerIntent) -> Iterator[TestClient]:
+def api_client(
+    store, *proposals: PlannerIntent, gate: threading.Event | None = None
+) -> Iterator[TestClient]:
     """A ``TestClient`` over the app, with one event loop for the whole block.
 
     **Context-managed rather than bare, and that is load-bearing.** A bare ``TestClient`` starts a
@@ -153,9 +180,17 @@ def api_client(store, *proposals: PlannerIntent) -> Iterator[TestClient]:
     that request returns and can never settle — a test would see ``RUNNING`` forever and conclude
     the registry was broken. Entering the context runs the lifespan and keeps one loop alive across
     every request in the block, which is what a real server does and therefore what a test should.
+
+    ``gate`` holds every run at the triage node until it is set. See :class:`PausedTriage`.
     """
-    with TestClient(create_app(store, context_factory=factory_proposing(*proposals))) as client:
-        yield client
+    app = create_app(store, context_factory=factory_proposing(*proposals, gate=gate))
+    with TestClient(app) as client:
+        try:
+            yield client
+        finally:
+            # Never leave the lifespan drain waiting on a run nobody is going to release.
+            if gate is not None:
+                gate.set()
 
 
 def finished_case() -> Case:

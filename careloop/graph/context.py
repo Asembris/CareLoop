@@ -77,6 +77,62 @@ def latest_proposal(case: Case) -> Proposal | None:
     return None
 
 
+def proposal_for(case: Case, digest: str) -> Proposal | None:
+    """The most recent proposal whose arguments hash to ``digest``, or ``None``.
+
+    The counterpart of :func:`approval_for`, which finds an approval by the digest of the arguments
+    it covers. An approval records only the digest — deliberately, so that a decision made about
+    one action cannot authorise another — so anything wanting to *show* a caregiver what they are
+    approving has to come back through the timeline to the proposal that digest came from.
+
+    That lookup lives here rather than in the caller for the same reason :func:`latest_proposal`
+    does: the timeline is read in one layer, by named functions, and never rummaged in by whoever
+    happens to need something out of it.
+    """
+    for event in reversed(case.timeline):
+        if event.kind is not TimelineKind.PLAN_PROPOSED:
+            continue
+        proposal = Proposal(
+            tool_name=event.payload["tool_name"],
+            args=dict(event.payload["args"]),
+            rationale=event.payload.get("rationale", ""),
+        )
+        if proposal.digest == digest:
+            return proposal
+    return None
+
+
+class Delivery(BaseModel):
+    """The inbound event a case was most recently opened or reopened by."""
+
+    model_config = ConfigDict(frozen=True)
+
+    event_id: str
+    document_ids: tuple[str, ...]
+
+
+def latest_delivery(case: Case) -> Delivery | None:
+    """The event that last delivered work to ``case``, or ``None`` if nothing did.
+
+    **Not ``case.event_id``.** That field records which event *opened* the case and is deliberately
+    not rewritten by :func:`careloop.graph.runner.reopen_case` — a reopen is not an opening. So a
+    case reopened by a claim rejection still names the referral there, and anything rebuilding a
+    :class:`RunContext` to carry that case forward needs the later event's documents, not the
+    original's.
+
+    Read from the ``CASE_CREATED`` and ``CASE_REOPENED`` entries, which already record both the
+    event id and its documents, in order and append-only. Storing it a second time on ``Case``
+    would be a second answer to a question the timeline already answers.
+    """
+    for event in reversed(case.timeline):
+        if event.kind in (TimelineKind.CASE_CREATED, TimelineKind.CASE_REOPENED):
+            return Delivery(
+                event_id=event.payload["event_id"],
+                document_ids=tuple(event.payload.get("document_ids", ())),
+            )
+    return None
+
+
 def prior_denials(case: Case) -> tuple[tuple[str, ReasonCode], ...]:
     """Every refusal on ``case``, as the planner is allowed to know it.
 
@@ -184,11 +240,14 @@ def _empty_registry():
 
 
 __all__ = [
+    "Delivery",
     "Proposal",
     "RunContext",
     "approval_for",
     "approval_id_for",
     "is_approved",
+    "latest_delivery",
     "latest_proposal",
     "prior_denials",
+    "proposal_for",
 ]

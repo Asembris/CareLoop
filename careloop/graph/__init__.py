@@ -9,13 +9,16 @@ from careloop.graph.builder import (
 )
 from careloop.graph.conditions import when_case_is, when_case_is_not
 from careloop.graph.context import (
+    Delivery,
     Proposal,
     RunContext,
     approval_for,
     approval_id_for,
     is_approved,
+    latest_delivery,
     latest_proposal,
     prior_denials,
+    proposal_for,
 )
 from careloop.graph.extract import (
     EXCERPT_PREFIX,
@@ -59,6 +62,7 @@ __all__ = [
     "VALIDATORS",
     "VERIFIERS",
     "ApprovalAlreadyDecided",
+    "Delivery",
     "NoSuchApproval",
     "Proposal",
     "RunContext",
@@ -75,9 +79,11 @@ __all__ = [
     "excerpt_key",
     "extract",
     "is_approved",
+    "latest_delivery",
     "latest_proposal",
     "open_case",
     "prior_denials",
+    "proposal_for",
     "record_document",
     "reject",
     "run_case",

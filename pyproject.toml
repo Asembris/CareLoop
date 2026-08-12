@@ -12,6 +12,11 @@ dependencies = [
     "strands-agents==1.51.0",
     "pydantic>=2.9",
     "pyyaml>=6.0",
+    # Reads the fixture PDFs. A runtime dependency rather than a dev one: the document store is
+    # PDF-backed, so extraction is part of the shipped path and not part of the test harness.
+    # MIT, pure Python, and its unit of iteration is the page — which is what makes the
+    # {source_doc, page} provenance invariant 3 requires structural rather than reconstructed.
+    "pdfplumber>=0.11",
 ]
 
 [project.optional-dependencies]

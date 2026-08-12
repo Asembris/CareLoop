@@ -8,12 +8,18 @@ from careloop.tools.callables import (
     bound_tools,
     implements,
 )
+from careloop.tools.document_source import (
+    DOCUMENT_SOURCES,
+    DocumentKind,
+    DocumentSource,
+)
 from careloop.tools.documents import (
-    FIXTURE_DOCUMENTS,
     POISONED_DOCUMENT_ID,
+    RECEIPT_DOCUMENT_ID,
     DocumentNotFound,
     DocumentStore,
     default_document_store,
+    fixture_documents,
 )
 from careloop.tools.executor import (
     ExecutionOutcome,
@@ -28,6 +34,11 @@ from careloop.tools.idempotency import (
     args_digest,
     canonical_args,
     idempotency_key,
+)
+from careloop.tools.pdf import (
+    DocumentUnreadable,
+    extract_pages,
+    read_document,
 )
 from careloop.tools.registry import (
     REGISTRY,
@@ -47,16 +58,20 @@ from careloop.tools.results import (
 )
 
 __all__ = [
-    "FIXTURE_DOCUMENTS",
+    "DOCUMENT_SOURCES",
     "POISONED_DOCUMENT_ID",
+    "RECEIPT_DOCUMENT_ID",
     "REGISTRY",
     "AccessGranted",
     "ActionResult",
     "AppointmentBooked",
     "ArgSpec",
     "Document",
+    "DocumentKind",
     "DocumentNotFound",
+    "DocumentSource",
     "DocumentStore",
+    "DocumentUnreadable",
     "DocumentUploaded",
     "DuplicateToolName",
     "EmailSent",
@@ -78,6 +93,9 @@ __all__ = [
     "bound_tools",
     "canonical_args",
     "default_document_store",
+    "extract_pages",
+    "fixture_documents",
     "idempotency_key",
     "implements",
+    "read_document",
 ]

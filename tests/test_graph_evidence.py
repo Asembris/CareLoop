@@ -40,7 +40,7 @@ from careloop.graph.verify import (
 from careloop.policy.engine import resolve_trust
 from careloop.provenance import ArgClass, TrustLevel
 from careloop.state.case import ActionRecord
-from careloop.tools import FIXTURE_DOCUMENTS, POISONED_DOCUMENT_ID, REGISTRY
+from careloop.tools import POISONED_DOCUMENT_ID, REGISTRY, fixture_documents
 from careloop.tools.documents import default_document_store
 from careloop.tools.idempotency import args_digest, idempotency_key
 from careloop.tools.registry import ArgSpec, ToolRegistry, ToolSpec
@@ -69,7 +69,7 @@ class TestNoConfiguredValueAppearsInADocument:
 
     @pytest.mark.parametrize("key,value", TRUSTED_CONFIG, ids=[k for k, _ in TRUSTED_CONFIG])
     def test_the_value_is_absent_from_every_fixture_document(self, key: str, value: str) -> None:
-        for document in FIXTURE_DOCUMENTS:
+        for document in fixture_documents():
             assert value not in document.text
 
     def test_a_seeded_case_resolves_every_configured_value_as_trusted(self) -> None:
@@ -118,7 +118,7 @@ class TestExtractionIsDeterministicAndUnsanitising:
         assert found["referring_clinician"] == "Dr. A. Okonkwo"
 
     def test_every_extracted_fact_starts_untrusted(self) -> None:
-        for document in FIXTURE_DOCUMENTS:
+        for document in fixture_documents():
             for fact in extract(document, now=FIXED_NOW):
                 assert fact.trust_level is TrustLevel.UNTRUSTED
 

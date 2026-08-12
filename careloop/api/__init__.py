@@ -16,7 +16,15 @@ this is the channel it arrives through.
 
 from __future__ import annotations
 
-from careloop.api.app import API_PREFIX, create_app, load_case, load_event, schedule
+from careloop.api.app import (
+    API_PREFIX,
+    create_app,
+    decide,
+    load_case,
+    load_event,
+    resume_event,
+    schedule,
+)
 from careloop.api.deps import (
     ApiDeps,
     ContextFactory,
@@ -123,12 +131,14 @@ __all__ = [
     "check_no_response_defaults",
     "check_sections_partition_every_state",
     "create_app",
+    "decide",
     "decision_view",
     "default_context_factory",
     "fact_view",
     "load_case",
     "load_event",
     "payload_keys_in",
+    "resume_event",
     "run_view",
     "schedule",
     "section_for",

@@ -9,19 +9,30 @@ the dashboard will not call is an endpoint nobody will maintain and nobody will 
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, status
 
-from careloop.api.deps import ApiDeps, ContextFactory, Deps, sections_from
+from careloop.api.deps import ApiDeps, Caregiver, ContextFactory, Deps, sections_from
 from careloop.api.models import CaseDetail, CaseSections, DeliverEventRequest, RunView
 from careloop.api.projections import SECTIONS, case_detail, case_sections, run_view
 from careloop.api.runs import RunAlreadyInFlight, UnknownRun
 from careloop.events.inbound import InboundEvent
 from careloop.events.simulator import EventSimulator
-from careloop.graph.runner import CaseNotReopenable, open_case, reopen_case, run_case
+from careloop.graph.context import latest_delivery
+from careloop.graph.runner import (
+    ApprovalAlreadyDecided,
+    CaseNotReopenable,
+    NoSuchApproval,
+    approve,
+    open_case,
+    reject,
+    reopen_case,
+    run_case,
+)
 from careloop.state.case import Case
+from careloop.state.machine import IllegalTransition
 from careloop.state.store import CaseNotFound, CaseStore
 
 API_PREFIX = "/api"
@@ -128,6 +139,40 @@ def create_app(
 
         return await schedule(deps, body.case_id, inbound, wait=wait)
 
+    @app.post(
+        f"{API_PREFIX}/cases/{{case_id}}/decisions/{{approval_id}}/approve",
+        response_model=RunView,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def approve_decision(
+        case_id: str, approval_id: str, deps: Deps, who: Caregiver, wait: float = 0.0
+    ) -> RunView:
+        """One click in "Needs You". ``AWAITING_HUMAN`` → ``READY_TO_EXECUTE``, then run.
+
+        Two existing calls in order: :func:`careloop.graph.runner.approve` records the decision,
+        and the run that follows finds the case already released and dispatches straight to
+        execution. Nothing about *what* happens next is decided here — the gate and the tool
+        boundary both check again, and an approval covering different arguments would not release
+        this one.
+        """
+        return await decide(approve, case_id, approval_id, deps, who, wait)
+
+    @app.post(
+        f"{API_PREFIX}/cases/{{case_id}}/decisions/{{approval_id}}/reject",
+        response_model=RunView,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def reject_decision(
+        case_id: str, approval_id: str, deps: Deps, who: Caregiver, wait: float = 0.0
+    ) -> RunView:
+        """The other button. ``AWAITING_HUMAN`` → ``PLANNING``, then run.
+
+        A refused proposal is not a failed case: the planner gets another attempt, bounded like
+        every other. Running afterwards is what makes that true rather than nominal — without it
+        the case would sit in ``PLANNING`` with nothing driving it.
+        """
+        return await decide(reject, case_id, approval_id, deps, who, wait)
+
     @app.get(f"{API_PREFIX}/runs/{{run_id}}", response_model=RunView)
     async def get_run(run_id: str, deps: Deps, wait: float = 0.0) -> RunView:
         """One run: whether it settled, and which graph nodes it went through.
@@ -159,6 +204,58 @@ def load_event(events: EventSimulator, event_id: str) -> InboundEvent:
         ) from None
 
 
+def resume_event(deps: ApiDeps, case: Case) -> InboundEvent:
+    """The event a case is carried forward under.
+
+    :func:`careloop.graph.context.latest_delivery` rather than ``case.event_id``: a reopened case
+    still names the *referral* there, deliberately, so resuming on that field would hand the run
+    the wrong documents. Reading it through the graph layer's named reader is what keeps this
+    package out of the timeline.
+    """
+    delivery = latest_delivery(case)
+    if delivery is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"case {case.case_id!r} records no inbound delivery, so there is no event to "
+                f"resume it under"
+            ),
+        )
+    return load_event(deps.events, delivery.event_id)
+
+
+async def decide(
+    record: Callable[..., Case],
+    case_id: str,
+    approval_id: str,
+    deps: ApiDeps,
+    who: str,
+    wait: float,
+) -> RunView:
+    """Record a caregiver decision and carry the case forward.
+
+    The in-flight check comes first so the request is all-or-nothing. Recording the approval and
+    then failing to schedule would leave a decision made, a case released, and a caller told the
+    request was refused — three things that disagree.
+    """
+    case = load_case(deps.store, case_id)
+    if (running := deps.runs.in_flight_for(case_id)) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"case {case_id!r} has run {running.run_id} in flight; decide once it settles",
+        )
+    inbound = resume_event(deps, case)
+
+    try:
+        record(deps.store, case_id, approval_id, decided_by=who)
+    except NoSuchApproval as missing:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(missing)) from None
+    except (ApprovalAlreadyDecided, IllegalTransition) as refusal:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(refusal)) from None
+
+    return await schedule(deps, case_id, inbound, wait=wait)
+
+
 async def schedule(deps: ApiDeps, case_id: str, inbound: InboundEvent, *, wait: float) -> RunView:
     """Start a graph run for ``case_id`` and report where it got to.
 
@@ -176,4 +273,12 @@ async def schedule(deps: ApiDeps, case_id: str, inbound: InboundEvent, *, wait: 
     return run_view(await deps.runs.wait(record.run_id, wait))
 
 
-__all__ = ["API_PREFIX", "create_app", "load_case", "load_event", "schedule"]
+__all__ = [
+    "API_PREFIX",
+    "create_app",
+    "decide",
+    "load_case",
+    "load_event",
+    "resume_event",
+    "schedule",
+]

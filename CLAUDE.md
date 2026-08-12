@@ -132,12 +132,14 @@ careloop/
   policy/      ReasonCode enum, rules schema, engine, BeforeToolCall hook, rules.yaml
   provenance/  TrustLevel, ArgClass, Fact, promote()
   state/       Case, state machine, CaseStore protocol, SQLite + in-memory stores
-  tools/       Tool registry (owns argument classes), mock executor, idempotency,
-               document sources + fixtures/*.pdf, pdfplumber reader
+  tools/       Tool registry (owns argument classes), executor, idempotency, the Demo World
+               clinic client, document sources + fixtures/*.pdf, pdfplumber reader
   events/      Event simulator and fixtures/*.json
   llm/         Mock model provider; real Bedrock / OpenAI-compatible config
-  api/         FastAPI read surface + approve/reject/deliver; projections and withholding
-scripts/       generate_documents.py (renders the fixture PDFs), resume_demo.py
+  api/         FastAPI read surface + approve/reject/deliver; projections and withholding;
+               the demo control surface, mounted only when create_app is asked for it
+demoworld/     A synthetic clinic in its own process. Never imports careloop.
+scripts/       generate_documents.py (renders the fixture PDFs), resume_demo.py, demo_serve.py
 tests/
 docs/
 ```
@@ -175,6 +177,35 @@ invisible until somebody decides about it.
 a reason, and every response field either names the stored field it comes from or is listed in
 `DERIVED`. Response fields carry no default and no `default_factory` — invariant 9's rule for tool
 results, here so a response can only say what the projector gave it.
+
+**One tool is real, and the read-back is what makes that worth anything.** `book_appointment` routes
+over HTTP to `demoworld/`; the other three effects stay simulated, because one action made genuinely
+external is the proof and four is scope creep with a rationale. Verification then performs a
+*separate* `GET` and compares observed clinic state against the authorised arguments — never the
+booking's own response, which would be re-reading CareLoop's receipt.
+`tests/test_verify_readback.py::TestTheIndependenceProof` is the vacuity proof for the whole
+arrangement: it moves the appointment behind CareLoop's back and requires verification to fail while
+showing the pre-read-back checks still pass. **Anything that makes the read-back cheaper by reusing
+what the effect returned deletes the only thing this buys.**
+
+Two structural decisions hold it up. `RunContext` takes a **clinic or an executor, never both** —
+one collaborator turns on the real booking *and* the read-back that observes it, so a real effect
+verified against a simulated read cannot be built. And the read-back is **deliberately not a
+registry tool**: it is never proposed, produces no fact, and its only sink is a timeline-only
+diagnostic the API withholds, so registering it would buy a new proposable tool to satisfy a
+symmetry that does not apply. `demoworld/` may never import `careloop`, or reading it back stops
+being evidence.
+
+**`CaseStore.clear` has exactly one caller**, `POST /api/demo/reset`, which exists only when
+`create_app` is asked for the demo surface. It is the one destructive method on the durable source
+of truth; a sweep in `tests/test_api_demo.py` fails if a second caller appears, and the reset itself
+is refused while any run is in flight.
+
+**The SQLite store is shared across threads and serialised by a lock.** A served CareLoop reaches it
+from Starlette's worker pool, and every method of the protocol carries `@serialised` — the writes
+are explicit `BEGIN IMMEDIATE` … `COMMIT` sequences on one connection, so two interleaving would
+commit half of each. The lock does not replace the conditional update, which is still what rejects a
+losing writer for a second process the lock knows nothing about.
 
 **The `X-Caregiver` header is an audit identity, not authentication, and a missing one is `400` —
 never `401`.** Nothing is verified and anyone reaching the port can claim any name; `401` would

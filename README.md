@@ -93,9 +93,49 @@ that was performed is the effect that was authorised.** The idempotency key re-d
 approved arguments must equal the key the action was recorded under, the argument digests must
 match, and every field the typed result echoes back must equal the argument policy allowed.
 
-It does **not** prove the effect reached a real system, because in this build there is no real
-system — the executor is a mock. Verification closes the loop between decision and execution, not
-between execution and the world. That gap is real and is named here rather than papered over.
+**For `book_appointment` it means more, because there is a real system behind it.** Verification
+performs a *separate* `GET` against Demo World and compares what the clinic holds now against what
+policy authorised — not the response the booking returned. If the clinic moved the appointment
+after confirming it, every closed-loop check still passes and verification still fails, which is the
+difference between reading the world back and re-reading your own receipt.
+`tests/test_verify_readback.py::TestTheIndependenceProof` is that claim as a test: it moves the
+appointment behind CareLoop's back, requires the case never to reach `DONE`, and then runs the
+pre-read-back verification over the same record to show it passes clean.
+
+Each verification says which of the two it was. `read_back` on a `VERIFICATION_PASSED` entry is
+`true` when an external system was read and `false` when only CareLoop's own record was checked, so
+the weaker claim can never be read as the stronger one.
+
+The other three effects are still simulated, and against those verification closes the loop between
+decision and execution rather than between execution and the world. That gap is real, is smaller
+than it was, and is named here rather than papered over.
+
+## Demo World
+
+A separate service CareLoop books appointments with, in its own process, over real HTTP:
+
+```bash
+python -m demoworld --port 8100
+python scripts/demo_serve.py --clinic-url http://127.0.0.1:8100 --port 8000
+curl -X POST "http://127.0.0.1:8000/api/demo/scenarios/referral?wait=60"
+curl http://127.0.0.1:8100/clinic/slots        # the slot is gone, and you can check yourself
+```
+
+Synthetic data only — one patient, one provider, three invented slots. It never imports CareLoop,
+which is what makes reading it back evidence rather than the agent consulting itself, and a sweep
+enforces the direction. It honours the idempotency key CareLoop already derives, so a booking
+replayed by a process that has never seen the case returns the original rather than taking a second
+slot. It holds no clock and no randomness, so a reset and a re-run produce byte-identical records.
+
+Its state lives as long as its process does: it survives CareLoop restarting and does not survive
+its own restart. The reset button re-seeds it either way.
+
+`POST /api/demo/reset` and `POST /api/demo/scenarios/{referral|injection|resume}` exist only when
+the app is built with the demo flag on, and both run **the ordinary application path** — the
+scenario route calls the same `deliver` a browser's `POST /api/events` calls, and a test asserts a
+demo-produced case is indistinguishable from a hand-delivered one. Press reset between scenarios:
+two of them book the same slot, and the second will be correctly refused by a clinic that already
+has it.
 
 ## The resume, as a thing you can run
 
@@ -133,6 +173,8 @@ a structural sweep fails the build if any node, agent, tool or policy module so 
 | `POST /api/cases/{id}/decisions/{approval_id}/reject` | the other button; back to the planner |
 | `GET /api/runs/{run_id}` | which graph nodes a run went through |
 | `GET /api/health` | liveness |
+| `POST /api/demo/reset` | demo builds only: clear every case and re-seed Demo World |
+| `POST /api/demo/scenarios/{key}` | demo builds only: press one of three starting points |
 
 **The API decides nothing.** It projects stored cases and calls `open_case`, `reopen_case`,
 `approve`, `reject` and `run_case` — the same functions `scripts/resume_demo.py` calls. The one
@@ -159,16 +201,33 @@ is not happening. Real authentication belongs in front of this layer and does no
 
 ## Status
 
-Sessions 1–8 — the spine runs end to end, on real documents, across real process boundaries, and a
-browser can now drive the whole arc. A case goes `NEW → DONE` through a bounded Strands graph, with
-the policy gate enforcing at the tool boundary, a caregiver approval parking and resuming the case,
-idempotent replay across a process restart, a non-converging planner terminated by the SDK's own
-loop bound, and a finished case reopened weeks later by an inbound event. Mock tools, mock model,
-offline tests at $0.
+Sessions 1–8 plus A, B and C — the spine runs end to end, on real documents, across real process
+boundaries, against a real model, and one action now happens in a real external service. A case goes
+`NEW → DONE` through a bounded Strands graph, with the policy gate enforcing at the tool boundary, a
+caregiver approval parking and resuming the case, idempotent replay across a process restart, a
+non-converging planner terminated by the SDK's own loop bound, and a finished case reopened weeks
+later by an inbound event.
+
+Measured live, on Nova Micro and Nova 2 Lite, through the demo control API against Demo World: the
+referral books a real appointment and verifies it by reading the clinic back; pressing it again
+reopens the case and books nothing twice; the poisoned continuity notice tempts the planner into all
+three payloads, every one is refused by a named rule, and the legitimate booking still happens; the
+instructions case parks for a caregiver and finishes on approval.
+
+Tests stay offline and $0 on the mock model, with Demo World served on a loopback socket.
 
 Not yet: frontend, AWS deployment, real email, a CLI.
 
 Known and deliberately unfinished:
+
+- **A failed read-back costs a node budget.** A booking the clinic disagrees with fails
+  verification, returns the case to `PLANNING`, and cycles until the SDK's bound ends the run
+  `FAILED`. Loud, bounded, and it books nothing twice — but a single `FAILED` would do, and routing
+  a read-back failure straight there is a deliberate change to verification behaviour rather than a
+  passing edit.
+- **Approving a "nothing safe left to do" parking does the wrong thing.** That parking raises an
+  approval which is not an approval *of* anything; granting it releases the case to execution, where
+  the last refused proposal is refused again and the case fails. Seen once in three live runs.
 
 - **Approval expiry is unmodelled.** A case can sit in `AWAITING_HUMAN` indefinitely. The
   `AWAITING_HUMAN → FAILED` edge exists for it; nothing drives it yet.

@@ -188,10 +188,12 @@ async def collect(
 
 
 def render(cells: Sequence[Cell]) -> str:
-    lines: list[str] = ["", "VALID PROPOSALS PER SHAPE (counts, not a blended score)"]
+    lines: list[str] = ["", "PROPOSALS PER SHAPE (counts, not a blended score)"]
+    lines.append("  valid  = the schema was satisfied           -- a property of the SHAPE")
+    lines.append("  usable = valid, and every value was quoted  -- a property of the MODEL")
     header = (
-        f"{'model':<38} {'shape':<12} {'n':>3} {'valid':>6} {'schemafail':>11} "
-        f"{'argdefect':>10} {'err':>4} {'p50 ms':>8} {'cost':>9}"
+        f"{'model':<38} {'shape':<12} {'n':>3} {'valid':>6} {'usable':>7} {'schemafail':>11} "
+        f"{'argdefect':>10} {'misquot':>8} {'err':>4} {'p50 ms':>8} {'cost':>9}"
     )
     lines.append(header)
     lines.append("-" * len(header))
@@ -201,8 +203,8 @@ def render(cells: Sequence[Cell]) -> str:
         p50 = latencies[len(latencies) // 2] if latencies else 0.0
         lines.append(
             f"{cell.model_spec:<38} {cell.shape_key:<12} {stats['n']:>3} "
-            f"{stats['valid']:>6} {stats['schema_failures']:>11} "
-            f"{stats['argument_defects']:>10} {stats['errors']:>4} "
+            f"{stats['valid']:>6} {stats['usable']:>7} {stats['schema_failures']:>11} "
+            f"{stats['argument_defects']:>10} {stats['misquoted']:>8} {stats['errors']:>4} "
             f"{p50:>8.0f} ${cell.cost_usd:>8.5f}"
         )
 
@@ -220,10 +222,23 @@ def render(cells: Sequence[Cell]) -> str:
         lines.append("    evidence about the shape.")
 
     lines.append("")
-    lines.append("TOOLS PROPOSED")
+    lines.append("TOOLS PROPOSED, AND ARGUMENTS MISQUOTED")
     for cell in cells:
         stats = summarise(cell.trials)
-        lines.append(f"  {cell.model_spec:<38} {cell.shape_key:<12} {stats['tools_proposed']}")
+        misquoted = stats["misquoted_arguments"]
+        suffix = f"   misquoted: {misquoted}" if misquoted else ""
+        lines.append(
+            f"  {cell.model_spec:<38} {cell.shape_key:<12} {stats['tools_proposed']}{suffix}"
+        )
+    if any(summarise(cell.trials)["misquoted"] for cell in cells):
+        lines.append("")
+        lines.append(
+            "  ! a misquoted argument resolves UNTRUSTED, because trust matches exactly and does"
+        )
+        lines.append(
+            "    not normalise. The proposal is well-formed and the gate denies it anyway, for a"
+        )
+        lines.append("    reason that reads as a policy bug and is not one.")
     return "\n".join(lines)
 
 

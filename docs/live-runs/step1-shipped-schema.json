@@ -1,0 +1,262 @@
+{
+  "reps": 8,
+  "adapted_prompt": false,
+  "cells": [
+    {
+      "shape": "A_flat",
+      "title": "Shipped: flat, every argument of every tool, all required",
+      "model": "openai:gpt-4o-mini",
+      "constrained_decoding": true,
+      "summary": {
+        "n": 8,
+        "valid": 8,
+        "schema_failures": 0,
+        "argument_defects": 0,
+        "errors": 0,
+        "tools_proposed": [
+          "book_appointment"
+        ]
+      },
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cost_usd": 0.0,
+      "trials": [
+        {
+          "shape": "A_flat",
+          "model": "openai:gpt-4o-mini",
+          "valid": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "outpatient cardiology consultation",
+            "slot_start": "2026-09-03T09:30:00}"
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "error": "",
+          "latency_ms": 4574.0
+        },
+        {
+          "shape": "A_flat",
+          "model": "openai:gpt-4o-mini",
+          "valid": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "outpatient cardiology consultation",
+            "slot_start": "2026-09-03T09:30:00."
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "error": "",
+          "latency_ms": 2201.8
+        },
+        {
+          "shape": "A_flat",
+          "model": "openai:gpt-4o-mini",
+          "valid": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "intermittent atrial fibrillation, for cardiology review",
+            "slot_start": "2026-09-03T09:30:00."
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "error": "",
+          "latency_ms": 2180.2
+        },
+        {
+          "shape": "A_flat",
+          "model": "openai:gpt-4o-mini",
+          "valid": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "",
+            "slot_start": "2026-09-03T09:30:00."
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "error": "",
+          "latency_ms": 1808.0
+        },
+        {
+          "shape": "A_flat",
+          "model": "openai:gpt-4o-mini",
+          "valid": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "outpatient cardiology consultation",
+            "slot_start": "2026-09-03T09:30:00}."
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "error": "",
+          "latency_ms": 1925.2
+        },
+        {
+          "shape": "A_flat",
+          "model": "openai:gpt-4o-mini",
+          "valid": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "outpatient cardiology consultation",
+            "slot_start": "2026-09-03T09:30:00\u3011}]},"
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "error": "",
+          "latency_ms": 2497.3
+        },
+        {
+          "shape": "A_flat",
+          "model": "openai:gpt-4o-mini",
+          "valid": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "outpatient cardiology consultation",
+            "slot_start": "2026-09-03T09:30:00}"
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "error": "",
+          "latency_ms": 2083.8
+        },
+        {
+          "shape": "A_flat",
+          "model": "openai:gpt-4o-mini",
+          "valid": true,
+          "tool_name": "book_appointment",
+          "args": {
+            "patient_id": "PT-4417",
+            "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+            "reason": "outpatient cardiology consultation",
+            "slot_start": "2026-09-03T09:30:00."
+          },
+          "schema_failure": "",
+          "argument_defect": "",
+          "error": "",
+          "latency_ms": 1977.2
+        }
+      ]
+    },
+    {
+      "shape": "A_flat",
+      "title": "Shipped: flat, every argument of every tool, all required",
+      "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+      "constrained_decoding": false,
+      "summary": {
+        "n": 8,
+        "valid": 0,
+        "schema_failures": 8,
+        "argument_defects": 0,
+        "errors": 0,
+        "tools_proposed": []
+      },
+      "input_tokens": 19992,
+      "output_tokens": 1229,
+      "cost_usd": 0.00907,
+      "trials": [
+        {
+          "shape": "A_flat",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": false,
+          "tool_name": "",
+          "args": {},
+          "schema_failure": "ValidationError: 7 validation errors for PlannerIntent",
+          "argument_defect": "",
+          "error": "",
+          "latency_ms": 1724.9
+        },
+        {
+          "shape": "A_flat",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": false,
+          "tool_name": "",
+          "args": {},
+          "schema_failure": "ValidationError: 7 validation errors for PlannerIntent",
+          "argument_defect": "",
+          "error": "",
+          "latency_ms": 1500.9
+        },
+        {
+          "shape": "A_flat",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": false,
+          "tool_name": "",
+          "args": {},
+          "schema_failure": "ValidationError: 7 validation errors for PlannerIntent",
+          "argument_defect": "",
+          "error": "",
+          "latency_ms": 1309.6
+        },
+        {
+          "shape": "A_flat",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": false,
+          "tool_name": "",
+          "args": {},
+          "schema_failure": "ValidationError: 7 validation errors for PlannerIntent",
+          "argument_defect": "",
+          "error": "",
+          "latency_ms": 1203.0
+        },
+        {
+          "shape": "A_flat",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": false,
+          "tool_name": "",
+          "args": {},
+          "schema_failure": "ValidationError: 7 validation errors for PlannerIntent",
+          "argument_defect": "",
+          "error": "",
+          "latency_ms": 1292.0
+        },
+        {
+          "shape": "A_flat",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": false,
+          "tool_name": "",
+          "args": {},
+          "schema_failure": "ValidationError: 7 validation errors for PlannerIntent",
+          "argument_defect": "",
+          "error": "",
+          "latency_ms": 1299.5
+        },
+        {
+          "shape": "A_flat",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": false,
+          "tool_name": "",
+          "args": {},
+          "schema_failure": "ValidationError: 7 validation errors for PlannerIntent",
+          "argument_defect": "",
+          "error": "",
+          "latency_ms": 1442.9
+        },
+        {
+          "shape": "A_flat",
+          "model": "bedrock:us.amazon.nova-2-lite-v1:0",
+          "valid": false,
+          "tool_name": "",
+          "args": {},
+          "schema_failure": "ValidationError: 7 validation errors for PlannerIntent",
+          "argument_defect": "",
+          "error": "",
+          "latency_ms": 1934.4
+        }
+      ]
+    }
+  ]
+}

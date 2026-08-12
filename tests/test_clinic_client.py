@@ -1,0 +1,275 @@
+"""One tool made real: ``book_appointment`` over a socket to a service CareLoop does not own.
+
+Every test here runs against Demo World on a loopback port — a real client, a real connection, a
+real server in its own event loop. Driving the ASGI app in-process would exercise Demo World and
+skip the claim.
+
+What is asserted, in order: a booking changes external state; the executor's ledger still means
+what it meant; the idempotency key CareLoop derives is honoured at *both* layers; a refusal from
+the clinic is loud; and the typed result is narrow enough that a service growing a field cannot
+put a clock on it.
+"""
+
+from __future__ import annotations
+
+import httpx
+import pytest
+
+from careloop.tools.callables import ToolSet
+from careloop.tools.clinic import (
+    ClinicClient,
+    ClinicRefused,
+    ClinicUnavailable,
+    _appointment,
+    clinic_executor,
+    clinic_handlers,
+)
+from careloop.tools.executor import DEFAULT_HANDLERS, ExecutionOutcome, MockExternalExecutor
+from careloop.tools.idempotency import idempotency_key
+from careloop.tools.results import AppointmentBooked
+from demoworld.clinic import Clinic, Slot
+
+CASE_ID = "case-0001"
+
+BOOKING = {
+    "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+    "patient_id": "PT-4417",
+    "slot_start": "2026-09-03T09:30:00",
+    "reason": "cardiology review",
+}
+
+KEY = idempotency_key(CASE_ID, "book_appointment", BOOKING)
+
+
+def booking_toolset(clinic: ClinicClient, case_id: str = CASE_ID) -> ToolSet:
+    """A toolset whose bookings are real and whose other three effects are not."""
+    return ToolSet(case_id, executor=clinic_executor(clinic))
+
+
+class TestABookingChangesTheOutsideWorld:
+    def test_the_slot_is_gone_from_the_clinic_after_a_booking(
+        self, clinic: ClinicClient, clinic_state: Clinic
+    ) -> None:
+        taken = Slot(provider_id=BOOKING["provider_id"], slot_start=BOOKING["slot_start"])
+        assert taken in clinic_state.available()
+
+        clinic.book(BOOKING, KEY)
+
+        assert taken not in clinic_state.available()
+        assert len(clinic_state.appointments()) == 1
+
+    def test_the_clinic_holds_what_careloop_asked_for(
+        self, clinic: ClinicClient, clinic_state: Clinic
+    ) -> None:
+        booked = clinic.book(BOOKING, KEY)
+        held = clinic_state.appointment(booked.confirmation_id)
+
+        assert held.provider_id == BOOKING["provider_id"]
+        assert held.patient_id == BOOKING["patient_id"]
+        assert held.slot_start == BOOKING["slot_start"]
+
+    def test_the_result_is_the_typed_one_the_mock_would_have_returned(
+        self, clinic: ClinicClient
+    ) -> None:
+        """The type does not change when the effect becomes real, and nor does the caller."""
+        booked = clinic.book(BOOKING, KEY)
+        assert isinstance(booked, AppointmentBooked)
+        assert booked.provider_id == BOOKING["provider_id"]
+        assert booked.confirmation_id
+
+
+class TestThroughTheToolset:
+    """The route a graph node takes. Nothing above the executor knows the effect became real."""
+
+    def test_calling_the_tool_books_with_the_clinic(
+        self, clinic: ClinicClient, clinic_state: Clinic
+    ) -> None:
+        tools = booking_toolset(clinic)
+        result = tools.call("book_appointment", BOOKING)
+
+        assert result.outcome is ExecutionOutcome.EXECUTED
+        assert len(clinic_state.appointments()) == 1
+        assert tools.executor.invocation_count == 1
+
+    def test_the_key_the_clinic_sees_is_the_key_careloop_derived(
+        self, clinic: ClinicClient
+    ) -> None:
+        """Invariant 7 reaches the external system rather than stopping at the executor."""
+        tools = booking_toolset(clinic)
+        result = tools.call("book_appointment", BOOKING)
+
+        assert result.idempotency_key == KEY
+        assert result.result.confirmation_id == f"apt-{KEY[:16]}"
+
+    def test_the_other_three_effects_are_still_simulated(
+        self, clinic: ClinicClient, clinic_state: Clinic
+    ) -> None:
+        """One tool made real is the proof; four would be scope creep with a rationale."""
+        tools = booking_toolset(clinic)
+        tools.call("send_email", {"to": "rosa@carer.example", "subject": "hello", "body": "hi"})
+        tools.call("upload_document", {"portal_id": "PORTAL-X", "document_id": "doc-0001-referral"})
+
+        assert tools.executor.invocation_count == 2
+        assert clinic_state.appointments() == ()
+
+    def test_only_the_booking_handler_is_replaced(self, clinic: ClinicClient) -> None:
+        handlers = clinic_handlers(clinic)
+        assert set(handlers) == set(DEFAULT_HANDLERS)
+        assert handlers["book_appointment"] is not DEFAULT_HANDLERS["book_appointment"]
+        assert all(
+            handlers[name] is DEFAULT_HANDLERS[name]
+            for name in DEFAULT_HANDLERS
+            if name != "book_appointment"
+        )
+
+
+class TestIdempotencyReachesTheClinic:
+    """Two layers, and they are not redundant.
+
+    CareLoop suppresses a replay from its own ledger before dispatching; Demo World honours the same
+    key server-side. The first stops CareLoop doing the work twice. The second is what stops a retry
+    CareLoop does not know it made — a connection dropped after the booking landed — becoming a
+    second appointment, and it is the layer a real integration cannot do without.
+    """
+
+    def test_the_executors_own_ledger_suppresses_before_the_clinic_is_reached(
+        self, clinic: ClinicClient, clinic_state: Clinic
+    ) -> None:
+        tools = booking_toolset(clinic)
+        first = tools.call("book_appointment", BOOKING)
+        second = tools.call("book_appointment", BOOKING)
+
+        assert first.outcome is ExecutionOutcome.EXECUTED
+        assert second.outcome is ExecutionOutcome.DUPLICATE_SUPPRESSED
+        assert second.result == first.result
+        assert len(clinic_state.appointments()) == 1
+
+    def test_a_fresh_executor_replays_the_clinics_original_rather_than_booking_again(
+        self, clinic: ClinicClient, clinic_state: Clinic
+    ) -> None:
+        """The second layer, alone. A new executor has an empty ledger and knows nothing.
+
+        This is the T3 property carried through real HTTP: the same case, the same arguments, a
+        process that has never seen either, and still one appointment in the world — because the key
+        CareLoop derives is deterministic and the clinic honours it.
+        """
+        first = booking_toolset(clinic).call("book_appointment", BOOKING)
+        second = booking_toolset(clinic).call("book_appointment", BOOKING)
+
+        assert len(clinic_state.appointments()) == 1
+        assert second.result == first.result
+        assert second.result.model_dump_json() == first.result.model_dump_json()
+
+    def test_two_cases_booking_the_same_slot_are_two_different_calls(
+        self, clinic: ClinicClient
+    ) -> None:
+        """``case_id`` scopes the key, so the second case is not a replay — the clinic refuses it
+        because the slot is taken, which is the correct answer rather than a silent success."""
+        booking_toolset(clinic, "case-0001").call("book_appointment", BOOKING)
+        with pytest.raises(ClinicRefused):
+            booking_toolset(clinic, "case-0002").call("book_appointment", BOOKING)
+
+
+class TestWhenTheClinicSaysNo:
+    def test_a_slot_the_clinic_does_not_offer_is_refused(self, clinic: ClinicClient) -> None:
+        with pytest.raises(ClinicRefused) as refusal:
+            clinic.book({**BOOKING, "slot_start": "2031-01-01T08:00:00"}, KEY)
+        assert "404" in str(refusal.value)
+
+    def test_a_refusal_records_no_effect(self, clinic: ClinicClient, clinic_state: Clinic) -> None:
+        """A booking that did not happen must not appear in the ledger as one that did."""
+        tools = booking_toolset(clinic)
+        with pytest.raises(ClinicRefused):
+            tools.call("book_appointment", {**BOOKING, "slot_start": "2031-01-01T08:00:00"})
+
+        assert tools.executor.invocation_count == 0
+        assert tools.executor.ledger == ()
+        assert clinic_state.appointments() == ()
+
+    def test_a_clinic_that_is_not_there_is_a_different_exception(self) -> None:
+        """A refusal is the clinic answering; this is nobody answering, and they are not the same
+        thing to say about the world."""
+        nowhere = ClinicClient("http://127.0.0.1:1", timeout=1.0)
+        with pytest.raises(ClinicUnavailable):
+            nowhere.book(BOOKING, KEY)
+        nowhere.close()
+
+
+class TestTheReadBackIsASeparateRequest:
+    def test_an_appointment_can_be_read_back(self, clinic: ClinicClient) -> None:
+        booked = clinic.book(BOOKING, KEY)
+        assert clinic.appointment(booked.confirmation_id) == booked
+
+    def test_the_read_back_sees_a_change_the_booking_response_cannot(
+        self, clinic: ClinicClient, clinic_state: Clinic
+    ) -> None:
+        """The client-level half of the independence proof.
+
+        If ``appointment`` returned a cached copy of the booking, this would pass with the original
+        slot. The graph-level half — verification failing on the difference — is in
+        ``tests/test_verify_readback.py``.
+        """
+        booked = clinic.book(BOOKING, KEY)
+        clinic_state.amend(booked.confirmation_id, slot_start="2026-09-04T14:00:00")
+
+        observed = clinic.appointment(booked.confirmation_id)
+        assert observed.slot_start == "2026-09-04T14:00:00"
+        assert observed != booked
+
+    def test_reading_an_appointment_the_clinic_does_not_hold_is_refused(
+        self, clinic: ClinicClient
+    ) -> None:
+        with pytest.raises(ClinicRefused):
+            clinic.appointment("apt-nothing")
+
+
+class TestTheBoundaryIsNarrow:
+    """Invariant 9 survives contact with a service CareLoop does not control.
+
+    Not because the service is well-behaved — it could grow a ``booked_at`` tomorrow — but because
+    the four fields are mapped by name and everything else is dropped at the boundary.
+    """
+
+    def test_a_field_the_service_grows_never_reaches_the_result(self) -> None:
+        response = httpx.Response(
+            200,
+            json={
+                "confirmation_id": "apt-0000",
+                "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+                "patient_id": "PT-4417",
+                "slot_start": "2026-09-03T09:30:00",
+                "reason": "cardiology review",
+                "booked_at": "2026-08-12T10:00:00+00:00",
+                "queue_position": 4,
+            },
+        )
+        result = _appointment(response)
+
+        assert set(result.model_dump()) == {
+            "confirmation_id",
+            "provider_id",
+            "patient_id",
+            "slot_start",
+        }
+        assert "booked_at" not in result.model_dump_json()
+
+    def test_the_result_type_forbids_the_extra_field_outright(self) -> None:
+        """Vacuity: the mapping is narrow *and* the model would refuse the field anyway."""
+        assert "booked_at" not in AppointmentBooked.model_fields
+
+
+class TestTheExecutorIsStillTheOnlyRouteOut:
+    def test_a_clinic_backed_executor_is_still_an_executor(self, clinic: ClinicClient) -> None:
+        """Nothing above the executor changes shape when one handler becomes real."""
+        executor = clinic_executor(clinic)
+        assert isinstance(executor, MockExternalExecutor)
+        assert executor.action_types == frozenset(DEFAULT_HANDLERS)
+
+    def test_the_ledger_still_records_one_entry_per_effect(self, clinic: ClinicClient) -> None:
+        tools = booking_toolset(clinic)
+        tools.call("book_appointment", BOOKING)
+        tools.call("book_appointment", BOOKING)
+
+        assert tools.executor.invocation_count == 1
+        assert tools.executor.suppressed_count == 1
+        assert len(tools.executor.ledger) == 1

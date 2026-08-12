@@ -10,10 +10,13 @@ from collections.abc import Iterator
 from datetime import datetime
 
 import pytest
+from clinic_helpers import clinic_server
 from helpers import FIXED_NOW
 
 from careloop.provenance import Fact, Provenance, TrustLevel
 from careloop.state import Case, InMemoryCaseStore, SqliteCaseStore
+from careloop.tools.clinic import ClinicClient
+from demoworld.clinic import Clinic
 
 
 @pytest.fixture
@@ -49,6 +52,35 @@ def store(request: pytest.FixtureRequest, tmp_path) -> Iterator[object]:
         made = SqliteCaseStore(tmp_path / "careloop.sqlite3")
     yield made
     made.close()
+
+
+@pytest.fixture(scope="session")
+def clinic_service() -> Iterator[tuple[str, Clinic]]:
+    """Demo World on a loopback port, started once for the whole session.
+
+    Session-scoped because binding a socket per test would be the slowest thing in the suite for no
+    added confidence; the world is reset between tests instead, which is also what the demo's own
+    reset button does.
+    """
+    with clinic_server() as bound:
+        yield bound
+
+
+@pytest.fixture
+def clinic_state(clinic_service: tuple[str, Clinic]) -> Clinic:
+    """The clinic's state, reset. Held so a test can move an appointment out from under CareLoop."""
+    _, world = clinic_service
+    world.reset()
+    return world
+
+
+@pytest.fixture
+def clinic(clinic_service: tuple[str, Clinic], clinic_state: Clinic) -> Iterator[ClinicClient]:
+    """A CareLoop client pointed at the running Demo World, over a real socket."""
+    base_url, _ = clinic_service
+    client = ClinicClient(base_url)
+    yield client
+    client.close()
 
 
 @pytest.fixture

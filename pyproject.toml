@@ -22,6 +22,12 @@ dependencies = [
     # not as part of the test harness. It reaches no network of its own and needs no credentials, so
     # CI's zero-secret contract is unaffected.
     "fastapi>=0.115",
+    # How careloop/tools/clinic.py reaches Demo World. Declared rather than borrowed: httpx is
+    # already in the tree as a strands-agents dependency, and session 4's lesson was that an
+    # undeclared dependency you rely on is one you find out about on CI. Session 8 pins the
+    # TestClient onto httpx2 for an unrelated starlette deprecation; the two are different
+    # distributions providing different modules and do not contend.
+    "httpx>=0.27",
 ]
 
 [project.optional-dependencies]
@@ -45,6 +51,13 @@ dev = [
     # emits no warning, rather than assumed — the alternative was silencing the warning locally
     # while CI, which installs this file and not the local tree, kept emitting it.
     "httpx2>=2.0",
+    # Serves Demo World on a loopback port for the clinic tests. In `dev` rather than in the
+    # runtime dependencies because nothing under careloop/ imports it — CareLoop is the client
+    # here, never the server — but the tests need a real socket: a test client would exercise the
+    # ASGI app and skip the one thing this session claims, which is that CareLoop reaches an
+    # external system over HTTP. It arrives transitively via strands-agents' mcp dependency today;
+    # declared for the same reason httpx is.
+    "uvicorn>=0.30",
 ]
 
 # The model-provider benchmark under bench/ only. Deliberately not part of `dev`: CI installs

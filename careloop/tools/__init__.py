@@ -8,6 +8,13 @@ from careloop.tools.callables import (
     bound_tools,
     implements,
 )
+from careloop.tools.clinic import (
+    ClinicClient,
+    ClinicRefused,
+    ClinicUnavailable,
+    clinic_executor,
+    clinic_handlers,
+)
 from careloop.tools.document_source import (
     DOCUMENT_SOURCES,
     DocumentKind,
@@ -66,6 +73,9 @@ __all__ = [
     "ActionResult",
     "AppointmentBooked",
     "ArgSpec",
+    "ClinicClient",
+    "ClinicRefused",
+    "ClinicUnavailable",
     "Document",
     "DocumentKind",
     "DocumentNotFound",
@@ -92,6 +102,8 @@ __all__ = [
     "bound_method_name",
     "bound_tools",
     "canonical_args",
+    "clinic_executor",
+    "clinic_handlers",
     "default_document_store",
     "extract_pages",
     "fixture_documents",

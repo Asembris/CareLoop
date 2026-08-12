@@ -424,8 +424,22 @@ class TestValueTrustAndTheAutonomousPath:
         assert decision.verdict is Verdict.DENY
         assert decision.reason_code is ReasonCode.INSUFFICIENT_FACT_TRUST
 
-    def test_booking_from_planning_is_denied_by_the_state_gate(self, engine: PolicyEngine) -> None:
-        """The ALLOW rule names the execution states; PLANNING is a proposal, not an execution."""
+    def test_a_legitimate_booking_from_planning_reaches_allow(self, engine: PolicyEngine) -> None:
+        """Reversed in commit 6, deliberately. The previous expectation encoded a bug.
+
+        This test used to assert ``DENY`` / ``NO_RULE_MATCH`` here, on the reading that "PLANNING
+        is a proposal, not an execution". But ``deny-external-effect-outside-execution-states``
+        permits ``PLANNING`` and says why in its own comment — the planner proposes from there and
+        must be able to receive a real verdict rather than a state denial — while the two ``ALLOW``
+        rules named only the execution states. The result was that an evaluation in ``PLANNING``
+        could never reach an ``ALLOW`` and fell through to the default deny, so a legitimate
+        booking with a trusted provider and a validated slot was refused ``NO_RULE_MATCH`` for a
+        reason no diagnostic explained.
+
+        The graph makes the consequence concrete: the gate node evaluates while the case is
+        ``PLANNING`` to decide whether to route to execution, to a human, or back to the planner.
+        With the old rules that routing had exactly one outcome.
+        """
         case = _planning(
             trusted_fact("provider", "prov-1"),
             make_fact("slot", SLOT, TrustLevel.CONTROLLED),
@@ -435,8 +449,45 @@ class TestValueTrustAndTheAutonomousPath:
             {"provider_id": "prov-1", "patient_id": "pat-1", "slot_start": SLOT},
             case,
         )
+        assert decision.verdict is Verdict.ALLOW
+        assert decision.matched_rule_id == "allow-booking-on-validated-slot"
+
+    def test_a_legitimate_email_from_planning_reaches_require_human(
+        self, engine: PolicyEngine
+    ) -> None:
+        """The routing verdict the DENY rule's comment promised, pinned so it cannot regress.
+
+        ``REQUIRE_HUMAN`` from ``PLANNING`` is the whole reason that state is in the permitted set.
+        It is also the only state the case can be parked from: ``AWAITING_HUMAN`` is reachable from
+        ``PLANNING`` and from nowhere else that an external effect could be proposed.
+        """
+        case = _planning(trusted_fact("carer", "carer@example.org"))
+        decision = engine.evaluate(
+            "send_email",
+            {"to": "carer@example.org", "subject": "Referral", "body": "Booked."},
+            case,
+        )
+        assert decision.verdict is Verdict.REQUIRE_HUMAN
+        assert decision.reason_code is ReasonCode.REQUIRES_HUMAN_APPROVAL
+
+    def test_the_state_gate_still_denies_from_a_state_that_is_not_permitted(
+        self, engine: PolicyEngine
+    ) -> None:
+        """Widening the ALLOW rules to PLANNING did not widen them to everything."""
+        case = make_case(
+            state=CaseState.GATHERING_EVIDENCE,
+            facts=(
+                trusted_fact("provider", "prov-1"),
+                make_fact("slot", SLOT, TrustLevel.CONTROLLED),
+            ),
+        )
+        decision = engine.evaluate(
+            "book_appointment",
+            {"provider_id": "prov-1", "patient_id": "pat-1", "slot_start": SLOT},
+            case,
+        )
         assert decision.verdict is Verdict.DENY
-        assert decision.reason_code is ReasonCode.NO_RULE_MATCH
+        assert decision.reason_code is ReasonCode.WRONG_CASE_STATE
 
     def test_a_missing_required_argument_fails_args_present(self, engine: PolicyEngine) -> None:
         case = _ready(

@@ -135,13 +135,22 @@ rules:
 
   # ---------------------------------------------------------------------------------------------
   # ALLOW — the autonomous path. Reached only when nothing above matched.
+  #
+  # PLANNING is in every permitted set below, matching deny-external-effect-outside-execution-
+  # states above. It was missing until commit 6 and that was a bug rather than a policy choice:
+  # the DENY rule's own comment says the planner proposes from PLANNING and must be able to
+  # receive a real verdict there, but with PLANNING absent here an evaluation in that state could
+  # never reach an ALLOW and fell through to the default deny. A legitimate booking was refused
+  # NO_RULE_MATCH for no reason a diagnostic explained. The two evaluation points are the routing
+  # check while the case is PLANNING, and the tool boundary once it is EXECUTING; both must be
+  # able to reach every verdict the rule intends.
   # ---------------------------------------------------------------------------------------------
 
   - id: allow-booking-on-validated-slot
     effect: ALLOW
     tools: [book_appointment]
     when:
-      case_state_in: [READY_TO_EXECUTE, EXECUTING]
+      case_state_in: [PLANNING, READY_TO_EXECUTE, EXECUTING]
       arg_trust_at_least:
         - arg: provider_id
           level: TRUSTED
@@ -158,7 +167,7 @@ rules:
     effect: ALLOW
     tools: [upload_document]
     when:
-      case_state_in: [READY_TO_EXECUTE, EXECUTING]
+      case_state_in: [PLANNING, READY_TO_EXECUTE, EXECUTING]
       arg_trust_at_least:
         - arg: portal_id
           level: TRUSTED

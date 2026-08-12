@@ -1791,6 +1791,189 @@ decision card is fixed by `CaseSections` rather than by agreement. After that: A
 
 ---
 
+## Session A — 2026-08-12
+
+A spike and a validation run. **No production code was written or changed**; everything below is a
+measuring instrument, a test, or a document.
+
+### Position
+
+Branch `main`. `origin/main` is at `d2c600d`; everything from session 5 onward is **unpushed**.
+
+| Commit | Subject | Pushed |
+|---|---|---|
+| `2453344` | Add the strands.Agent spike harness with its six offline probes | no |
+| `511b290` | Record the spike's live results and reject the Agent migration in ADR 0001 | no |
+| `26189f4` | Add the live loop harness with the double spend gate and its offline guards | no |
+| `7b09780` | Add the five live scenarios as invariant-asserting tests behind the live marker | no |
+| `c0f11d2` | Add the repeated-run live reporting harness | no |
+| `7521a00` | Record the live loop findings and the planner's structured-output failure | no |
+| — | Record session A in the session log | no |
+
+**1421 passed, 20 skipped locally; 1419 passed, 22 skipped in a clean `.[dev]`-only virtualenv.**
+`ruff check` and `ruff format --check` clean in both. Verified under `pytest` and `python -m
+pytest`, with every credential unset and `AWS_CONFIG_FILE` pointed at `/nonexistent`.
+
+The skip count moved from 2 to 20 because **14 live tests were added and correctly skip** —
+`live runs are opt-in: set CARELOOP_LIVE=1 to permit paid calls` is the reason printed for every
+one of them. The clean venv adds the two `openai` `importorskip` tests as always. 13 of the new
+tests are the credential-free guards, which run everywhere including CI.
+
+Total live spend across the whole session: **~$0.45** against a $2.00 ceiling.
+
+### The headline, and it is not the spike
+
+**The system does not work against its own recommended planner model.** Nova 2 Lite produces a
+valid `PlannerIntent` essentially never on the real graph's prompt — 0 successes across 15 scenario
+runs and three separate direct repeats of 8, 10 and 12 calls. Every scenario ends `FAILED`; no case
+reached `DONE` on the shipped configuration in this session.
+
+The cause is precise: the planner emits a well-formed intent for the tool it chose and **omits the
+seven argument fields belonging to the tools it did not choose.** `PlannerIntent` declares 13
+required fields and session 5's delta D6 made every one required with `""` meaning "not supplied".
+The reasoning behind D6 still holds; what was never tested is whether a real model will emit the
+empty strings, and this one will not.
+
+**This contradicts the benchmark, and the benchmark is not at fault.** It measured 95%
+structured-output success over 20 isolated calls with a shorter prompt. Session 4 wrote that
+"nothing here measured multi-turn planning inside the graph" — that caveat was carrying the entire
+result, and this session is what it was waiting for.
+
+Full detail, including the scenario table, in [`live-loop-findings.md`](live-loop-findings.md).
+
+### Two hypotheses tested and refuted — recorded so they are not retried
+
+Both looked right. Neither survived, and the *method* is the durable part.
+
+**"The replan paragraph in the system prompt causes it."** A bisect over the planner system prompt
+was clean and dramatic — 0/10 valid with the paragraph, 9/10 without it. It was measured on a
+**short synthetic case**, and it does not generalise: replayed against the prompt the graph actually
+sends, captured from a live run rather than reconstructed, the paragraph makes no difference at all
+(0/8 either way). A `--diagnose-prompt` flag had already been built on the first result and was
+**removed rather than kept**, because a diagnostic encoding a refuted hypothesis is worse than none.
+*A bisect on a synthetic input measures the synthetic input.*
+
+**"Give the argument fields a default of `""`."** The obvious remedy, and it respects session 5's
+reason for all-required (a plain `str` default is not an `X | None` union, so no nullable type
+appears in the JSON schema). It fails *differently*, which is worse: the model stops producing a
+tool use at all — `ValueError: No valid tool use or tool use input was found in the Bedrock
+response`, 5 times out of 5. The remedy is not obvious and this session did not find it.
+
+### Question 1 — `strands.Agent` for the proposal agents: REJECTED
+
+Full reasoning in [`adr/0001-strands-agent-for-the-proposal-agents.md`](adr/0001-strands-agent-for-the-proposal-agents.md).
+Six probes in `scripts/spike_agent.py`, run against `MockModel` and Nova 2 Lite.
+
+Three of eight gate criteria fail:
+
+1. **A tool does reach a `BeforeToolCall` hook on a zero-tool agent.** The SDK registers a dynamic
+   tool named after the Pydantic class — literally `TriageResult` — for the duration of the
+   invocation. And denying it is not a clean refusal: unbounded, it made **245 provider calls and
+   fired the hook 244 times** before a `RecursionError` ended it. A paid runaway inside one node
+   execution, where no graph primitive can see it.
+2. **Cross-case leakage is real.** Measured on what the provider received, not on `agent.messages`:
+   a reused `Agent` leaks case A's canary into case B's request. Fresh-agent-per-invocation is
+   clean — which is what `agents/invoke.py` already is, without the object.
+3. **The shipped `MockModel` cannot drive the path at all** (`StructuredOutputException` after two
+   stream calls). Making it work took **57 lines** of `toolUse` emission, written in the spike so
+   the cost is measured rather than estimated. Those lines would land in the object all 1408 tests
+   depend on.
+
+Cost and latency are genuinely fine — +30 input tokens (~2%), latency within noise — and the ADR
+says so plainly, because the rejection rests on the authority boundary and the mock rather than on
+a performance claim the data would not support.
+
+**`NullConversationManager` is not what its name suggests**, and this outlives the decision. Its
+`apply_management` is a no-op that *preserves the full history*. It is the "manage nothing" manager,
+not the "remember nothing" manager. Read from source, confirmed by execution, and it leaks.
+
+**Two things settled in the ADR either way.** Migrating the proposal agents would *not* make the SDK
+fire the policy hook — the effectful tools belong to no agent, before or after. And making the
+executor a `strands.Agent` owning the effectful tools is **rejected permanently**: it puts an LLM in
+the execution path deciding which tool to call, trading invariant 2 for a narrative about SDK depth.
+
+Per the approved plan, the migration was **not** carried through despite the gate being decidable —
+it was rejected, so there was nothing to carry.
+
+### Question 2 — the harness, and where it lives
+
+`bench/live.py`, not `careloop/` and not `tests/`. That package's own docstring already says it is
+"a measuring instrument, not part of the system being measured", allowed to read a clock, read
+`.env`, and talk to a paid endpoint — which is exactly this. `careloop` may never import `bench`,
+and the existing sweep is unaffected.
+
+**One scenario table, two consumers.** `tests/test_live_loop.py` asserts invariants;
+`scripts/live_report.py` reports rates. Neither can drift from the other because both import
+`SCENARIOS`.
+
+**Unauthorised external effects are asserted at `== 0` and never reported as a rate.** This was an
+explicit instruction at plan approval and it is enforced rather than remembered:
+`check_effects_are_not_a_rate` refuses a record type carrying a field whose name pairs "effect" with
+"rate"/"pct"/"ratio"/"mean", and it is tested in `tests/test_bench_harness.py` rather than in the
+live module — a guard that only runs on a machine with a key pair is a guard CI never checks.
+
+**The double spend gate** is `CARELOOP_LIVE=1` **and** a key pair in `.env`. Credentials alone are
+not enough because `.env` is populated here, so a bare `pytest -q` would otherwise start buying
+calls. Both halves are tested in both directions, including that `CARELOOP_LIVE=true` — a near miss
+— does not open it.
+
+**Models are built explicitly from a mapping, never from ambient role variables**, so
+`tests/test_llm_providers.py::TestTheSuiteItselfUsesNoRealProvider` never had to be weakened.
+
+### Guards proven non-vacuous by mutation
+
+| Mutation | Result |
+|---|---|
+| `check_effects_are_not_a_rate` returns no offenders | 4 failed |
+| the opt-in half of the live gate is dropped | 2 failed |
+
+Both reverted and the suite re-confirmed green.
+
+### Instrument defects found by running it
+
+Three, every one found by **one measurement contradicting another** rather than by reading code.
+
+1. **`MeteredModel` reported zero tokens on the direct path.** `Model.structured_output` wraps its
+   stream in an `{"event": ...}` envelope, so a top-level `metadata.usage` lookup finds nothing.
+   Caught because two probes disagreed about the same call. It would have been a false negative on
+   the one question open decision 16 turns on.
+2. **A `ValidationError` was counted as a generic error** rather than as a structured-output
+   failure. Session 4 ran a benchmark mutation for exactly this confusion; it came back here.
+3. **A rate function swallowed exceptions while counting them**, reporting "0/8 valid" without
+   noticing the failure had changed shape entirely. Printing the exception instead of counting it
+   is what turned a wrong conclusion into a right one.
+
+A fourth, in the spike: probe 3's deny-everything sub-probe reported `RecursionError while encoding
+a JSON object`, which reads exactly like an artefact of the harness's own `json.dumps`. Adding the
+provider call count is what proved it was a genuine 245-call runaway. **A finding that cannot
+distinguish the instrument from the subject is not a finding.**
+
+### What genuinely worked
+
+- **Zero unauthorised external effects, every scenario, every run.**
+- **Nova Micro on triage** classified correctly every time, in the real graph, with the real framing.
+- **Failure is loud and terminal**: `NoStructuredOutput` handling confirmed against a real provider,
+  the case marked `FAILED`, nothing invented, nothing hung.
+- **Cost and latency are trivial** — ~1.3 s and ~$0.0012 per scenario run.
+
+### Not done, and why
+
+The OpenAI comparison subset was **not run**. The Bedrock half produced a blocking finding well
+before a cross-provider comparison would have meant anything: comparing two models on a prompt that
+one of them cannot answer measures the prompt. `gpt-4o-mini` on this prompt is now the **first**
+experiment the next session should run — it is the cheapest of the three remedies and it may make
+the other two unnecessary.
+
+### Next
+
+The planner configuration, and nothing else until it works. Three options in the findings document,
+in the order they should be tried: measure `gpt-4o-mini` on the captured prompt; reshape
+`PlannerIntent` away from the flat all-required form; add `ValidationError` retry *alongside* a fix
+and never instead of one. Re-run the live scenarios before calling it fixed — they exist now, they
+cost two cents, and they are the only thing in this repository that would have caught this.
+
+---
+
 ## Open decisions
 
 Carry these forward. Nothing here is blocking the next commit except where it says so.
@@ -1815,6 +1998,20 @@ Carry these forward. Nothing here is blocking the next commit except where it sa
    the same thing with the value spelled another way. The mock always does what its script says;
    the bounded replan cycle is what stops a real one looping, and the bound firing is a worse
    outcome than a planner that reads the refusal. Budget a run against Nova 2 Lite.
+
+   **Session A ran it, and the answer is still unmeasured — for a reason that supersedes the
+   question.** Nova 2 Lite produces a valid `PlannerIntent` essentially never on the real graph's
+   prompt (0 successes in 15 scenario runs), so across the whole session the planner was refused
+   too rarely for the replan cycle to run twice. The replan question cannot be answered until the
+   planner can emit an intent at all.
+
+   **What session A does close is the model recommendation, and it closes it the other way.** The
+   measured default `bedrock:us.amazon.nova-2-lite-v1:0` **must not ship as the planner** on the
+   current schema. The benchmark's 95% structured-output figure was measured on isolated calls with
+   a shorter prompt and does not survive the real one. `.env.example` still carries the old
+   recommendation and **should not be edited until a working configuration is measured** — replacing
+   one unmeasured recommendation with another is how the benchmark would stop meaning anything.
+   Full detail in [`live-loop-findings.md`](live-loop-findings.md).
 2. **`ReasonCode` vocabulary — now six. Grown once, deliberately.** New codes are added centrally
    to the enum, never as free text on a rule, and every addition is recorded here. See
    *The sixth reason code* under session 2 for why `AUTHORITY_NOT_TRUSTED` was added rather than
@@ -1966,6 +2163,20 @@ Carry these forward. Nothing here is blocking the next commit except where it sa
 
     The under-the-hood panel ships with what the case genuinely holds: gate verdicts with their rule
     ids, the graph nodes a run traversed, and the external-effect count.
+
+    **Session A removes the blocking unknown.** Token usage *is* available on the path CareLoop
+    already runs — it does not require migrating to `strands.Agent`. Measured live on one triage
+    call: the agent path reports `{'inputTokens': 1556, 'outputTokens': 87}` via
+    `AgentResult.metrics.accumulated_usage`, and the **direct path reports
+    `{'inputTokens': 1526, 'outputTokens': 84}`** off its own stream metadata.
+
+    One detail that cost a wrong answer once and will again: `Model.structured_output` wraps its
+    stream in an `{"event": ...}` envelope, so `metadata.usage` sits **one level down** rather than
+    at the top. A top-level lookup reports zero and looks exactly like "Bedrock does not surface
+    usage here". Both `scripts/spike_agent.py` and `bench/live.py` search nested, and each says why.
+
+    The two questions that were always the real work are unchanged: whether usage belongs on `Case`
+    at all under invariant 8, and what a mock run should report rather than zero.
 17. **The API's run registry is in memory, and that is a decision rather than a shortcut.** It holds
     a run's state and the nodes it traversed — execution context, which invariant 8 explicitly says
     is not consulted for business facts. Every durable question has a store-backed answer, and
@@ -1989,6 +2200,13 @@ Carry these forward. Nothing here is blocking the next commit except where it sa
 - **The mock model is the only model the tests ever see.** Everything green means the spine is
   correct, not that a real model produces well-formed intents. The first real-provider run is a
   genuine unknown; budget time for it.
+
+  **Session A ran it, and the risk was real.** A green suite of 1408 tests coexisted with a planner
+  that cannot produce a valid intent against the recommended model. The 14 live tests added in
+  session A are the standing mitigation, but they are opt-in and skipped by default — so this risk
+  is *reduced and not retired*, and it stays here until a live run passes on a shipped
+  configuration. **Until then, "the end-to-end demo runs" is a claim about the mock**, and anywhere
+  the demo is described has to say so.
 - **`strands-agents` is pinned to `==1.51.0`** deliberately. A bump must re-run the spike — the
   four verified facts are version-specific, and two of them (the `MultiAgentBase` node contract and
   the async-generator `structured_output`) fail loudly but confusingly if they shift.

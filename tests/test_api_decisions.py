@@ -6,11 +6,16 @@ differ only in which existing function they call and therefore where the case go
 
 from __future__ import annotations
 
+import pytest
 from api_helpers import CASE_ID, EMAIL, api_client, finished_store, intent, parked_store
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from helpers import make_case
 
-from careloop.api.app import create_app
+from careloop.api.app import create_app, resume_event
+from careloop.api.deps import ApiDeps
 from careloop.api.projections import COMPLETED, NEEDS_YOU, WORKING
+from careloop.events.inbound import CLAIM_REJECTION_EVENT_ID, REFERRAL_EVENT_ID
 from careloop.state import CaseState, InMemoryCaseStore, TimelineKind
 
 WAIT = 10.0
@@ -236,6 +241,46 @@ class TestDecisionsThatCannotBeMade:
 
         assert response.status_code == 409
         assert len(store.get(CASE_ID).actions) == 1
+
+
+class TestAReopenedCaseResumesUnderTheEventThatReopenedIt:
+    """Why the API reads ``latest_delivery`` and not ``case.event_id``.
+
+    ``reopen_case`` deliberately does not rewrite ``Case.event_id`` — it records which event
+    *opened* the case, and a reopen is not an opening. Anything rebuilding a run context off that
+    field would hand a reopened case the referral's documents instead of the claim rejection's,
+    and the follow-up documents would never be read.
+    """
+
+    def test_the_resume_event_is_the_one_that_reopened_the_case(self) -> None:
+        store = finished_store()
+
+        with api_client(store, *SEND_EMAIL) as client:
+            client.post(
+                f"/api/events?wait={WAIT}",
+                json={"event_id": CLAIM_REJECTION_EVENT_ID, "case_id": CASE_ID},
+            )
+
+        case = store.get(CASE_ID)
+        deps = ApiDeps(store=store)
+
+        assert case.event_id == REFERRAL_EVENT_ID
+        assert resume_event(deps, case).event_id == CLAIM_REJECTION_EVENT_ID
+
+    def test_before_any_reopen_it_is_the_event_that_opened_the_case(self) -> None:
+        store = parked_store()
+
+        resumed = resume_event(ApiDeps(store=store), store.get(CASE_ID))
+
+        assert resumed.event_id == REFERRAL_EVENT_ID
+
+    def test_a_case_with_no_recorded_delivery_is_a_409_rather_than_a_guess(self) -> None:
+        case = make_case(state=CaseState.AWAITING_HUMAN)
+
+        with pytest.raises(HTTPException) as raised:
+            resume_event(ApiDeps(store=InMemoryCaseStore()), case)
+
+        assert raised.value.status_code == 409
 
 
 class TestTheApiCallsExistingFunctionsRatherThanDecidingAnything:

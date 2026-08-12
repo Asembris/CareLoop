@@ -125,6 +125,18 @@ class TestTheSectionsPartitionEveryState:
 MARKER = "DIAGNOSTIC-LEAK-CANARY-8f21"
 
 
+def _proposed(case: Case, tool_name: str, args: dict[str, str]) -> Case:
+    """Append the ``PLAN_PROPOSED`` entry the plan node writes."""
+    return append_event(
+        case,
+        kind=TimelineKind.PLAN_PROPOSED,
+        actor="planner",
+        summary=f"proposed {tool_name}",
+        payload={"tool_name": tool_name, "args": dict(args), "rationale": ""},
+        now=FIXED_NOW,
+    )
+
+
 def marked(case: Case) -> Case:
     """Rewrite every diagnostic on ``case`` to carry a token nothing else could produce.
 
@@ -501,6 +513,40 @@ class TestTheProjectionsSayWhatTheCaseSays:
 
         assert args_digest(decision.args) == case.pending_approval().args_digest
         assert args_digest(decision.args) == args_digest(EMAIL)
+
+    def test_the_card_shows_the_approved_proposal_even_when_a_later_one_exists(self) -> None:
+        """Why the card reads ``proposal_for`` and not ``latest_proposal``.
+
+        The approval records a digest, so the card must go back to the proposal *that digest
+        covers*. Reaching for the most recent proposal instead would show a caregiver one set of
+        arguments while the button executed another — the exact confusion the digest exists to
+        prevent. Unreachable in a real run, because nothing plans while a case is parked; asserted
+        anyway, because the two readers are indistinguishable until it is.
+        """
+        approved = {"to": "carer@example", "subject": "the one being approved", "body": "b"}
+        later = {"to": "carer@example", "subject": "proposed afterwards", "body": "b"}
+
+        case = _proposed(make_case(state=CaseState.AWAITING_HUMAN), "send_email", approved)
+        case = _proposed(case, "send_email", later)
+        case = case.model_copy(
+            update={
+                "approvals": (
+                    Approval(
+                        approval_id="apr-1",
+                        tool_name="send_email",
+                        args_digest=args_digest(approved),
+                        reason_code="REQUIRES_HUMAN_APPROVAL",
+                        status=ApprovalStatus.PENDING,
+                        requested_at=FIXED_NOW,
+                    ),
+                )
+            }
+        )
+
+        decision = decision_view(case)
+
+        assert decision.args == approved
+        assert decision.args != later
 
     def test_a_case_with_nothing_pending_has_no_decision(self) -> None:
         assert decision_view(finished_case()) is None

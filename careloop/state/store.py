@@ -78,6 +78,22 @@ class CaseStore(Protocol):
         """Return the append-only timeline for a case, in sequence order."""
         ...
 
+    def clear(self) -> int:
+        """Delete every case and its timeline, returning how many were removed.
+
+        **The one destructive method on the durable source of truth, and it exists for exactly one
+        caller**: ``POST /api/demo/reset``, which is only mounted when the app is built with the
+        demo flag on. A judge poking at a live demo has to be able to put it back to a known state,
+        and the alternative — rebuilding the app around a fresh store — would leave a run already
+        in flight writing to a store nobody is reading any more.
+
+        Nothing else in ``careloop/`` may call it, and
+        ``tests/test_api_demo.py::TestNothingElseClearsTheStore`` sweeps for the call rather than
+        trusting the docstring. The API refuses the reset while any run is in flight, for the same
+        reason: a store cleared underneath a live graph is a version conflict wearing a costume.
+        """
+        ...
+
     def close(self) -> None:
         """Release any underlying resources."""
         ...

@@ -174,6 +174,22 @@ class SqliteCaseStore:
         self._conn.execute("COMMIT")
         return case
 
+    def clear(self) -> int:
+        """Delete every case and its timeline. See :meth:`~careloop.state.store.CaseStore.clear`.
+
+        One transaction, so a reset cannot leave timeline rows behind for cases that no longer
+        exist — the two tables are one fact and half of it is worse than none of it.
+        """
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            removed = self._conn.execute("DELETE FROM cases").rowcount
+            self._conn.execute("DELETE FROM timeline")
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
+        self._conn.execute("COMMIT")
+        return removed
+
     def close(self) -> None:
         """Close the underlying connection."""
         self._conn.close()

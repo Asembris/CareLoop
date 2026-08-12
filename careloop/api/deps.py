@@ -28,6 +28,7 @@ from careloop.graph.context import RunContext
 from careloop.graph.runner import context_for
 from careloop.state.case import Case, CaseState
 from careloop.state.store import CaseStore
+from careloop.tools.clinic import ClinicClient
 
 #: Builds the run context one graph run is driven through.
 #:
@@ -39,6 +40,20 @@ ContextFactory = Callable[[CaseStore, InboundEvent, str], RunContext]
 
 def default_context_factory(store: CaseStore, inbound: InboundEvent, case_id: str) -> RunContext:
     return context_for(store, inbound, case_id=case_id)
+
+
+def clinic_context_factory(clinic: ClinicClient) -> ContextFactory:
+    """A factory binding every run to a real external clinic.
+
+    One collaborator turns on both the executor whose bookings are performed over HTTP and the
+    read-back verification observes them with — see
+    :class:`careloop.graph.context.RunContext`, which refuses to be given one without the other.
+    """
+
+    def build(store: CaseStore, inbound: InboundEvent, case_id: str) -> RunContext:
+        return context_for(store, inbound, case_id=case_id, clinic=clinic)
+
+    return build
 
 
 @dataclass
@@ -53,6 +68,16 @@ class ApiDeps:
     events: EventSimulator = field(default_factory=EventSimulator)
     context_factory: ContextFactory = default_context_factory
     runs: RunRegistry = field(default_factory=RunRegistry)
+
+    clinic: ClinicClient | None = None
+    """The external clinic, if there is one. Held so ``POST /api/demo/reset`` can put it back.
+
+    Runs reach it through :attr:`context_factory`, not through this field: a route that took a
+    clinic out of here and used it would be the API doing something, and the API decides nothing.
+    """
+
+    demo: bool = False
+    """Whether the demo control surface is mounted. Read at build time; no route consults it."""
 
 
 def deps(request: Request) -> ApiDeps:
@@ -111,6 +136,7 @@ __all__ = [
     "ContextFactory",
     "Deps",
     "caregiver",
+    "clinic_context_factory",
     "default_context_factory",
     "deps",
     "sections_from",

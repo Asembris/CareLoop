@@ -80,7 +80,7 @@ class TestTheMappingIsTotalAndClosed:
     def test_the_mapping_has_no_entries_outside_the_enum(self) -> None:
         assert all(isinstance(key, ReasonCode) for key in REASON_TEXT)
 
-    def test_the_vocabulary_is_the_six_agreed_codes(self) -> None:
+    def test_the_vocabulary_is_the_seven_agreed_codes(self) -> None:
         """Growth is a deliberate decision recorded in the session log, not a drive-by addition."""
         assert {code.value for code in ReasonCode} == {
             "DESTINATION_NOT_TRUSTED",
@@ -89,6 +89,7 @@ class TestTheMappingIsTotalAndClosed:
             "WRONG_CASE_STATE",
             "INSUFFICIENT_FACT_TRUST",
             "NO_RULE_MATCH",
+            "NO_SAFE_ACTION_AVAILABLE",
         }
 
     def test_the_vocabulary_has_not_grown(self) -> None:
@@ -96,15 +97,18 @@ class TestTheMappingIsTotalAndClosed:
 
         The vocabulary is closed on purpose: a coarse set limits how much of the policy surface
         the planner can map by probing it, and every code is text an attacker-influenced planner
-        gets to read. It has grown once, from five to six, when ``AUTHORITY_NOT_TRUSTED`` was
+        gets to read. It has grown twice. From five to six, when ``AUTHORITY_NOT_TRUSTED`` was
         added because sharing ``INSUFFICIENT_FACT_TRUST`` meant either misleading the planner into
-        a doomed retry or stripping the retry guidance from the rules that need it.
+        a doomed retry or stripping the retry guidance from the rules that need it. From six to
+        seven in session B, when ``NO_SAFE_ACTION_AVAILABLE`` was added for the case where the
+        planner has proposed every tool there is and been refused each time: every other code
+        tells the planner to try something else, and there is nothing else.
 
         Changing this number is a deliberate decision that requires an entry in
         ``docs/session-log.md`` saying which code was added and what would not work without it.
         Editing the literal to make a red suite green is the drift this test exists to catch.
         """
-        assert len(ReasonCode) == 6
+        assert len(ReasonCode) == 7
 
     def test_texts_are_distinct(self) -> None:
         """Two codes rendering identically would be indistinguishable to the planner."""
@@ -190,13 +194,34 @@ class TestEvaluationLeaksNothing:
         }
         assert seen == set(Verdict)
 
-    def test_the_matrix_exercises_every_reason_code(self) -> None:
+    def test_the_matrix_exercises_every_reason_code_the_engine_can_produce(self) -> None:
+        """Every code except the one no rule can carry.
+
+        ``NO_SAFE_ACTION_AVAILABLE`` is the only member of the vocabulary the *engine* never
+        emits: it is not the reason one call was refused, it is the reason a case was parked once
+        every call had been. The graph writes it onto the approval it raises, which is why it
+        needs a code at all, and ``tests/test_no_safe_action.py`` is where it is exercised.
+        """
         engine = default_engine()
         seen = {
             engine.evaluate(tool, args, case).reason_code
             for tool, args, case in self._hostile_calls()
         }
-        assert seen == {*ReasonCode, None}
+        assert seen == {*ReasonCode, None} - {ReasonCode.NO_SAFE_ACTION_AVAILABLE}
+
+    def test_only_one_code_is_outside_the_engines_reach(self) -> None:
+        """Vacuity: the carve-out above must stay a carve-out for exactly one code.
+
+        Without this, a future code that no rule ever carries could be added and the exemption
+        above would silently widen to cover it — which is how a closed vocabulary acquires members
+        nothing produces.
+        """
+        engine = default_engine()
+        seen = {
+            engine.evaluate(tool, args, case).reason_code
+            for tool, args, case in self._hostile_calls()
+        }
+        assert {*ReasonCode} - seen == {ReasonCode.NO_SAFE_ACTION_AVAILABLE}
 
     def test_no_model_visible_reason_contains_an_argument_value(self) -> None:
         engine = default_engine()

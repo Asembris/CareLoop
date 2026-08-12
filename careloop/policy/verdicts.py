@@ -73,6 +73,24 @@ class ReasonCode(StrEnum):
     NO_RULE_MATCH = "NO_RULE_MATCH"
     """Nothing permits this action. The deny-by-default outcome."""
 
+    NO_SAFE_ACTION_AVAILABLE = "NO_SAFE_ACTION_AVAILABLE"
+    """Every action the catalogue offers has been refused. The caregiver is asked what to do.
+
+    The seventh code, added in session B, and the only one that is **not** the reason a particular
+    call was refused. It is the reason a *case* was parked: the planner has now proposed every tool
+    there is and each was denied, so there is nothing left to replan toward.
+
+    It earns its own code because it is the only one whose remedy lies outside the loop entirely.
+    ``DESTINATION_NOT_TRUSTED`` says propose something else and ``INSUFFICIENT_FACT_TRUST`` says
+    validate and retry; both address a planner that still has moves. This one says there are no
+    moves, and reusing either would send the planner back into a cycle it has already exhausted.
+
+    **It is a decision request, not a failure.** "Every available action was correctly refused" is
+    the system working exactly as designed — on a poisoned case it is the best available outcome —
+    and rendering it as ``FAILED`` would report a defence as a fault. ``FAILED`` keeps its meaning:
+    something broke.
+    """
+
 
 #: The only strings that ever reach the model.
 #:
@@ -102,6 +120,13 @@ REASON_TEXT: Final[Mapping[ReasonCode, str]] = {
         "This argument is not confirmed well enough to be used. Confirm it first."
     ),
     ReasonCode.NO_RULE_MATCH: "This action is not permitted. Propose a different action.",
+    # The only text here with no "propose a different action" directive, because by the time this
+    # code is used there is no different action left to propose. Every other refusal points the
+    # planner somewhere; this one points at the caregiver, and the run is over before the planner
+    # would read it.
+    ReasonCode.NO_SAFE_ACTION_AVAILABLE: (
+        "No action available here can be carried out safely. A caregiver has been asked to decide."
+    ),
 }
 
 

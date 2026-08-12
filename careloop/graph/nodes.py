@@ -49,11 +49,12 @@ from careloop.graph.extract import record_document, validate_and_promote
 from careloop.graph.verify import rehydrate, verify_action
 from careloop.policy.gate import PolicyDenied
 from careloop.policy.hook import fire_before_tool_call, tool_use_id
-from careloop.policy.verdicts import Decision, Verdict
+from careloop.policy.verdicts import Decision, ReasonCode, Verdict
 from careloop.state.case import Approval, ApprovalStatus, Case, CaseState, TimelineKind
 from careloop.state.machine import append_event, transition
 from careloop.tools.executor import ExecutionResult
 from careloop.tools.idempotency import args_digest, idempotency_key
+from careloop.tools.registry import REGISTRY
 
 
 def _agent_result(text: str) -> AgentResult:
@@ -300,6 +301,10 @@ class GateNode(DeterministicNode):
             )
         else:
             case = _record_decision(case, decision, TimelineKind.POLICY_DENY, self.context.now())
+            if _every_tool_has_been_refused(case):
+                case = _park_with_nothing_safe_to_do(case, self.context.now())
+                self.context.commit(case, expected_version=base)
+                return "gate: every action was refused; parked for a caregiver"
 
         self.context.commit(case, expected_version=base)
         return f"gate: {decision.verdict} for {proposal.tool_name}"
@@ -618,6 +623,76 @@ def _request_approval(case: Case, proposal: Proposal, decision: Decision, now) -
             "tool_name": proposal.tool_name,
             "reason_code": approval.reason_code,
         },
+        now=now,
+    )
+
+
+def _every_tool_has_been_refused(case: Case) -> bool:
+    """Whether the planner has now proposed every tool there is and been refused each time.
+
+    **Narrow on purpose.** This is not "the case is stuck"; it is one specific, checkable
+    condition, and it is the only one that parks a case this way. A generic fallback for anything
+    that fails to converge would quietly become the place every unexplained problem ends up, and
+    ``FAILED`` would stop meaning "something broke" — which is the meaning the malformed and bound
+    scenarios depend on.
+
+    Refusals are counted by tool name rather than by arguments. A tool refused with one set of
+    arguments might be allowed with another, so this is the conservative reading: the planner has
+    tried everything the catalogue offers *at least once* and has nothing new to reach for. It is
+    also exactly what was observed live — given a poisoned case, the planner works through the
+    whole catalogue and is refused at each step.
+    """
+    refused = {
+        event.payload.get("tool_name", "")
+        for event in case.timeline
+        if event.kind is TimelineKind.POLICY_DENY
+    }
+    return REGISTRY.names <= refused
+
+
+def _park_with_nothing_safe_to_do(case: Case, now) -> Case:
+    """Ask the caregiver what to do, rather than failing.
+
+    "Every available action was correctly refused" is the system working exactly as designed, and
+    on a poisoned case it is the best available outcome. Reporting a defence as a fault would be
+    wrong in the product and wrong in the audit trail, so this parks rather than fails: the agent
+    hit a wall, refused everything, and asked a human instead of forcing an action.
+
+    The approval carries no ``args_digest`` that authorises anything, because there is no proposal
+    to authorise — it is a request for direction, not a request to proceed with a specific call.
+    Approving it releases nothing on its own.
+    """
+    approval = Approval(
+        approval_id=approval_id_for(f"no-safe-action:{case.case_id}:{len(case.timeline)}"),
+        tool_name="",
+        args_digest="",
+        reason_code=str(ReasonCode.NO_SAFE_ACTION_AVAILABLE),
+        status=ApprovalStatus.PENDING,
+        requested_at=now,
+    )
+    case = case.model_copy(update={"approvals": (*case.approvals, approval)})
+    case = append_event(
+        case,
+        kind=TimelineKind.APPROVAL_REQUESTED,
+        actor="policy",
+        summary="no safe action is available; a caregiver decision is needed",
+        diagnostic=(
+            f"every tool in the registry has been proposed and refused: "
+            f"{sorted(REGISTRY.names)}. Parked rather than failed — the refusals are the system "
+            f"working, and FAILED means something broke."
+        ),
+        payload={
+            "approval_id": approval.approval_id,
+            "tool_name": "",
+            "reason_code": approval.reason_code,
+        },
+        now=now,
+    )
+    return transition(
+        case,
+        CaseState.AWAITING_HUMAN,
+        reason="every available action was refused",
+        actor="policy",
         now=now,
     )
 

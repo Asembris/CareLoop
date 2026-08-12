@@ -128,7 +128,8 @@ class TestTheUngatedToolsetReallyDoesExecute:
 
 class TestAllowedCallsStillWork:
     def test_a_document_read_passes_through(self) -> None:
-        gated, executor = build()
+        """While the case is gathering evidence, which is the only window the rule permits."""
+        gated, executor = build(make_case(state=CaseState.GATHERING_EVIDENCE))
 
         document = gated.call("fetch_document", {"document_id": "doc-0001-referral"})
 

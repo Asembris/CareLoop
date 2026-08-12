@@ -74,7 +74,7 @@ class TestTheHookRefusesWhatTheEngineRefuses:
         assert event.cancel_tool == reason_text(ReasonCode.DESTINATION_NOT_TRUSTED)
 
     def test_an_allowed_call_is_left_alone(self) -> None:
-        hook = PolicyHook(gate_for(executing_case()))
+        hook = PolicyHook(gate_for(make_case(state=CaseState.GATHERING_EVIDENCE)))
         event = event_for("fetch_document", {"document_id": "doc-0001-referral"})
 
         hook.on_before_tool_call(event)
@@ -98,15 +98,21 @@ class TestTheHookRefusesWhatTheEngineRefuses:
         assert event.cancel_tool == reason_text(ReasonCode.NO_RULE_MATCH)
 
     def test_every_decision_is_kept_for_the_timeline(self) -> None:
+        """One hook, two calls, both kept — the refused one and the allowed one.
+
+        Each is fired against the case state its call really happens in: an email is proposed
+        while the case is executing, a document is read while evidence is being gathered.
+        """
         hook = PolicyHook(gate_for(executing_case()))
-
         hook.on_before_tool_call(event_for("send_email", POISON))
-        hook.on_before_tool_call(event_for("fetch_document", {"document_id": "doc-0001-referral"}))
 
-        assert [decision.verdict for decision in hook.decisions] == [
-            Verdict.DENY,
-            Verdict.ALLOW,
-        ]
+        reader = PolicyHook(gate_for(make_case(state=CaseState.GATHERING_EVIDENCE)))
+        reader.on_before_tool_call(
+            event_for("fetch_document", {"document_id": "doc-0001-referral"})
+        )
+
+        assert [decision.verdict for decision in hook.decisions] == [Verdict.DENY]
+        assert [decision.verdict for decision in reader.decisions] == [Verdict.ALLOW]
         # The decision is the audit object: it carries what the cancellation text must not.
         assert hook.decisions[0].args["to"] == ATTACKER
 
@@ -166,7 +172,7 @@ class TestFiringItTheWayCareLoopDoes:
         assert cancelled == reason_text(ReasonCode.DESTINATION_NOT_TRUSTED)
 
     def test_an_allowed_call_comes_back_with_nothing(self) -> None:
-        hook = PolicyHook(gate_for(executing_case()))
+        hook = PolicyHook(gate_for(make_case(state=CaseState.GATHERING_EVIDENCE)))
         registry = policy_registry(hook)
 
         cancelled = asyncio.run(

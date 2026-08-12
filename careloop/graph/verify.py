@@ -4,12 +4,11 @@
 path" a structural property rather than an observation. That is worth nothing unless ``VERIFYING``
 does something, and open decision 5 left what it does undefined. This module defines it.
 
-**Verified means: the effect that was performed is the effect that was authorised.**
+**Verified means: the effect that was performed is the effect that was authorised — and, where
+there is a real external system, that the system's own record of it agrees.**
 
-Not "the outside world did the right thing". Against a mock executor that would be theatre — the
-mock cannot know whether the clinic honoured the booking, and a check that pretended to would be a
-green tick with nothing behind it. What this checks is the gap that actually exists in an authority
-system: between what the policy engine approved and what the executor did. Three things, in order:
+The first half checks the gap that always exists in an authority system: between what the policy
+engine approved and what the executor did. Three things, in order:
 
 1. The idempotency key re-derived from the authorised arguments equals the key the action was
    recorded under. A mismatch means the call that happened is not the call that was decided.
@@ -18,10 +17,21 @@ system: between what the policy engine approved and what the executor did. Three
 3. A per-action-type predicate over the typed result: every field the result echoes back equals
    the argument that was authorised, and the synthetic identifier is present.
 
-Step 3 is the one that would catch an executor returning somebody else's confirmation. It is
-worth stating what it does **not** catch, and the README says so too: nothing here proves the
-effect reached a real system, because in this build there is no real system. Verification closes
-the loop between decision and execution, not between execution and the world.
+Step 3 is the one that would catch an executor returning somebody else's confirmation. On its own
+it is still closed-loop: CareLoop's executor checked against CareLoop's approval, with CareLoop's
+own receipt as the evidence.
+
+**Step 4 closes that, for the one action type that has a real external system behind it.** When
+the caller supplies ``observed`` — state fetched by a *separate* request to the external system,
+never the response the effect itself returned — the same per-action-type predicate runs against it.
+So a booking is verified against what the clinic holds now, not against what the clinic said at the
+time. That is the difference between reading the world back and re-reading a receipt, and
+``tests/test_verify_readback.py`` proves it by changing the clinic's record after the booking and
+requiring verification to fail.
+
+Where there is no external system — the three simulated effects — ``observed`` is ``None`` and
+verification means exactly what it meant before, which is stated on the ``Verification`` itself so
+the two cannot be confused in a timeline.
 
 :data:`VERIFIERS` is checked against ``REGISTRY.external_effect_tools`` at import, the same way the
 executor's handlers and the tool bodies are. An effectful tool with no verifier is a tool whose
@@ -54,7 +64,21 @@ class Verification(BaseModel):
 
     passed: bool
     diagnostic: str
-    """Timeline-only. Names fields and may quote values; never returned to a model."""
+    """Timeline-only. Names fields and may quote values; never returned to a model.
+
+    Values read back from an external system land here and nowhere else. That is deliberate: the
+    diagnostic is withheld wholesale by the API and is never rendered into a prompt, so text
+    CareLoop does not control cannot become an instruction. See
+    ``tests/test_verify_readback.py::TestTheReadBackIsNotAnInjectionChannel``.
+    """
+
+    externally_observed: bool
+    """Whether an independent read of the external system took part in this verdict.
+
+    Carried rather than inferred, because "verified" is a materially stronger claim when it is
+    true and a timeline that cannot tell the two apart would let the weaker one be read as the
+    stronger. It reaches the API as the ``read_back`` payload key.
+    """
 
     @property
     def failed(self) -> bool:
@@ -65,6 +89,18 @@ class Verification(BaseModel):
 #: A verifier compares the canonical authorised arguments against the typed result.
 Verifier = Callable[[Mapping[str, str], ActionResult], list[str]]
 """Returns the list of mismatches. Empty means verified."""
+
+#: A read-back fetches the external system's *current* record of a performed effect.
+ReadBack = Callable[[ActionResult], ActionResult]
+"""Takes the recorded result — for its identifier — and returns what the system holds now."""
+
+
+class ReadBackFailed(Exception):
+    """Raised when the external system could not be read, or does not hold the effect.
+
+    Both are verification failures rather than crashes, and both fail closed: an effect the
+    external system cannot show CareLoop is an effect CareLoop cannot claim happened.
+    """
 
 
 def _mismatches(
@@ -195,12 +231,17 @@ def verify_action(
     args: Mapping[str, object],
     record: ActionRecord,
     result: ActionResult,
+    observed: ActionResult | None = None,
 ) -> Verification:
     """Verify that ``record`` and ``result`` are the action ``args`` authorised.
 
     ``args`` are the arguments the policy engine allowed, not the arguments the executor was
     handed — comparing the executor's inputs to the executor's outputs would verify nothing about
     authority. They come from the approved proposal.
+
+    ``observed`` is the external system's own record, fetched independently. When it is supplied
+    the same per-action-type predicate runs against it as well, so every field the effect echoes
+    is checked twice: once against what CareLoop recorded, and once against what the world holds.
     """
     problems: list[str] = []
 
@@ -229,15 +270,36 @@ def verify_action(
         # Unreachable while the import-time check holds. Fail closed rather than pass by omission.
         problems.append(f"no verifier for action type {action_type!r}")
     else:
-        problems.extend(verifier(canonical_args(args), result))
+        canonical = canonical_args(args)
+        problems.extend(verifier(canonical, result))
+        if observed is not None:
+            problems.extend(
+                f"read back from the external system: {problem}"
+                for problem in verifier(canonical, observed)
+            )
 
     if problems:
-        return Verification(passed=False, diagnostic="; ".join(problems))
+        return Verification(
+            passed=False, diagnostic="; ".join(problems), externally_observed=observed is not None
+        )
+    if observed is not None:
+        return Verification(
+            passed=True,
+            externally_observed=True,
+            diagnostic=(
+                f"{action_type} verified against the external system: the recorded effect keys to "
+                f"the authorised arguments, and a separate read of the external system's own "
+                f"record matches what policy allowed"
+            ),
+        )
     return Verification(
         passed=True,
+        externally_observed=False,
         diagnostic=(
             f"{action_type} verified: the recorded effect keys to the authorised arguments and "
-            f"every field it echoes matches what policy allowed"
+            f"every field it echoes matches what policy allowed. No external system was read — "
+            f"this closes the loop between decision and execution, not between execution and the "
+            f"world"
         ),
     )
 
@@ -245,6 +307,8 @@ def verify_action(
 __all__ = [
     "RESULT_TYPES",
     "VERIFIERS",
+    "ReadBack",
+    "ReadBackFailed",
     "UnverifiableAction",
     "Verification",
     "Verifier",

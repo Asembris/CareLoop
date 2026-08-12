@@ -29,6 +29,7 @@ from pydantic import BaseModel, ConfigDict
 
 from careloop.agents.planner import PlannerAgent
 from careloop.agents.triage import TriageAgent
+from careloop.graph.verify import ReadBack, ReadBackFailed
 from careloop.policy.gate import PolicyGate
 from careloop.policy.gated import GatedToolSet
 from careloop.policy.hook import PolicyHook, policy_registry
@@ -36,9 +37,11 @@ from careloop.policy.verdicts import ReasonCode
 from careloop.state.case import Approval, ApprovalStatus, Case, TimelineKind
 from careloop.state.store import CaseStore
 from careloop.tools.callables import ToolSet
+from careloop.tools.clinic import ClinicClient, ClinicRefused, ClinicUnavailable, clinic_executor
 from careloop.tools.documents import DocumentStore
 from careloop.tools.executor import MockExternalExecutor
 from careloop.tools.idempotency import args_digest
+from careloop.tools.results import ActionResult
 
 
 def _utcnow() -> datetime:
@@ -190,7 +193,20 @@ class RunContext:
 
     triage: TriageAgent = field(default_factory=TriageAgent)
     planner: PlannerAgent = field(default_factory=PlannerAgent)
-    executor: MockExternalExecutor = field(default_factory=MockExternalExecutor)
+
+    executor: MockExternalExecutor | None = None
+    """The executor every effect goes through. ``None`` builds one with the simulated handlers."""
+
+    clinic: ClinicClient | None = None
+    """A real external clinic, or ``None`` for a fully simulated run.
+
+    **Setting this turns on both halves of the real path at once, and that is the point.** It
+    builds the executor whose ``book_appointment`` is a genuine HTTP call *and* the read-back
+    verification uses to observe the result independently. A real booking checked against a
+    simulated verification would be exactly the tautology this collaborator exists to remove, so
+    the combination is made unconstructable rather than discouraged: supplying ``clinic`` and
+    ``executor`` together raises.
+    """
 
     documents: DocumentStore | None = None
     """The document store the toolset reads and the cross-document checks consult.
@@ -212,6 +228,20 @@ class RunContext:
     """
 
     def __post_init__(self) -> None:
+        if self.clinic is not None and self.executor is not None:
+            raise ConflictingExecutors(
+                "a run is bound to a clinic or to an executor, never to both: the clinic builds "
+                "the executor whose bookings are real and the read-back that observes them, and "
+                "an executor supplied beside it could make one of those two simulated"
+            )
+        if self.executor is None:
+            self.executor = (
+                clinic_executor(self.clinic) if self.clinic is not None else MockExternalExecutor()
+            )
+        self.readbacks: dict[str, ReadBack] = (
+            {} if self.clinic is None else {"book_appointment": _clinic_readback(self.clinic)}
+        )
+
         self.gate = PolicyGate(self.current_case)
         self.hook = PolicyHook(self.gate)
         self.hooks = policy_registry(self.hook) if self.register_hook else _empty_registry()
@@ -232,6 +262,31 @@ class RunContext:
         return prior_denials(case)
 
 
+class ConflictingExecutors(Exception):
+    """Raised when a run is handed both a clinic and an executor."""
+
+
+def _clinic_readback(client: ClinicClient) -> ReadBack:
+    """Observe a booking by asking the clinic what it holds now.
+
+    **A separate GET, keyed on the confirmation the effect returned.** It is not the booking's own
+    response replayed, and it is not read from anything CareLoop stored — those would both make the
+    check a re-read of CareLoop's receipt. The refusal and the outage are both turned into
+    :class:`~careloop.graph.verify.ReadBackFailed`, so a verifier sees one failure vocabulary and
+    the graph layer does not have to know what an HTTP client's exceptions are called.
+    """
+
+    def observe(result: ActionResult) -> ActionResult:
+        try:
+            return client.appointment(result.confirmation_id)
+        except (ClinicRefused, ClinicUnavailable) as failure:
+            raise ReadBackFailed(
+                f"the clinic could not confirm {result.confirmation_id}: {failure}"
+            ) from failure
+
+    return observe
+
+
 def _empty_registry():
     """A registry with no callbacks, for runs that deliberately omit the hook."""
     from strands.hooks.registry import HookRegistry
@@ -240,6 +295,7 @@ def _empty_registry():
 
 
 __all__ = [
+    "ConflictingExecutors",
     "Delivery",
     "Proposal",
     "RunContext",

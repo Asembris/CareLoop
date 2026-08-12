@@ -197,6 +197,12 @@ TIMELINE_PAYLOAD_FIELDS: Final[frozenset[str]] = frozenset(
         # effects
         "idempotency_key",
         "outcome",
+        # verification. "read_back" is exposed on purpose: "verified" is a materially stronger
+        # claim when an external system was read back independently than when only CareLoop's own
+        # record was checked, and a panel that could not tell them apart would let the weaker one
+        # be read as the stronger. It carries no external content — the observed values stay in the
+        # diagnostic, which is withheld wholesale.
+        "read_back",
     }
 )
 

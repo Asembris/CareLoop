@@ -46,11 +46,18 @@ from careloop.graph.context import (
     latest_proposal,
 )
 from careloop.graph.extract import record_document, validate_and_promote
-from careloop.graph.verify import rehydrate, verify_action
+from careloop.graph.verify import ReadBackFailed, Verification, rehydrate, verify_action
 from careloop.policy.gate import PolicyDenied
 from careloop.policy.hook import fire_before_tool_call, tool_use_id
 from careloop.policy.verdicts import Decision, ReasonCode, Verdict
-from careloop.state.case import Approval, ApprovalStatus, Case, CaseState, TimelineKind
+from careloop.state.case import (
+    ActionRecord,
+    Approval,
+    ApprovalStatus,
+    Case,
+    CaseState,
+    TimelineKind,
+)
 from careloop.state.machine import append_event, transition
 from careloop.tools.executor import ExecutionResult
 from careloop.tools.idempotency import args_digest, idempotency_key
@@ -485,6 +492,11 @@ class VerifyNode(DeterministicNode):
 
     The only path to ``DONE``. See :mod:`careloop.graph.verify` for what "verified" means and,
     just as importantly, what it does not claim.
+
+    **Where the run is bound to a real external system, the check reads it back.** The read is a
+    separate request rather than the effect's own response, and a system that cannot be reached or
+    does not hold the effect fails verification rather than crashing the run — an effect the world
+    cannot show CareLoop is an effect CareLoop cannot claim happened.
     """
 
     async def run(self) -> str:
@@ -516,13 +528,8 @@ class VerifyNode(DeterministicNode):
             self.context.commit(case, expected_version=base)
             return "verify: no action recorded"
 
-        verification = verify_action(
-            case_id=self.context.case_id,
-            action_type=proposal.tool_name,
-            args=proposal.args,
-            record=record,
-            result=rehydrate(record.action_type, record.result),
-        )
+        result = rehydrate(record.action_type, record.result)
+        verification = self._verify(proposal, record, result)
 
         if verification.passed:
             case = append_event(
@@ -531,7 +538,10 @@ class VerifyNode(DeterministicNode):
                 actor="system",
                 summary=f"{proposal.tool_name} verified",
                 diagnostic=verification.diagnostic,
-                payload={"tool_name": proposal.tool_name},
+                payload={
+                    "tool_name": proposal.tool_name,
+                    "read_back": str(verification.externally_observed).lower(),
+                },
                 now=self.context.now(),
             )
             case = transition(
@@ -548,7 +558,10 @@ class VerifyNode(DeterministicNode):
                 actor="system",
                 summary=f"{proposal.tool_name} did not verify",
                 diagnostic=verification.diagnostic,
-                payload={"tool_name": proposal.tool_name},
+                payload={
+                    "tool_name": proposal.tool_name,
+                    "read_back": str(verification.externally_observed).lower(),
+                },
                 now=self.context.now(),
             )
             case = transition(
@@ -561,6 +574,34 @@ class VerifyNode(DeterministicNode):
 
         self.context.commit(case, expected_version=base)
         return f"verify: {'passed' if verification.passed else 'failed'}"
+
+    def _verify(self, proposal: Proposal, record: ActionRecord, result) -> Verification:
+        """Verify the recorded effect, reading the external system back where there is one.
+
+        A read-back failure is a *verification* failure, not an exception out of the node. The two
+        outcomes look the same from here on purpose: "the clinic says something different" and "the
+        clinic cannot show me the appointment at all" are both reasons not to call an effect
+        verified, and turning the second into a crash would make an integration outage look like a
+        CareLoop fault.
+        """
+        observed = None
+        readback = self.context.readbacks.get(record.action_type)
+        if readback is not None:
+            try:
+                observed = readback(result)
+            except ReadBackFailed as unreadable:
+                return Verification(
+                    passed=False, diagnostic=str(unreadable), externally_observed=True
+                )
+
+        return verify_action(
+            case_id=self.context.case_id,
+            action_type=proposal.tool_name,
+            args=proposal.args,
+            record=record,
+            result=result,
+            observed=observed,
+        )
 
 
 # -- shared writers --------------------------------------------------------------------------
@@ -699,8 +740,6 @@ def _park_with_nothing_safe_to_do(case: Case, now) -> Case:
 
 def _record_action(case: Case, proposal: Proposal, key: str, result: ExecutionResult, now) -> Case:
     """Write the durable record of one performed effect, then note it on the timeline."""
-    from careloop.state.case import ActionRecord
-
     record = ActionRecord(
         idempotency_key=key,
         action_type=proposal.tool_name,

@@ -9,6 +9,8 @@ dist/
 *.egg-info/
 .eggs/
 
+.agents/
+skills-lock.json
 # Virtual environments
 .venv/
 venv/

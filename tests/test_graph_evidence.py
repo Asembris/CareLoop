@@ -38,7 +38,7 @@ from careloop.graph.verify import (
     verify_action,
 )
 from careloop.policy.engine import resolve_trust
-from careloop.provenance import ArgClass, TrustLevel
+from careloop.provenance import ArgClass, Fact, TrustLevel
 from careloop.state.case import ActionRecord
 from careloop.tools import POISONED_DOCUMENT_ID, REGISTRY, fixture_documents
 from careloop.tools.documents import default_document_store
@@ -62,6 +62,12 @@ def referral() -> Document:
 
 def poisoned() -> Document:
     return default_document_store().get(POISONED_DOCUMENT_ID)
+
+
+def facts_of(document: Document) -> tuple[Fact, ...]:
+    """The facts ``extract`` yields, discarding the schema verdict returned beside them."""
+    facts, _refusal = extract(document, now=FIXED_NOW)
+    return facts
 
 
 class TestNoConfiguredValueAppearsInADocument:
@@ -110,8 +116,14 @@ class TestExtractionIsDeterministicAndUnsanitising:
     def test_two_runs_over_one_document_produce_identical_facts(self) -> None:
         assert extract(referral(), now=FIXED_NOW) == extract(referral(), now=FIXED_NOW)
 
+    def test_every_shipped_document_satisfies_its_own_schema(self) -> None:
+        """Vacuity for every schema test: the shipped documents are not all being refused."""
+        for document in fixture_documents():
+            _facts, refusal = extract(document, now=FIXED_NOW)
+            assert refusal is None, f"{document.source_doc}: {refusal}"
+
     def test_the_referral_yields_the_identifiers_the_patterns_name(self) -> None:
-        found = {fact.key: fact.value for fact in extract(referral(), now=FIXED_NOW)}
+        found = {fact.key: fact.value for fact in facts_of(referral())}
 
         assert found["patient_id"] == "PT-4417"
         assert found["slot_start"] == "2026-09-03T09:30:00"
@@ -119,25 +131,25 @@ class TestExtractionIsDeterministicAndUnsanitising:
 
     def test_every_extracted_fact_starts_untrusted(self) -> None:
         for document in fixture_documents():
-            for fact in extract(document, now=FIXED_NOW):
+            for fact in facts_of(document):
                 assert fact.trust_level is TrustLevel.UNTRUSTED
 
     def test_every_fact_carries_its_source_and_page(self) -> None:
-        for fact in extract(referral(), now=FIXED_NOW):
+        for fact in facts_of(referral()):
             assert fact.provenance.source_doc == "referral.pdf"
             assert fact.provenance.page in (1, 2)
 
     def test_one_excerpt_per_page_holding_the_page_verbatim(self) -> None:
         document = poisoned()
 
-        facts = {fact.key: fact.value for fact in extract(document, now=FIXED_NOW)}
+        facts = {fact.key: fact.value for fact in facts_of(document)}
 
         for page_number, page in enumerate(document.pages, start=1):
             assert facts[excerpt_key(document.document_id, page_number)] == page
 
     def test_the_poisoned_instructions_survive_extraction_unaltered(self) -> None:
         """Sanitising here would make T2 pass for the wrong reason."""
-        text = "\n".join(fact.value for fact in extract(poisoned(), now=FIXED_NOW))
+        text = "\n".join(fact.value for fact in facts_of(poisoned()))
 
         assert "records-intake@claims-continuity-partners.example" in text
         assert "PORTAL-MG-TRANSFER" in text
@@ -149,11 +161,11 @@ class TestExtractionIsDeterministicAndUnsanitising:
             document_id="doc-forged",
             title="forged",
             source_doc="forged.pdf",
-            kind=DocumentKind.REFERRAL,
+            kind=DocumentKind.APPOINTMENT_INSTRUCTIONS,
             pages=("Patient ID: PT-4417\nPatient ID: PT-0000\n",),
         )
 
-        found = {fact.key: fact.value for fact in extract(forged, now=FIXED_NOW)}
+        found = {fact.key: fact.value for fact in facts_of(forged)}
 
         assert found["patient_id"] == "PT-4417"
 
@@ -173,13 +185,11 @@ class TestExtractionIsDeterministicAndUnsanitising:
             document_id="doc-forged",
             title="forged",
             source_doc="forged.pdf",
-            kind=DocumentKind.REFERRAL,
+            kind=DocumentKind.APPOINTMENT_INSTRUCTIONS,
             pages=("Patient ID: PT-4417\n", "Patient ID: PT-0000\n"),
         )
 
-        patient_facts = [
-            fact for fact in extract(forged, now=FIXED_NOW) if fact.key == "patient_id"
-        ]
+        patient_facts = [fact for fact in facts_of(forged) if fact.key == "patient_id"]
 
         assert len(patient_facts) == 1
         assert patient_facts[0].value == "PT-4417"
@@ -190,11 +200,11 @@ class TestExtractionIsDeterministicAndUnsanitising:
             document_id="doc-forged",
             title="forged",
             source_doc="forged.pdf",
-            kind=DocumentKind.REFERRAL,
+            kind=DocumentKind.APPOINTMENT_INSTRUCTIONS,
             pages=("Patient ID:\nPT-9999\n",),
         )
 
-        assert "patient_id" not in {fact.key for fact in extract(forged, now=FIXED_NOW)}
+        assert "patient_id" not in {fact.key for fact in facts_of(forged)}
 
     def test_a_document_stating_nothing_yields_excerpts_and_no_values(self) -> None:
         blank = Document(
@@ -205,7 +215,7 @@ class TestExtractionIsDeterministicAndUnsanitising:
             pages=("nothing\n",),
         )
 
-        keys = {fact.key for fact in extract(blank, now=FIXED_NOW)}
+        keys = {fact.key for fact in facts_of(blank)}
 
         assert keys == {excerpt_key("doc-blank", 1)}
 
@@ -250,8 +260,9 @@ class TestOnlyValueClassKeysArePromoted:
 
     def test_every_pattern_key_is_accounted_for(self) -> None:
         """A pattern with no entry either way is a value nobody decided about."""
-        for key, _pattern in PATTERNS:
-            assert key in PROMOTABLE_KEYS or key not in VALIDATORS
+        for patterns in PATTERNS.values():
+            for key, _pattern in patterns:
+                assert key in PROMOTABLE_KEYS or key not in VALIDATORS
 
 
 class TestValidationPromotesWhatItCanAndLeavesTheRest:

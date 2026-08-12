@@ -1,5 +1,13 @@
-"""Tools: the registry that owns argument classes, and later the executor."""
+"""Tools: the registry that owns argument classes, the tool bodies, and the executor."""
 
+from careloop.tools.callables import (
+    ToolBindingError,
+    ToolSet,
+    UnknownTool,
+    bound_method_name,
+    bound_tools,
+    implements,
+)
 from careloop.tools.documents import (
     FIXTURE_DOCUMENTS,
     POISONED_DOCUMENT_ID,
@@ -57,13 +65,19 @@ __all__ = [
     "IdempotencyKeyCollision",
     "LedgerEntry",
     "MockExternalExecutor",
+    "ToolBindingError",
     "ToolRegistry",
     "ToolResult",
+    "ToolSet",
     "ToolSpec",
     "UncanonicalizableArgument",
     "UnknownActionType",
+    "UnknownTool",
     "args_digest",
+    "bound_method_name",
+    "bound_tools",
     "canonical_args",
     "default_document_store",
     "idempotency_key",
+    "implements",
 ]

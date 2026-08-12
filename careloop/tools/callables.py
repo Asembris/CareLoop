@@ -200,6 +200,23 @@ def bound_tools() -> frozenset[str]:
     return frozenset(_BINDINGS)
 
 
+def bound_method_name(tool_name: str) -> str:
+    """The :class:`ToolSet` method implementing ``tool_name``.
+
+    Exposed so a caller that wraps the tools — the policy backstop does — can reach each body by
+    enumeration rather than by assuming the method is named after the tool. They happen to agree
+    today; a wrapper that silently depended on that would be a wrapper that quietly stops covering
+    a tool the day one is renamed.
+
+    Raises:
+        UnknownTool: if no body is bound to ``tool_name``.
+    """
+    method_name = _BINDINGS.get(tool_name)
+    if method_name is None:
+        raise UnknownTool(f"no tool named {tool_name!r}")
+    return method_name
+
+
 def _check_bindings_cover_the_registry() -> None:
     """Fail at import if a declared tool has no body, or a body no declaration."""
     declared = REGISTRY.names
@@ -219,6 +236,7 @@ __all__ = [
     "ToolBindingError",
     "ToolSet",
     "UnknownTool",
+    "bound_method_name",
     "bound_tools",
     "implements",
 ]

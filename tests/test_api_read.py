@@ -16,7 +16,7 @@ from helpers import FIXED_NOW
 
 from careloop.api.app import create_app
 from careloop.api.projections import COMPLETED, NEEDS_YOU, WORKING
-from careloop.state import CaseState, InMemoryCaseStore
+from careloop.state import CaseState, InMemoryCaseStore, SqliteCaseStore
 from careloop.state.machine import transition
 
 
@@ -30,6 +30,29 @@ class TestHealth:
 
         assert response.status_code == 200
         assert response.json() == {"status": "ok"}
+
+
+class TestTheApiOverTheDurableStore:
+    """Every other test here drives the in-memory store; a deployment drives SQLite.
+
+    That gap is how session C shipped an API that returned 500 for every read as soon as it was
+    served for real: Starlette runs synchronous handlers in a worker thread, and the SQLite store
+    held a connection bound to the thread that opened it. Found by running the demo rather than by
+    running the suite, which is exactly the kind of thing the suite should have been able to say.
+    """
+
+    def test_the_read_surface_works_over_sqlite(self, tmp_path) -> None:
+        store = SqliteCaseStore(tmp_path / "careloop.sqlite3")
+        try:
+            store.create(finished_store().get(CASE_ID))
+            with TestClient(create_app(store)) as client:
+                assert client.get("/api/cases").status_code == 200
+                detail = client.get(f"/api/cases/{CASE_ID}")
+
+            assert detail.status_code == 200
+            assert detail.json()["case_id"] == CASE_ID
+        finally:
+            store.close()
 
 
 class TestTheThreeSections:

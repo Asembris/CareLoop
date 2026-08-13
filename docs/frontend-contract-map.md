@@ -4,6 +4,20 @@ Session D1, 2026-08-13. **Diagnosis only** — no adapter code was written, no U
 no backend was touched. What follows is the field-by-field reconciliation between the approved
 frontend package and the API surface session C closed.
 
+> **Session D2 built it, and four things here turned out to be wrong.** They are corrected in place
+> and marked **`D2:`**, with the original claim left visible — a map that quietly rewrites itself is
+> a map nobody can check. The corrections are:
+>
+> 1. **`EvidenceLens` is not without a data path** (§3.4, §4 question 4). Extraction records one
+>    fact per document page whose value is the whole page, and those reach the API.
+> 2. **The evidence grid needs a filter** it did not know about, for the same reason.
+> 3. **The timings are measurable now** (§5 divergence 5), and they are fast enough that the
+>    dashboard needs pacing to show what it is showing.
+> 4. **`VITE_API_BASE_URL` was serving two purposes** (§5 divergence 9) and could not.
+>
+> The rest of the map held. Session D2's own record is in
+> [`session-log.md`](session-log.md#session-d2--2026-08-13).
+
 The frontend is the Claude Design handoff, unpacked to `frontend/` at the repository root — the same
 separation `demoworld/` and `bench/` have. It is **approved and locked**: `frontend/HANDOFF.md` §16
 lists what must not change, and visual divergence from `frontend/reference/screenshots/` is a defect.
@@ -197,12 +211,29 @@ wholesale and is not available at any price.
 | `source` | `FactView.citation` — already formatted as `referral.pdf p.2` | direct |
 | `trust` | `FactView.trust_level` (`UNTRUSTED` / `CONTROLLED` / `TRUSTED`) | presentation — the UI wants a caregiver-facing word, and `domain.ts` says so ("Raw trust tiers stay out of this view") |
 | `excerpt.source` | `FactView.citation` | direct |
-| `excerpt.before` / `.highlight` / `.after` | — | **absent** |
+| `excerpt.before` / `.highlight` / `.after` | ~~absent~~ **`D2:` the `excerpt:` page fact** | derived |
 | `excerpt.digest` | — | **absent** |
 
-**`EvidenceLens` is the one component with no data path.** A `Fact` carries the extracted value and
+~~**`EvidenceLens` is the one component with no data path.** A `Fact` carries the extracted value and
 its provenance, never the surrounding page text. The lens must degrade to citation and trust only, or
-be left closed. This is a genuine absence, not a withholding — nothing in `WITHHELD` is hiding it.
+be left closed. This is a genuine absence, not a withholding — nothing in `WITHHELD` is hiding it.~~
+
+**`D2:` that is wrong, and it is wrong in a way that mattered twice.** `careloop/graph/extract.py`
+records **one fact per document page whose value is the whole page**, keyed
+`excerpt:<document_id>:p<n>`, so the planner can read a document without any of it being lifted into
+a key an action could be built from. Those facts reach `GET /api/cases/{id}` through `FactView` like
+any other, so the surrounding page text *is* available:
+
+- **The lens shows a real excerpt.** `realApi.excerptFor` finds the page by **provenance** —
+  matching `source_doc` and `page`, never by parsing the excerpt key, so the two tables never have
+  to agree on a format — and locates the extracted value inside it. It degrades to the value alone
+  when the page is absent or the value does not appear in it verbatim.
+- **The evidence grid needs a filter, and would have been broken without one.** Left in, the page
+  facts render as evidence cards each holding an entire PDF page. `presentation.isExcerptFact` is
+  what keeps them out of the grid and out of the timeline spine.
+
+`excerpt.digest` stays absent, and that half of the original claim holds: there is no digest of
+evidence anywhere in the backend.
 
 ### 3.5 `AgentRun` against `RunView`
 
@@ -261,7 +292,9 @@ Both, cleanly separated, and the separation is the design. `kind` is an 18-membe
 and it is the withheld field.
 
 **4. Does evidence provenance include source document, page and excerpt?**
-Source document and page yes, plus a ready-formatted `citation`. **Excerpt no.** See 3.4.
+Source document and page yes, plus a ready-formatted `citation`. ~~**Excerpt no.**~~ **`D2:` excerpt
+yes** — through the `excerpt:` page facts, which nobody had noticed are facts like any other. See
+3.4.
 
 **5. Are blocked actions first-class events with verdict and rule code, and is there a per-case
 count?**
@@ -398,6 +431,27 @@ Polling constraints:
 - `GET /api/runs/{id}` is an in-memory, per-process registry. A restart 404s a live run id, and a
   second API instance would not see the first's runs at all — open decision 17.
 
+**`D2:` the timings, measured.** "Only the timetable is fictional" was right, and the real one is
+faster than the dashboard can sample:
+
+| Beat | Measured |
+|---|---|
+| button press → case visible | ~1.3s |
+| whole `referral` run | **6.5s** typical, one 21s outlier when a model call was slow |
+| whole `injection` run | ~8.7s — three denials and three replans |
+| `resume` to parked | ~7s |
+| **approve → `DONE`** | **440ms** |
+
+At a one-second poll that means `EXECUTING` and `VERIFYING` are never observed: those nodes take
+about 200ms each and no sampling interval a browser should use will catch them. Two of six states
+were visible, and the approval beat had none.
+
+The adapter therefore **paces the display**, walking it forward one state at a time through the
+states the case's own `STATE_TRANSITION` entries record — nothing invented, nothing reordered, and
+bounded to three states behind the store. `section` is paced with the state so a row cannot read
+"Making the arrangement…" under COMPLETED, and `mismatch` is never paced because it is a safety
+claim rather than a beat. See `presentation.pacedState`.
+
 ### 6. `AUTHORITY_ESCALATION` is not a `ReasonCode`
 
 `mockApi.ts:329` uses it as a blocked-action rule. The real enum has **`AUTHORITY_NOT_TRUSTED`**, and
@@ -423,6 +477,16 @@ There is no `CORSMiddleware` in the codebase. The vite `/api` proxy covers devel
 `HANDOFF.md` §15 describes. Serving the production build from a different origin has no path today.
 This is a deployment decision for whoever ships it, **not a D2 task**, and "do not weaken backend
 CORS" remains the instruction.
+
+**`D2:` and there was a trap in the proxy that only springs once the adapter is real.**
+`vite.config.ts` took its target from `VITE_API_BASE_URL`, which `services/api.ts` also reads as the
+client's base URL for every request. Vite exposes every `VITE_`-prefixed variable to the browser, so
+setting it to move the *proxy* onto a different port also makes the browser call that port
+**directly, cross-origin**, against a backend that mounts no CORS middleware — which fails in a way
+that reads like the backend being down. Inert while the app ran on mocks, because nothing read the
+value. The proxy target is now **`CARELOOP_API_TARGET`**, unprefixed and therefore server-only;
+`VITE_API_BASE_URL` still exists for a deliberate cross-origin deployment, which would need the CORS
+decision above.
 
 ### 10. `GET /api/cases` returns three arrays, not a flat list
 
@@ -456,6 +520,13 @@ releases the case to execution and still ends `FAILED`. It stays open, and the m
 be mistaken for a resolution.
 
 ---
+
+### 12. `D2:` the provider seeded itself with mock cases
+
+Not a backend divergence and not visible until the adapter was real: `CareLoopProvider` initialised
+its state from `data/mock/cases.ts` and `data/mock/runs.ts`, so two invented cases and a
+plausible-looking idempotency key sat on screen until the first poll replaced them. `services/api.ts`
+now exports `emptyDashboard()` and the seam has a test that fails if it points back at the mock.
 
 ## 7. Order for D2
 
@@ -493,3 +564,45 @@ there.
 `realApi.ts`, any UI change beyond a build fix (none were needed), tests, AgentCore, DeepTeam, and
 backend changes of any kind. **A required backend change is a finding, not a task** — the two that
 exist are open decisions 18 and 19, and both stay open.
+
+---
+
+## 9. `D2:` what shipped against this map
+
+All ten steps of the order above, in that order, across nine commits. **No backend change was needed
+or made**, which is the map's own claim about itself holding.
+
+The adapter is `frontend/src/services/`:
+
+| Module | What it owns |
+|---|---|
+| `backend.ts` | the wire shapes `careloop/api/models.py` returns, hand-written so the mapping is reviewable against that file |
+| `presentation.ts` | every string the UI says that the backend does not: state→copy tables, relative time, trust words, tones, decision copy, the pacing rule |
+| `realApi.ts` | the nine routes, named readers over the timeline, polling, and the composition of `CareCase` and `AgentRun` |
+| `api.ts` | the one line, now pointing at `realApi` |
+
+**Two §16 exceptions were used, both pre-approved.** Scenario 03's copy (divergence 1), and the
+`UnderTheHoodDrawer` — its `EVIDENCE DIGEST` row removed and its "Running on the mock adapter"
+paragraph corrected to "Live run record from `GET /api/runs/:id`. Policy verdicts and rule ids come
+from the case's own audit trail." A drawer claiming to run on mocks while showing live backend data
+would be a lie on the exact panel that exists to prove the data is real.
+
+### The ten references, re-checked at 909px in both themes
+
+Captured against the real backend and compared numerically. The references are JPEGs, so a per-pixel
+diff has a compression floor rather than reaching zero; the **`/trust` page is the control**, since
+it is entirely static and its content cannot have changed.
+
+| Region | Mean abs. difference |
+|---|---|
+| `/trust`, both themes | **2.8 – 3.1** — the floor |
+| the shared header, all ten states | **2.1 – 2.3** |
+| `/demo`, both themes | 3.4 – 3.6 |
+| the three data-bearing states | 4.6 – 8.9 |
+
+**No divergence.** The header carries the logo geometry, the three nav links and their underline, the
+separator, the theme toggle and "Maya", all set in the three now-self-hosted faces — and it sits at
+the compression floor on every one of the ten, which is the measurement that says self-hosting the
+type changed nothing. `/demo` is barely above it, explained entirely by scenario 03's approved copy.
+Everything higher is the data being real: the reference captures were taken against `mockApi`, so
+identical *content* was never possible and was never the thing being checked.

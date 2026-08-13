@@ -2456,6 +2456,212 @@ backend is done.
 
 ---
 
+## Session D1 — 2026-08-13
+
+Diagnosis only. The approved frontend package was unpacked to `frontend/`, confirmed to build
+unmodified, and reconciled field by field against the API surface session C closed. **Its record is
+[`frontend-contract-map.md`](frontend-contract-map.md)** rather than an entry here — it is a spec
+the next session works from, not a position it reports.
+
+Three things it settled that D2 depended on: scenario 03 becomes `resume` rather than `mismatch`,
+the reference captures are JPEGs at **909px** and not pixel goldens, and the fonts arriving from a
+CDN at page load is a filming hazard to fix before anything else touches `index.html`.
+
+---
+
+## Session D2 — 2026-08-13
+
+The first session in which CareLoop exists as a thing rather than as a system. A judge can open a
+browser, press a scenario, watch the real backend drive the approved UI, approve a decision, and see
+an external read-back close the loop.
+
+### Position
+
+Branch `main`. Everything below is **unpushed**.
+
+| Commit | Subject |
+|---|---|
+| `9b5fdd1` | Add a frontend test runner and a separate CI job for it |
+| `36e6aa9` | Self-host the three font families and drop the CDN links |
+| `f63aca3` | Add the presentation layer and the backend wire types |
+| `32b90f8` | Rename the third scenario from mismatch to resume |
+| `a7bf8b3` | Add the real adapter's read surface over the FastAPI backend |
+| `919b418` | Poll the case list, and wire approve, reject, scenarios and reset |
+| `54df9bd` | Point the integration seam at the real backend and drop the evidence digest row |
+| `ec2da7c` | Add the handoff's eight integration behaviours as component tests |
+| `58e48af` | Pace the dashboard through the states the case's own timeline records |
+| — | Record session D2 in the session log and update the contract map |
+
+**Python: 1685 passed, 37 skipped. `ruff check` and `ruff format --check` clean.** Unchanged from
+session C, because **no Python was touched** — the backend was not modified in any way this session.
+
+**Frontend: 100 tests passing, `npm run typecheck` and `npm run build` clean.** New runner: vitest +
+jsdom + Testing Library, `npm test`, and a **separate `frontend` job** in `.github/workflows/ci.yml`.
+Separate rather than a step in `check`, because the Python job's contract is that it runs with no
+credentials and no provider SDK reachable, and adding a Node toolchain to it would put that claim
+behind an unrelated install.
+
+Live spend: **~$0.05** across roughly twenty scenario runs on Nova Micro and Nova 2 Lite.
+
+### The headline
+
+Measured in a real browser, at 909px, against `demoworld/` in its own process and `demo_serve.py`
+with the shipped model configuration:
+
+| Beat | What a viewer sees |
+|---|---|
+| press `referral` | Just arrived → Working out the next step → Making the arrangement… → Confirming with the clinic… → **Done · independently verified**, in 6.5s |
+| press `injection` | the same shape, ~8.7s, and the drawer reads **`DENY ×3 → ALLOW · rule allow-booking-on-validated-slot`** |
+| press `resume` | parks at **"One decision is waiting."** with the exact `send_email` call named |
+| press Approve | Making the arrangement… → Confirming with the clinic… → **Done · checked against what was authorized**, in 2.5s, **no seal** |
+
+Zero console errors, zero page errors, zero failed requests across every run.
+
+The injection drawer line is the project's thesis rendered in one row of mono type, and it is read
+off the case's own audit trail rather than composed for the panel.
+
+### The seal means "the world agreed", and the resume beat proves it by not playing
+
+`resume` finishes on `send_email`, whose verification is closed-loop: `read_back` is `false`, so the
+case is `DONE`, the outcome panel says **"Not read back"**, and the `VerificationSeal` does not play.
+`referral` and `injection` finish on `book_appointment` against the real clinic, `read_back` is
+`true`, and the seal plays.
+
+Two scenarios that both say "done" and look materially different on screen is the whole value of
+`Verification.externally_observed` being on the payload allowlist. **Do not loosen `verified` to
+mean "finished" to make the resume scenario end prettier** — a seal that played on every completion
+would mean nothing, and the distinction is currently visible to the naked eye.
+
+### Pacing — the one finding that changed the product
+
+**The backend is not slow enough to watch.** A run reaches `DONE` about four seconds after the
+button, and **approving a parked decision completes in 440ms**. At a one-second poll the dashboard
+therefore never observed `EXECUTING` or `VERIFYING` at all: the screen went from a decision card
+straight to a completed row, and the two beats the design is built around — "Making the
+arrangement…", "Confirming with the clinic…" — did not happen. Only two of the six states were ever
+visible.
+
+Polling faster does not fix it; those nodes genuinely take ~200ms each and would be missed by any
+sampling interval a browser should use.
+
+**`pacedState` walks the display forward one state at a time, and the states come from the case's
+own `STATE_TRANSITION` entries.** Every state shown is one the case genuinely was in, in the order
+it was in them. Nothing is invented and nothing is reordered — the sequence is the audit trail's.
+
+What it costs is freshness: the dashboard can be up to three states behind the store, about a second
+for the approval beat. That is the trade, stated out loud, and it is deliberate — the alternative is
+a screen that is exactly correct and shows nothing. Three things bound it:
+
+- **`section` is paced with the state**, not separately. Splitting them would put a row reading
+  "Making the arrangement…" under COMPLETED, which is worse than either alone.
+- **`mismatch` is never paced.** It is a safety claim, not a beat: the moment the timeline says the
+  clinic disagrees, the screen says so, whatever state the display has reached.
+- **A case seen for the first time is shown as it is**, with no replay. Opening the dashboard on a
+  case that finished yesterday must not animate it.
+
+Measured after: the referral run plays five distinct beats over 6.5s, and the approval beat plays
+three over 2.5s — which is within a few hundred milliseconds of the mock's approved 1300/2900ms.
+
+### Deltas from the approved plan
+
+Seven were flagged and approved before implementation. Four more were found by running the thing.
+
+| # | Delta | Status |
+|---|---|---|
+| D1 | The `EVIDENCE DIGEST` row is removed in the component; `AgentRun.evidenceDigest` stays on the type, unread | approved |
+| D2 | The drawer's "Running on the mock adapter" paragraph is corrected — second §16 exception | approved |
+| D3 | `OBSERVED AT CLINIC` renders "Confirmed by an independent read" / "Not read back" | approved |
+| D4 | `CareCase.title` from a per-`case_id` table, falling back to `Case.summary` | approved |
+| D5 | `X-Caregiver: Maya`; a 400 stays a 400 | approved |
+| D6 | Separate frontend CI job; the Python job untouched | approved |
+| D7 | Eight woff2 files committed with the OFL text beside them | approved |
+| **D8** | **`EvidenceLens` shows a real excerpt. The map's premise was wrong** | **found while implementing** |
+| **D9** | **`CareLoopProvider` seeded itself from `data/mock/cases.ts`** | **found while implementing** |
+| **D10** | **`VITE_API_BASE_URL` was both the proxy target and the client base** | **found by running it** |
+| **D11** | **Pacing, above** | **found by watching it** |
+
+**D8, and it is worth the space.** The contract map recorded `EvidenceLens` as having no data path —
+"a `Fact` carries the extracted value and its provenance, never the surrounding page text" — and
+resolved to degrade the lens to a citation. **That is false.** `careloop/graph/extract.py` records
+one fact per document page whose *value is the whole page*, keyed `excerpt:<doc>:p<n>`, so the
+planner can read a document without any of it being lifted into a key an action could be built from.
+Those facts reach `GET /api/cases/{id}` like any other. The lens now finds the page by provenance
+(`source_doc` + `page`, never by parsing the key) and locates the extracted span inside it.
+
+The same discovery is **load-bearing in the other direction**: without filtering `excerpt:` facts out
+of the evidence grid, the grid renders a wall of whole PDF pages as though each were a fact. The
+filter was necessary whatever the lens did.
+
+`excerpt.digest` stays empty. There is no digest of evidence anywhere in the backend, which is why
+the drawer's row was dropped rather than filled.
+
+**D9.** `useCareLoop` initialised its state from `seedCases()` and `idleRun()`, so against a real
+backend two invented cases and a plausible-looking idempotency key were on screen until the first
+poll replaced them. Now `emptyDashboard()`, and `tests/api.test.ts` fails if the seam points back at
+the mock or the drawer's first paint carries mock values.
+
+**D10.** `vite.config.ts` used `VITE_API_BASE_URL` as the dev-proxy target. Vite exposes every
+`VITE_`-prefixed variable to the *client*, where `services/api.ts` reads it as the base for every
+request — so pointing the proxy at a different port would also make the browser call that port
+directly, cross-origin, against a backend that mounts no CORS middleware. Latent while the adapter
+was a mock; live the moment it was not. The proxy target is now `CARELOOP_API_TARGET`.
+
+### What the UI was not allowed to fix, and did not
+
+Two more presentation decisions worth recording, both in `services/`:
+
+- **The timeline's clock rail.** A whole run finishes inside one minute, so every entry carried the
+  same `HH:MM` and the rail was a column of one repeated number that read as a rendering fault. The
+  time is now printed when it changes and left blank when it does not.
+- **Argument order.** The backend serialises `args` in whatever order JSON happened to use; the card
+  and the drawer now order by the tool registry's declared order, which puts `to` first on
+  `send_email`. The destination is the safety-relevant field and should be the first thing read.
+
+### Open decision 19, seen live four more times
+
+Pressing `resume` parks with a `REQUIRES_HUMAN_APPROVAL` decision most of the time and with
+`NO_SAFE_ACTION_AVAILABLE` the rest — **2 of roughly 10 presses** this session, consistent with
+session C's one in three. It is model variance, not a defect.
+
+**The frontend does the right thing every time, and it was watched doing it**: no Approve, no Reject,
+the band reads `MANUAL FOLLOW-UP REQUIRED`, the button is `Review situation`, and the hero line
+switches to "One case needs a person." Two component tests hold it and both were confirmed red by
+removing the `canApprove` gate.
+
+This mitigates 19 at the surface and does not fix it. Any other client posting to `…/approve` with
+that approval id still releases the case to execution and still ends `FAILED`.
+
+### The tracked SQLite sidecar, and the .gitignore hole it found
+
+`git add -A` taken while the demo was serving swept `demo.sqlite3-wal` and `demo.sqlite3-shm` into a
+commit — 2.6 MB of binary nothing can reproduce. `.gitignore` covered `*.sqlite3` and
+`*.sqlite3-journal` but not the two sidecars SQLite writes **in WAL mode**, which is the mode a
+served CareLoop runs in. Caught before the commit was pushed, the commit amended, and both patterns
+added with a comment saying how it happened. Worth knowing before the repository goes public.
+
+### Guards proven non-vacuous by mutation
+
+| Mutation | Result |
+|---|---|
+| the approval gate in `DecisionCard` always true | 1 failed |
+| `mismatch` never derived from the timeline | 3 failed |
+| the poller reschedules unconditionally | 2 failed |
+| a CDN font link restored to `index.html` | 1 failed |
+
+### Not done, deliberately
+
+No backend change of any kind. AgentCore, DeepTeam, the video, WebSockets, and open decisions 18 and
+19 are all untouched. The mock adapter is kept, unreferenced, as the record of the approved pacing
+and as something to point the seam back at while debugging.
+
+### Next
+
+The video, and whatever deployment story AgentCore needs. Two things a filming session should know:
+**press reset between scenarios** (two of them book the same slot), and a run takes about 6 seconds
+but has been seen to take 21 when a model call is slow — so the take is not fixed-length.
+
+---
+
 ## Open decisions
 
 Carry these forward. Nothing here is blocking the next commit except where it says so.

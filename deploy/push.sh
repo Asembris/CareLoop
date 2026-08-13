@@ -21,19 +21,36 @@ echo "== building the frontend"
 test -f frontend/dist/index.html || { echo "no frontend/dist/index.html after build" >&2; exit 1; }
 
 echo "== packing"
-# Excludes: node_modules and .git are large and unneeded; .env must never leave this machine;
-# the SQLite files and their WAL sidecars are the *server's* state, and shipping a local copy
-# would overwrite the durable source of truth with a developer's scratch database.
+# Excludes, and three of them are not about size.
+#
+#   .keys/  the SSH private key that authorises this very deploy. A tarball of the repository
+#           root sweeps it up by default, and shipping it to the host it opens would be the
+#           worst kind of quiet mistake — it works perfectly and leaves the key on the box.
+#   .env    developer credentials. The host reaches Bedrock through its instance profile and
+#           needs no key at all; see deploy/careloop.env.
+#   *.sqlite3*  the server's durable source of truth, WAL sidecars included. Shipping a local
+#           copy would overwrite it with a developer's scratch database.
+#
+# The patterns are unanchored on purpose: `./**/__pycache__` is a bashism tar does not expand,
+# so a leading `./` here would have matched only the repository root.
 TAR=$(mktemp -t careloop-XXXXXX.tar.gz)
 trap 'rm -f "$TAR"' EXIT
-tar --exclude='./frontend/node_modules' \
-    --exclude='./.git' \
-    --exclude='./.venv' \
-    --exclude='./.env' \
-    --exclude='./**/__pycache__' \
-    --exclude='./*.sqlite3*' \
-    --exclude='./frontend/reference' \
+tar --exclude='.keys' \
+    --exclude='.env' \
+    --exclude='.git' \
+    --exclude='.venv' \
+    --exclude='node_modules' \
+    --exclude='__pycache__' \
+    --exclude='*.sqlite3*' \
+    --exclude='*.pem' \
+    --exclude='frontend/reference' \
     -czf "$TAR" .
+
+echo "== confirming nothing secret is in the tarball"
+if tar -tzf "$TAR" | grep -Ei '(^|/)(\.env$|\.keys/|.*\.pem$|.*\.sqlite3)' ; then
+    echo "refusing to ship: the tarball contains something it must not" >&2
+    exit 1
+fi
 
 echo "== shipping $(du -h "$TAR" | cut -f1)"
 scp "${SSH_OPTS[@]}" "$TAR" "$TARGET:/tmp/careloop.tar.gz"
@@ -47,7 +64,6 @@ sudo mkdir -p /opt/careloop/app
 sudo tar -xzf /tmp/careloop.tar.gz -C /opt/careloop/app --overwrite
 rm -f /tmp/careloop.tar.gz
 sudo bash /opt/careloop/app/deploy/bootstrap.sh
-sudo systemctl restart careloop-demoworld careloop-api
 REMOTE
 
 echo "== checking"

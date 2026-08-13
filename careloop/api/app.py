@@ -11,8 +11,9 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Request, Response, status
 
 from careloop.api.demo import DEMO_SCENARIOS
 from careloop.api.deps import (
@@ -68,6 +69,7 @@ def create_app(
     context_factory: ContextFactory | None = None,
     clinic: ClinicClient | None = None,
     demo: bool = False,
+    static_dir: str | Path | None = None,
 ) -> FastAPI:
     """Build the app over a store.
 
@@ -82,6 +84,11 @@ def create_app(
     ``demo`` mounts the control surface under ``/api/demo``. **Off by default and explicit**: the
     reset it exposes deletes every case, which is right in front of a judge and wrong everywhere
     else. An app built without it does not have the routes at all rather than having them refuse.
+
+    ``static_dir`` serves a built frontend from this same origin, which is what lets a deployment
+    keep the browser same-origin without any CORS middleware — see :mod:`careloop.api.static`.
+    Off by default for the same reason ``demo`` is: an app that serves files nobody asked for is
+    not the app the tests exercise.
     """
     bound = ApiDeps(store=store, events=events or EventSimulator(), clinic=clinic, demo=demo)
     if context_factory is not None:
@@ -198,8 +205,33 @@ def create_app(
             ) from None
         return run_view(await deps.runs.wait(run_id, wait))
 
+    @app.middleware("http")
+    async def never_cache_the_api(request: Request, call_next: Callable) -> Response:
+        """Mark every ``/api`` response uncacheable, at the origin.
+
+        The dashboard polls ``GET /api/cases`` to watch a run proceed, and every response is a
+        point-in-time projection of a store that is changing underneath it. FastAPI sets no cache
+        headers at all, which leaves a browser — or a CDN in front of this — free to apply
+        *heuristic* caching and serve a stale case list. That failure looks exactly like the
+        backend having hung mid-run, which is the worst possible thing for it to look like.
+
+        Set here rather than only in the CDN's cache policy because the property belongs to the
+        response, not to one deployment's configuration: a second CloudFront behaviour, a proxy or
+        a browser back-button would each have to rediscover it otherwise.
+        """
+        response = await call_next(request)
+        if request.url.path.startswith(API_PREFIX):
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
     if demo:
         mount_demo(app)
+    if static_dir is not None:
+        # Imported here rather than at module scope: careloop.api.static reads API_PREFIX from
+        # this module, and the catch-all it registers must come after every route above.
+        from careloop.api.static import mount_static
+
+        mount_static(app, Path(static_dir))
     return app
 
 

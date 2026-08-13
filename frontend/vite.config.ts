@@ -1,9 +1,11 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
 
 // The dev proxy keeps the frontend same-origin against the FastAPI backend.
-// It is inert while the app runs on the mock adapter.
+// Every request the real adapter makes is a relative /api path, so nothing in the
+// app knows where the backend lives and backend CORS is never involved.
 export default defineConfig({
   plugins: [react()],
   resolve: {
@@ -17,5 +19,11 @@ export default defineConfig({
         changeOrigin: true
       }
     }
+  },
+  test: {
+    environment: "jsdom",
+    setupFiles: ["./src/test/setup.ts"],
+    include: ["src/**/*.test.{ts,tsx}"],
+    restoreMocks: true
   }
 });

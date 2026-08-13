@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentRun } from "@/types/domain";
 import type { CaseCard, CaseDetail, CaseSections, FactView, RunView, TimelineEventView } from "./backend";
+import { clockTime } from "./presentation";
 import {
   RealCareLoopApi,
   buildCase,
@@ -197,6 +198,20 @@ describe("the timeline the spine renders", () => {
       "Clinic record checked independently — match"
     ]);
     expect(events.map((e) => e.tone)).toEqual(["decision", "neutral", "verified"]);
+  });
+
+  it("prints the time only when it changes", () => {
+    // A whole run finishes inside one minute, so every entry carries the same HH:MM and the rail
+    // becomes a column of one repeated number that reads as a rendering fault.
+    const one = { ...entry("CASE_CREATED"), at: "2026-08-13T11:00:01+00:00" };
+    const two = { ...entry("ACTION_EXECUTED", { tool_name: "send_email" }), at: "2026-08-13T11:00:04+00:00" };
+    const three = { ...entry("VERIFICATION_PASSED", { read_back: "false" }), at: "2026-08-13T11:02:00+00:00" };
+
+    expect(timelineFor([one, two, three]).map((e) => e.time)).toEqual([
+      clockTime(one.at),
+      "",
+      clockTime(three.at)
+    ]);
   });
 
   it("falls back to the backend's own summary for a kind it has no line for", () => {

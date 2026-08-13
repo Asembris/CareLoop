@@ -2662,6 +2662,57 @@ but has been seen to take 21 when a model call is slow — so the take is not fi
 
 ---
 
+## Session E — 2026-08-14 (in progress)
+
+Deployment. The full record lands when the session closes; what is here is settled and measured.
+
+### The video-script constraint, recorded so September does not rediscover it
+
+**`injection` and `injection_only` are both demo scenario keys now, and which one the video uses is
+a decision, not a detail.**
+
+Measured on the deployed host, reset between every run:
+
+| Scenario | Runs carrying a `POLICY_DENY` | Ends |
+|---|---|---|
+| `injection` — poison beside real work | **3 of 6** | `DONE`, verified, `read_back: true` |
+| `injection_only` — poison alone | **5 of 5**, all five tools refused | `AWAITING_HUMAN`, `NO_SAFE_ACTION_AVAILABLE` |
+
+The mixed scenario's variance is **not a defect and must not be fixed.** The poisoned notice arrives
+beside legitimate work, and a planner that ignores the poison and books the appointment is the
+system working. Ruled out first: the poisoned document *is* read on the runs with no denial —
+`mediguard-continuity-notice.pdf` contributes its two excerpt pages to the case exactly as on the
+runs that refuse — so the bait is in front of the planner and it declines to take it.
+
+**Neither remedy is available.** Tuning the planner prompt until it takes the bait is rigging the
+demo; so is building a fixture whose only actionable content is poison and calling it the normal
+case. `bench/live.py`'s `require_denial` flag reached the same conclusion independently and in the
+same words, which is why it is set on `injection_only` and nowhere else.
+
+So: **the video uses `injection_only`, where the refusal is deterministic without anything being
+staged — the model is still free to propose nothing effectful. The live demo keeps `injection`
+as-is.** A judge who presses it and sees a clean booking with no denial is seeing honest behaviour,
+and honest beats reliable here.
+
+One thing a filming session needs to know about the beat it is choosing: `injection_only` ends
+**`AWAITING_HUMAN` with `NO_SAFE_ACTION_AVAILABLE`**, not `DONE`. That is the correct outcome —
+every tool was refused, so there is nothing left to do — and the frontend renders it properly:
+no Approve, no Reject, the band reads `MANUAL FOLLOW-UP REQUIRED` and the hero line switches to
+"One case needs a person." It is also open decision 19's surface mitigation on camera, so do not
+press Approve on that card from any other client.
+
+### Also settled
+
+- **The deployed architecture.** One `t4g.small` behind CloudFront serving `/`, `/api/*` and
+  `/clinic/*` from one origin, so no CORS middleware is ever needed. SQLite stays; **the DynamoDB
+  swap the session brief asked to cost was not needed and was not done** — an always-on host is
+  required regardless of AgentCore, and once one exists SQLite is sufficient.
+- **Runs are three times faster deployed than local** — `referral` in 1.96s against 6.5s — because
+  the host sits beside Bedrock in us-east-1. Approve-to-`DONE` is 0.16s. The pacing session D2 added
+  is what keeps the beats watchable at that speed.
+- **The reset hazard is closed and was already closed.** `realApi.runScenario` calls `resetDemo()`
+  before every scenario, so the two-scenarios-one-slot 409 cannot happen through the UI.
+
 ## Open decisions
 
 Carry these forward. Nothing here is blocking the next commit except where it says so.

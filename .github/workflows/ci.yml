@@ -77,3 +77,38 @@ jobs:
       # two are kept identical so a CI failure always reproduces with the documented command.
       - name: Test
         run: python -m pytest -q
+
+  # A separate job rather than a step in `check`, deliberately. The Python job's whole contract is
+  # that it runs with no credentials and no provider SDK reachable, and adding a Node toolchain to
+  # it would put that claim behind an unrelated install. The two share nothing: `pyproject.toml`
+  # sets `testpaths = ["tests"]` so pytest never descends into `frontend/`, and ruff lints Python.
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # The version the build was verified against locally. No matrix: one frontend ships.
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # `ci`, not `install`: the lockfile is the record of what the build was verified against,
+      # and a job that could resolve a different tree would not be checking the shipped one.
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm run test
+
+      # Last, because a build that succeeds while the types or the tests fail tells us nothing.
+      - name: Build
+        run: npm run build

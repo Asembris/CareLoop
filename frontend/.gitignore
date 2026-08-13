@@ -4,3 +4,11 @@ dist-ssr
 *.local
 .env
 .DS_Store
+
+# Design-handoff material, kept locally rather than in the repository.
+# reference/ holds the ten golden captures and DESIGN_REFERENCE.md; docs/ holds
+# the handoff's own integration, design-system, mock-data and routes notes.
+# What the repository keeps instead is docs/frontend-contract-map.md, which is
+# the reconciliation against the real API and does not depend on either.
+reference/
+docs/

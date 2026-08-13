@@ -44,3 +44,7 @@ caseloop.db
 .idea/
 .DS_Store
 Thumbs.db
+
+# SSH keys — never commit
+.keys/
+*.pem

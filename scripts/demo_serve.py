@@ -67,16 +67,27 @@ def main() -> None:
         help="Demo World's base URL; empty means every effect stays simulated",
     )
     parser.add_argument("--env-file", default=".env", help="key=value file to load first")
+    parser.add_argument(
+        "--static-dir",
+        default=os.environ.get("CARELOOP_STATIC_DIR", ""),
+        help="a built frontend to serve from this same origin; empty means API only",
+    )
     arguments = parser.parse_args()
 
     load_env_file(Path(arguments.env_file))
 
     store = SqliteCaseStore(arguments.db)
     clinic = ClinicClient(arguments.clinic_url) if arguments.clinic_url else None
-    app = create_app(store, clinic=clinic, demo=True)
+    app = create_app(
+        store,
+        clinic=clinic,
+        demo=True,
+        static_dir=arguments.static_dir or None,
+    )
 
     print(f"case store    {arguments.db}")
     print(f"clinic        {arguments.clinic_url or '(simulated)'}")
+    print(f"frontend      {arguments.static_dir or '(API only)'}")
     print(f"triage model  {os.environ.get('CARELOOP_MODEL_TRIAGE', '(mock)')}")
     print(f"planner model {os.environ.get('CARELOOP_MODEL_PLANNER', '(mock)')}")
 

@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Prepare an Amazon Linux 2023 arm64 host to run CareLoop. Runs ON the instance, as a sudoer.
+#
+# Idempotent: safe to re-run, and push.sh does re-run it on every deploy so that a host rebuilt
+# from scratch and a host updated in place converge on the same thing. A bootstrap that only
+# works once is a bootstrap nobody dares run.
+set -euo pipefail
+
+APP=/opt/careloop/app
+VENV=/opt/careloop/venv
+STATE=/opt/careloop/state
+
+echo "== packages"
+sudo dnf install -y git tar gzip >/dev/null
+
+echo "== careloop user"
+if ! id careloop >/dev/null 2>&1; then
+    sudo useradd --system --home-dir /opt/careloop --shell /sbin/nologin careloop
+fi
+sudo mkdir -p "$APP" "$STATE"
+
+echo "== python 3.12"
+# uv rather than dnf: AL2023's python3 is not 3.12, and CareLoop pins >=3.12. uv installs a
+# standalone build, which also makes the deployed interpreter the same one the tests ran on
+# rather than whatever the distribution happens to ship this month.
+if [ ! -x /usr/local/bin/uv ]; then
+    curl -LsSf https://astral.sh/uv/install.sh | sudo env UV_INSTALL_DIR=/usr/local/bin sh >/dev/null
+fi
+sudo /usr/local/bin/uv python install 3.12 >/dev/null
+
+echo "== venv"
+sudo /usr/local/bin/uv venv --python 3.12 "$VENV" >/dev/null
+# The runtime dependencies only. Not `.[dev]`: the host does not run the test suite, and
+# reportlab, pytest and the rest are a larger attack surface for no gain.
+sudo /usr/local/bin/uv pip install --python "$VENV/bin/python" -e "$APP" >/dev/null
+
+echo "== ownership"
+sudo chown -R careloop:careloop /opt/careloop
+
+echo "== systemd"
+sudo cp "$APP/deploy/careloop-demoworld.service" /etc/systemd/system/
+sudo cp "$APP/deploy/careloop-api.service" /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now careloop-demoworld careloop-api
+
+echo "== waiting for both to answer"
+for _ in $(seq 1 30); do
+    if curl -fsS http://127.0.0.1:8100/clinic/slots >/dev/null 2>&1 &&
+       curl -fsS http://127.0.0.1:8000/api/health >/dev/null 2>&1; then
+        echo "both up"
+        exit 0
+    fi
+    sleep 2
+done
+
+echo "FAILED to come up; last 40 lines of each:" >&2
+sudo journalctl -u careloop-demoworld -n 40 --no-pager >&2 || true
+sudo journalctl -u careloop-api -n 40 --no-pager >&2 || true
+exit 1

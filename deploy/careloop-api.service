@@ -1,0 +1,40 @@
+[Unit]
+Description=CareLoop — the dashboard API and the built frontend
+Documentation=https://github.com/Asembris/CareLoop
+# Demo World is not a hard dependency: without it every effect stays simulated and a verification
+# honestly reports read_back=false. The API must come up either way rather than refusing to start
+# because a service it does not own is down.
+After=network-online.target
+Wants=network-online.target careloop-demoworld.service
+
+[Service]
+Type=exec
+User=careloop
+Group=careloop
+WorkingDirectory=/opt/careloop/app
+EnvironmentFile=/opt/careloop/app/deploy/careloop.env
+ExecStart=/opt/careloop/venv/bin/python scripts/demo_serve.py \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --db ${CARELOOP_DB} \
+    --clinic-url ${CARELOOP_CLINIC_URL} \
+    --static-dir ${CARELOOP_STATIC_DIR} \
+    --env-file /dev/null
+
+# Restart on failure, but give the app's own lifespan a chance to drain in-flight runs first: a
+# run killed mid-flight leaves a case wherever its last committed node put it. Recoverable —
+# the store is the truth — but a graph two nodes from DONE would need a human to notice.
+Restart=always
+RestartSec=3
+TimeoutStopSec=30
+KillSignal=SIGINT
+
+# The process needs to read the tree, write the SQLite file, and reach Bedrock. Nothing else.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/careloop/state
+
+[Install]
+WantedBy=multi-user.target

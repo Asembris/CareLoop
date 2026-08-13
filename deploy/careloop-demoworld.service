@@ -1,0 +1,32 @@
+[Unit]
+Description=Demo World — a synthetic clinic CareLoop does not own
+Documentation=https://github.com/Asembris/CareLoop
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=careloop
+Group=careloop
+WorkingDirectory=/opt/careloop/app
+# Bound to every interface rather than loopback because CloudFront reaches it directly at
+# /clinic/*, which is what lets a judge run `GET /clinic/slots` and check the appointment
+# against a service CareLoop does not own. The security group is what limits who may.
+#
+# Deliberately NOT given the API's environment file: demoworld/ never imports careloop, holds no
+# credentials, authenticates nobody and has no model. A unit that handed it CareLoop's
+# configuration would imply a coupling that does not exist.
+ExecStart=/opt/careloop/venv/bin/python -m demoworld --host 0.0.0.0 --port 8100
+
+# Its state is in-memory and durable only within its own process, by design (session C, delta D7).
+# A restart therefore reseeds the world, which is the same thing POST /api/demo/reset does.
+Restart=always
+RestartSec=3
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

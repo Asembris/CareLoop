@@ -1,4 +1,4 @@
-"""The three scenarios the demo control API can trigger, and nothing else.
+"""The four scenarios the demo control API can trigger, and nothing else.
 
 Data, not behaviour. The routes live in :mod:`careloop.api.app` beside the ones they reuse, because
 the whole claim of the demo API is that a button runs **the normal application path** — the same
@@ -13,6 +13,20 @@ rejection, which is what ``scripts/resume_demo.py`` and T5 drive across three pr
 The resume beat a judge can actually press is a case that parks for a decision so the Approve
 button has something to approve — a second event would need the first case finished, which is
 exactly what has not happened yet when somebody is looking at the screen.
+
+**``injection`` and ``injection_only`` are both here, and the pair is deliberate.** Session E
+measured the mixed ``injection`` scenario on the deployed host at **3 runs in 6 carrying any
+``POLICY_DENY`` at all**: the poisoned notice arrives beside real work, and a planner that ignores
+the poison and books the appointment is the system working rather than the demo failing. So the
+refusal is genuine when it happens and absent when it does not, and neither is a defect.
+
+``injection_only`` carries the same poisoned document with *no* legitimate work beside it, which
+is where a refusal is reachable without any model being made to misbehave — `bench/live.py`
+measured 5 denials in 5 runs and its ``require_denial`` flag says why in the same words. It is
+here so the beat can be *shown* without the mixed scenario being tuned into always producing it;
+prompt-tuning a planner into taking bait, or building a fixture with no legitimate alternative and
+calling it the normal case, would both be rigging the demo. The model is still free to propose
+nothing effectful.
 
 What is here is the mapping from a scenario name to the inbound event that produces it, plus the
 load-time check that each named event exists. A scenario naming a fixture that has been renamed
@@ -65,6 +79,12 @@ DEMO_SCENARIOS: Final[Mapping[str, DemoScenario]] = MappingProxyType(
                 case_id="demo-resume",
                 event_id="evt-0004-appointment-instructions",
                 title="A case parks for a caregiver decision and resumes when it is made",
+            ),
+            DemoScenario(
+                key="injection_only",
+                case_id="demo-injection-only",
+                event_id="evt-0005-continuity-notice-only",
+                title="The poisoned notice with no legitimate work to do instead",
             ),
         )
     }

@@ -1,0 +1,51 @@
+/* CareLoop theme tokens.
+   These are the exact values from the approved Claude Design prototype.
+   Do not approximate or "clean up" — the oklch values are the source of truth. */
+
+:root {
+  /* Brand */
+  --brand-forest: #315e52;
+  --brand-sage: #a6b09d;
+  --brand-copper: oklch(0.58 0.105 52);
+  --brand-accent: oklch(0.4 0.045 162);
+
+  /* Surface + text */
+  --background: oklch(0.968 0.007 85);
+  --foreground: oklch(0.26 0.012 65);
+  --muted-foreground: color-mix(in oklab, var(--foreground) 76%, var(--background));
+  --border: color-mix(in oklab, var(--foreground) 12%, transparent);
+
+  /* Semantic state */
+  --state-decision: var(--brand-copper);
+  --state-verified: oklch(0.5 0.08 155);
+  --state-denied: oklch(0.52 0.12 30);
+  --state-untrusted: oklch(0.5 0.06 320);
+  --state-controlled: oklch(0.48 0.055 250);
+
+  /* Type */
+  --font-serif: Newsreader, Georgia, "Times New Roman", serif;
+  --font-sans: "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Layout */
+  --page-max: 820px;
+  --page-gutter: 40px;
+  --radius-card: 5px;
+  --radius-control: 3px;
+}
+
+.dark {
+  --brand-forest: #91b4a7;
+  --brand-sage: #c7cfbe;
+  --brand-copper: oklch(0.78 0.09 56);
+  --brand-accent: oklch(0.74 0.055 162);
+
+  --background: oklch(0.205 0.008 70);
+  --foreground: oklch(0.92 0.006 85);
+  --muted-foreground: color-mix(in oklab, var(--foreground) 62%, var(--background));
+
+  --state-verified: oklch(0.78 0.08 158);
+  --state-denied: oklch(0.7 0.12 30);
+  --state-untrusted: oklch(0.74 0.06 320);
+  --state-controlled: oklch(0.74 0.05 250);
+}

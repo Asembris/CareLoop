@@ -1,29 +1,39 @@
-import type { CareLoopApi } from "@/types/domain";
-import { mockApi } from "./mockApi";
+import type { CareLoopApi, DashboardState } from "@/types/domain";
+import { emptyRun, realApi } from "./realApi";
 
 /* ------------------------------------------------------------------ *
- * THE INTEGRATION SEAM.
+ * THE INTEGRATION SEAM — now pointed at the real backend.
  *
- * Today the UI runs entirely on the mock adapter. To connect the real
- * CareLoop backend, implement realApi against the same CareLoopApi
- * interface and swap the export below. No component should change.
+ * `CareLoopApi` is the whole surface, and swapping this one line is what
+ * the design package built it for. Not one component changed: every
+ * divergence between what CareLoop stores and what the UI asks for is
+ * resolved in `realApi.ts` and `presentation.ts`.
  *
- *   export const api: CareLoopApi = realApi;
- *
- * Suggested mapping (confirm against the repository — these are NOT
- * assumed to exist as written):
- *   getDashboard   → GET  /api/cases
+ *   getDashboard   → GET  /api/cases          (three arrays, flattened)
  *   getCase        → GET  /api/cases/{id}
- *   getRun         → GET  /api/runs/{run_id}
+ *   getRun         → GET  /api/runs/{run_id}  + the case's own timeline
  *   approveAction  → POST /api/cases/{id}/decisions/{approval_id}/approve
  *                    POST /api/cases/{id}/decisions/{approval_id}/reject
  *   runScenario    → POST /api/demo/scenarios/{key}
  *   resetDemo      → POST /api/demo/reset
- *   subscribe      → poll /api/runs/{run_id} until the run settles,
- *                    then stop polling (see docs/API_INTEGRATION_MAP.md)
+ *   subscribe      → poll GET /api/cases at ~1s, stop when nothing moves
+ *
+ * `mockApi` is kept, unreferenced, as the record of the approved demo
+ * pacing and as something to point this line back at while debugging.
  * ------------------------------------------------------------------ */
 
-export const api: CareLoopApi = mockApi;
+export const api: CareLoopApi = realApi;
 
-/** Base URL for the real adapter. Unused while running on mocks. */
+/** What the dashboard holds before the first read comes back.
+ *
+ *  Empty rather than seeded. The provider used to start from `data/mock/cases.ts`, which against a
+ *  real backend meant two invented cases on screen until the first poll replaced them — a
+ *  dashboard that shows work nobody did, for as long as the network takes. */
+export function emptyDashboard(): DashboardState {
+  return { cases: [], run: emptyRun() };
+}
+
+/** Base URL for the adapter. Empty by default: every request is a relative `/api` path, which the
+ *  vite dev proxy forwards and a production deployment serves same-origin, so backend CORS is
+ *  never involved. */
 export const API_BASE_URL: string = import.meta.env.VITE_API_BASE_URL ?? "";

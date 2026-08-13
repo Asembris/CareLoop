@@ -1,9 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import type { CareCase, DashboardState, ScenarioId } from "@/types/domain";
-import { api } from "@/services/api";
-import { idleRun } from "@/data/mock/runs";
-import { seedCases } from "@/data/mock/cases";
+import { api, emptyDashboard } from "@/services/api";
 
 interface CareLoopContextValue extends DashboardState {
   needs: CareCase[];
@@ -19,10 +17,10 @@ interface CareLoopContextValue extends DashboardState {
 const CareLoopContext = createContext<CareLoopContextValue | null>(null);
 
 export function CareLoopProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<DashboardState>({ cases: seedCases(), run: idleRun() });
+  const [state, setState] = useState<DashboardState>(emptyDashboard);
 
-  // The mock adapter pushes; the real adapter should poll /api/runs/:id and
-  // re-emit the same shape, stopping once the run settles.
+  // The adapter polls GET /api/cases and re-emits this same shape, stopping once nothing is
+  // moving. Every verb restarts it, which is why nothing here has to know when to look again.
   useEffect(() => api.subscribe(setState), []);
 
   const approve = useCallback((caseId: string, decisionId: string) => {

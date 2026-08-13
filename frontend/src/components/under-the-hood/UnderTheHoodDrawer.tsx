@@ -22,7 +22,12 @@ function runRows(run: AgentRun): { k: string; v: string; tone: string }[] {
       v: run.policyDetail,
       tone: run.policyVerdict === "DENY" ? "var(--state-denied)" : "inherit"
     },
-    { k: "EVIDENCE DIGEST", v: run.evidenceDigest, tone: "inherit" },
+    /* EVIDENCE DIGEST was here. Dropped rather than filled: there is no digest of evidence
+       anywhere in the backend — `args_digest` on an approval and an action digests *arguments*,
+       not evidence — so widening the API's payload allowlist would not produce one, because it
+       does not exist to be allowed. Putting the citation in a slot labelled EVIDENCE DIGEST would
+       have the panel imply a value that is not there. An absent row is honest; a relabelled one
+       is not. `AgentRun.evidenceDigest` stays on the type, unread, so `mockApi` still typechecks. */
     {
       k: "VERIFICATION",
       v: run.verificationDetail,
@@ -179,7 +184,7 @@ export default function UnderTheHoodDrawer() {
         </div>
 
         <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55, color: "var(--muted-foreground)" }}>
-          Running on the mock adapter: these values mirror the shape of the real run record. Wire to GET /api/runs/:id.
+          Live run record from GET /api/runs/:id. Policy verdicts and rule ids come from the case's own audit trail.
         </p>
       </div>
     </aside>

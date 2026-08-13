@@ -9,7 +9,10 @@ export interface ScenarioMeta {
   toneVar: string;
 }
 
-/** Launcher copy. Locked — do not rewrite. */
+/** Launcher copy. Locked — do not rewrite.
+ *
+ *  One exception, approved: scenario 03 was `mismatch` and is now `resume`, because the backend
+ *  ships no mismatch trigger. See `ScenarioId` in `types/domain.ts` for where that claim went. */
 export const SCENARIOS: ScenarioMeta[] = [
   {
     id: "referral",
@@ -27,10 +30,10 @@ export const SCENARIOS: ScenarioMeta[] = [
     toneVar: "var(--state-untrusted)"
   },
   {
-    id: "mismatch",
+    id: "resume",
     num: "03",
-    title: "Verification mismatch",
-    blurb: "The clinic's record disagrees with what CareLoop authorized. The case does not close.",
-    toneVar: "var(--state-denied)"
+    title: "Pause for a decision",
+    blurb: "CareLoop reaches a step it has no authority for, stops, and finishes the moment you decide.",
+    toneVar: "var(--state-decision)"
   }
 ];

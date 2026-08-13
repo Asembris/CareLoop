@@ -114,7 +114,7 @@ class MockCareLoopApi implements CareLoopApi {
     await this.resetDemo();
     if (id === "referral") return this.referral();
     if (id === "injection") return this.injection();
-    return this.mismatch();
+    return this.resume();
   }
 
   async approveAction(input: ApprovalInput): Promise<ApprovalResult> {
@@ -390,9 +390,17 @@ class MockCareLoopApi implements CareLoopApi {
     return { scenarioId: "injection", runId, caseId: id };
   }
 
-  /* -------------------- scenario 03 · verification mismatch -------------------- */
+  /* -------------------- scenario 03 · resume -------------------- */
 
-  private mismatch(): ScenarioRun {
+  /**
+   * Kept as the design package wrote it, under the key the backend actually ships.
+   *
+   * The choreography below is still the *mismatch* beat, and the backend cannot produce it: a
+   * real read-back mismatch needs the appointment moved from outside CareLoop. This mock is
+   * superseded by `realApi` and stays only as the offline fallback and as the record of the
+   * approved pacing — nothing renders it once `api.ts` points at the real adapter.
+   */
+  private resume(): ScenarioRun {
     const id = "c-follow";
     const runId = "run_01J8SC";
 
@@ -418,7 +426,7 @@ class MockCareLoopApi implements CareLoopApi {
       },
       ...this.cases
     ];
-    this.run = { ...idleRun(), id: runId, scenario: "mismatch" };
+    this.run = { ...idleRun(), id: runId, scenario: "resume" };
     this.setRun("EXECUTE", runId + " · execute", { policyVerdict: "ALLOW", policyDetail: "ALLOW" });
 
     this.at(1300, () => {
@@ -473,7 +481,7 @@ class MockCareLoopApi implements CareLoopApi {
       });
     });
 
-    return { scenarioId: "mismatch", runId, caseId: id };
+    return { scenarioId: "resume", runId, caseId: id };
   }
 }
 

@@ -29,7 +29,15 @@ export type VerificationState = "PENDING" | "MATCH" | "MISMATCH";
 
 export type EventTone = "neutral" | "decision" | "verified" | "denied" | "untrusted";
 
-export type ScenarioId = "referral" | "injection" | "mismatch";
+/** The three keys `careloop/api/demo.py` actually ships.
+ *
+ *  The third was `mismatch` in the design package and has no backend trigger: producing a real
+ *  verification mismatch needs the appointment moved from outside CareLoop, which no demo
+ *  endpoint can do without becoming a demo that does something the real flow does not. The claim
+ *  is made instead by `tests/test_verify_readback.py::TestTheIndependenceProof`, which moves the
+ *  appointment behind CareLoop's back and requires verification to fail. A test that proves it
+ *  beats a button whose backend state contradicts its own screen. */
+export type ScenarioId = "referral" | "injection" | "resume";
 
 export interface EvidenceExcerpt {
   fact: string;

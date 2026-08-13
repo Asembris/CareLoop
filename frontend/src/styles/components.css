@@ -1,0 +1,12 @@
+/* The prototype's hover states, kept as the only class-based CSS in the app.
+   Everything else is inline style + tokens. */
+
+.cl-navlink:hover { color: var(--foreground); }
+.cl-icon-btn:hover { color: var(--foreground); border-color: color-mix(in oklab, currentColor 32%, transparent); }
+.cl-outline:hover { border-color: color-mix(in oklab, currentColor 45%, transparent); }
+.cl-outline-soft:hover { border-color: color-mix(in oklab, currentColor 38%, transparent); }
+.cl-solid:hover { opacity: 0.88; }
+.cl-row:hover { background: color-mix(in oklab, currentColor 4%, transparent); }
+.cl-quiet:hover { opacity: 1; }
+.cl-source:hover { opacity: 0.7; }
+.cl-scenario:hover { border-color: color-mix(in oklab, currentColor 32%, transparent); }

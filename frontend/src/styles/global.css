@@ -1,0 +1,65 @@
+@import "./tokens.css";
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--background);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+a {
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+/* Motion vocabulary — four durations, one easing family.
+   120ms response / 220ms change / 420ms consequence / 900ms closure. */
+@keyframes clRise {
+  from { opacity: 0; transform: translateY(7px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes clFade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes clSpin {
+  to { transform: rotate(360deg); }
+}
+@keyframes clDraw {
+  from { stroke-dashoffset: 176; }
+  to { stroke-dashoffset: 0; }
+}
+@keyframes clCheck {
+  0%, 55% { stroke-dashoffset: 35; opacity: 0; }
+  60% { opacity: 1; }
+  100% { stroke-dashoffset: 0; opacity: 1; }
+}
+@keyframes clSlide {
+  from { opacity: 0; transform: translateX(18px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

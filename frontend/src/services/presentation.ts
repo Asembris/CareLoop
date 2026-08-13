@@ -259,6 +259,19 @@ export function toolPhrase(toolName: string): string {
   return TOOL_PHRASES[toolName] ?? (toolName ? `Run ${toolName}` : "Take an action");
 }
 
+/** The same tool as a thing that has already happened, for the timeline. */
+const TOOL_PAST: Record<string, string> = {
+  send_email: "Email sent",
+  book_appointment: "Appointment booked",
+  upload_document: "Document uploaded",
+  grant_portal_access: "Access granted",
+  fetch_document: "Document fetched"
+};
+
+export function toolPast(toolName: string): string {
+  return TOOL_PAST[toolName] ?? (toolName ? `${toolName} performed` : "Action performed");
+}
+
 /** Mono labels for a tool's arguments, as the decision card's fact row shows them. */
 const ARG_LABELS: Record<string, Record<string, string>> = {
   send_email: { to: "TO", subject: "SUBJECT", body: "MESSAGE" },

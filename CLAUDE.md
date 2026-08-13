@@ -114,6 +114,24 @@ reading signatures. Full detail in [`docs/spike-findings.md`](docs/spike-finding
   spec.py` does that, non-vacuously against both shapes above. This is session 5's "assert on the
   JSON schema, not on construction" run one layer further out, and it is the reason the planner
   schema is not a union.
+- **AgentCore Runtime sends no `Content-Type` header to `/invocations`.** Measured, session E, on a
+  deployed runtime. FastAPI binds a typed body only when the request is `application/json`, so a
+  Pydantic-modelled `/invocations` returns **422 before any handler runs** — no log line, no
+  traceback, and at the caller it surfaces as an opaque `RuntimeClientError (422)` that says
+  nothing about its cause. Anything of CareLoop's put behind `/invocations` must read the raw
+  request body and parse it itself. This is a constraint on the deployment shape, not a note.
+- **AgentCore log groups default to `NEVER EXPIRE`.** `/aws/bedrock-agentcore/runtimes/<id>-DEFAULT`
+  is created by the service on first invoke, and **every runtime creates its own**, so a redeploy
+  under a new id leaves the old group accruing storage forever. Setting `logs:PutRetentionPolicy`
+  is part of deploying, not part of tidying up.
+- **Two once-per-account gates stand in front of the first `CreateAgentRuntime`, and neither is
+  documented as a prerequisite** — AWS publishes `bedrock-agentcore:*` as the answer, so both are
+  discoverable only by hitting them. The service-linked role
+  `AWSServiceRoleForBedrockAgentCoreRuntimeIdentity` (service name
+  `runtime-identity.bedrock-agentcore.amazonaws.com`) must exist, and the calling principal needs
+  `bedrock-agentcore:{Create,Get,Update,Delete}WorkloadIdentity` on
+  `workload-identity-directory/default` and `.../workload-identity/*`. Both are per *account*, not
+  per runtime: a new account rediscovers them, an existing one never sees them again.
 - **OpenAI-compatible providers reach structured output through strict Structured Outputs**
   (`client.beta.chat.completions.parse(response_format=...)`), where decoding is constrained so
   every required field *must* be emitted. A model on that path cannot fail to satisfy a schema the

@@ -5,10 +5,15 @@ dist-ssr
 .env
 .DS_Store
 
-# Design-handoff material, kept locally rather than in the repository.
-# reference/ holds the ten golden captures and DESIGN_REFERENCE.md; docs/ holds
-# the handoff's own integration, design-system, mock-data and routes notes.
-# What the repository keeps instead is docs/frontend-contract-map.md, which is
-# the reconciliation against the real API and does not depend on either.
-reference/
-docs/
+# The only piece of the design handoff the repository does not keep: a 58 KB
+# export from the design tool, kept by HANDOFF.md §17 for reference and
+# explicitly "not part of the build, not to be shipped". Nothing imports it and
+# nothing can regenerate it, so a clone gains a file it cannot use or reproduce.
+#
+# reference/ and docs/ are tracked on purpose and must stay that way. The ten
+# captures in reference/screenshots/ are the only visual baseline that exists —
+# step 10 of the D2 order in docs/frontend-contract-map.md re-checks against
+# them, and a clone that lacks them cannot perform it. HANDOFF.md is tracked and
+# cites both directories throughout; excluding them would leave it pointing at
+# files nobody has.
+reference/original-prototype.dc.html

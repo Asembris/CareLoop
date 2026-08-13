@@ -64,6 +64,7 @@ import {
   isRenderedOnTheSpine,
   observedLabel,
   outcomeCopy,
+  pacedState,
   policyDetailFor,
   readbackResult,
   relativeTime,
@@ -77,6 +78,7 @@ import {
   toolPhrase,
   trustWord,
   verificationDetailFor,
+  type PacedState,
   type PolicyLine
 } from "./presentation";
 
@@ -176,6 +178,17 @@ export function latestVerification(
     }
   }
   return null;
+}
+
+/** Every state the case has been in, in order, off its own `STATE_TRANSITION` entries.
+ *
+ *  Both payload keys are on the backend's allowlist. This is what lets the display be paced
+ *  without inventing anything: the sequence is the audit trail's, not the adapter's. */
+export function recordedStates(timeline: readonly TimelineEventView[]): string[] {
+  return timeline
+    .filter((event) => event.kind === "STATE_TRANSITION")
+    .map((event) => payloadString(event, "to"))
+    .filter(Boolean);
 }
 
 /** Every gate verdict the case recorded, in order, for the under-the-hood panel. */
@@ -330,6 +343,10 @@ export function timelineText(event: TimelineEventView): string {
  *  refused. A denial with nothing before it is emitted standalone rather than lost. */
 export function timelineFor(timeline: readonly TimelineEventView[]): TimelineEvent[] {
   const events: TimelineEvent[] = [];
+  // A whole run finishes inside one minute, so every entry carries the same HH:MM and the rail
+  // becomes a column of one repeated number that reads as a rendering fault. The time is printed
+  // when it changes and left blank when it does not, which is what a log rail does.
+  let printed = "";
 
   for (const entry of timeline) {
     if (entry.kind === "POLICY_DENY") {
@@ -355,12 +372,14 @@ export function timelineFor(timeline: readonly TimelineEventView[]): TimelineEve
     // One fact per page, each holding an entire page of a PDF. Real evidence, wrong grain.
     if (entry.kind === "EVIDENCE_RECORDED" && isExcerptFact(payloadString(entry, "key"))) continue;
 
+    const time = clockTime(entry.at);
     events.push({
       id: String(entry.seq),
-      time: clockTime(entry.at),
+      time: time === printed ? "" : time,
       text: timelineText(entry),
       tone: toneFor(entry.kind)
     });
+    printed = time;
   }
 
   return events;
@@ -424,20 +443,26 @@ export function buildCase(
   card: CaseCard,
   detail: CaseDetail | null,
   runId: string | undefined,
-  now: Date
+  now: Date,
+  /** The state the display is currently walking through — see `pacedState`. Defaults to the
+   *  case's real state, which is what every test that is not about pacing wants. */
+  shownState: string = card.state
 ): CareCase {
   const timeline = detail?.timeline ?? [];
   const proposal = latestProposal(timeline);
   const verification = latestVerification(timeline);
   const decision = detail?.decision ?? card.decision;
 
+  // Never paced. A mismatch is a safety claim, not a beat: the moment the timeline says the
+  // clinic disagrees, the screen says so, whatever state the display has reached.
   const mismatch = verification !== null && !verification.passed;
-  const verified = card.state === "DONE" && verification !== null && verification.passed && verification.readBack;
+  const verified =
+    shownState === "DONE" && verification !== null && verification.passed && verification.readBack;
   const outcome =
-    card.state === "DONE" && proposal ? outcomeCopy(proposal.toolName, proposal.args, verified) : undefined;
+    shownState === "DONE" && proposal ? outcomeCopy(proposal.toolName, proposal.args, verified) : undefined;
 
   const status = statusCopy({
-    state: card.state,
+    state: shownState,
     failureReason: card.failure_reason,
     mismatch,
     verified,
@@ -447,7 +472,9 @@ export function buildCase(
   return {
     id: card.case_id,
     title: titleFor(card.case_id, card.summary),
-    section: sectionFor(card.section),
+    // The section follows the shown state, not the stored one. Splitting them would put a row
+    // reading "Making the arrangement…" under COMPLETED, which is worse than either alone.
+    section: sectionFor(sectionNameFor(shownState, card.section)),
     statusLabel: status.statusLabel,
     statusText: status.statusText,
     headline: status.headline,
@@ -461,6 +488,20 @@ export function buildCase(
     events: timelineFor(timeline),
     evidence: evidenceFor(detail?.facts ?? [])
   };
+}
+
+/** The backend's own section rule, applied to the state the display is showing.
+ *
+ *  A copy of `careloop.api.projections.SECTIONS`, and the only place the frontend restates a
+ *  backend decision — unavoidable, because the section for a state the case has already left is
+ *  not something the backend was asked. It is the *rule* rather than a second list: `working` is
+ *  "the rest", so a new case state joins it here exactly as it does there. When the display has
+ *  caught up, the backend's own answer is used instead of this one. */
+function sectionNameFor(shownState: string, storedSection: string): string {
+  if (shownState === "AWAITING_HUMAN") return "needs_you";
+  if (shownState === "DONE" || shownState === "FAILED") return "completed";
+  if (shownState === "") return storedSection;
+  return "working";
 }
 
 /* ------------------------------------------------------------------ *
@@ -567,6 +608,9 @@ export class RealCareLoopApi implements CareLoopApi {
    *  unchanged version can reuse the detail it already has. Three demo cases at one poll a second
    *  would otherwise be four requests a second for data that has not moved. */
   private details = new Map<string, { version: number; detail: CaseDetail }>();
+
+  /** Which state each case's row is currently showing. See `pacedState` for the trade. */
+  private paced = new Map<string, PacedState>();
 
   protected run: AgentRun = emptyRun();
   protected scenario: ScenarioId | null = null;
@@ -720,8 +764,23 @@ export class RealCareLoopApi implements CareLoopApi {
     const cards = [...sections.data.needs_you, ...sections.data.working, ...sections.data.completed];
     const now = new Date();
     return Promise.all(
-      cards.map(async (card) => buildCase(card, await this.detailFor(card), this.runIdFor(card), now))
+      cards.map(async (card) => {
+        const detail = await this.detailFor(card);
+        return buildCase(card, detail, this.runIdFor(card), now, this.pace(card, detail, now));
+      })
     );
+  }
+
+  /** Advance this case's display one step, at most, towards the state it is actually in. */
+  private pace(card: CaseCard, detail: CaseDetail | null, now: Date): string {
+    const next = pacedState(
+      this.paced.get(card.case_id),
+      recordedStates(detail?.timeline ?? []),
+      card.state,
+      now.getTime()
+    );
+    this.paced.set(card.case_id, next);
+    return next.shown;
   }
 
   /** Note the run a verb just started, and give the poller something to follow. */
@@ -813,6 +872,7 @@ export class RealCareLoopApi implements CareLoopApi {
 
   protected forget(): void {
     this.details.clear();
+    this.paced.clear();
   }
 }
 

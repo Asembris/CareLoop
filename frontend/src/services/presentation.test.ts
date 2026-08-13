@@ -9,7 +9,9 @@ import {
   isExcerptFact,
   isRenderedOnTheSpine,
   observedLabel,
+  orderedArgs,
   outcomeCopy,
+  pacedState,
   policyDetailFor,
   relativeTime,
   sectionFor,
@@ -252,6 +254,87 @@ describe("the outcome panel", () => {
     // The observed values live only in Verification.diagnostic, which the API withholds wholesale.
     expect(observedLabel(true)).toBe("Confirmed by an independent read");
     expect(observedLabel(false)).toBe("Not read back");
+  });
+});
+
+describe("argument order", () => {
+  it("puts a tool's arguments in the order the registry declares them", () => {
+    // The backend serialises `args` however JSON happened to order it. On send_email the declared
+    // order puts the recipient first, which is the field a caregiver most needs to read first.
+    expect(
+      orderedArgs("send_email", { body: "…", subject: "Appointment", to: "rosa@carer.example" })
+    ).toEqual([
+      ["to", "rosa@carer.example"],
+      ["subject", "Appointment"],
+      ["body", "…"]
+    ]);
+  });
+
+  it("keeps an argument it has never heard of rather than dropping it", () => {
+    expect(orderedArgs("send_email", { surprise: "x", to: "a@b.example" })).toEqual([
+      ["to", "a@b.example"],
+      ["surprise", "x"]
+    ]);
+  });
+
+  it("orders the decision card's facts the same way", () => {
+    const copy = decisionCopy("REQUIRES_HUMAN_APPROVAL", "send_email", {
+      body: "Hi",
+      subject: "Appointment",
+      to: "rosa@carer.example"
+    });
+    expect(copy.facts.map((f) => f.label)).toEqual(["TO", "SUBJECT", "MESSAGE"]);
+  });
+});
+
+describe("pacing the display", () => {
+  const RUN = ["GATHERING_EVIDENCE", "PLANNING", "READY_TO_EXECUTE", "EXECUTING", "VERIFYING", "DONE"];
+
+  it("shows a case as it is the first time it is seen, with no replay", () => {
+    // Opening the dashboard on a case that finished yesterday must not animate it.
+    expect(pacedState(undefined, RUN, "DONE", 1000)).toEqual({ shown: "DONE", at: 1000 });
+  });
+
+  it("walks forward one recorded state at a time", () => {
+    // Measured: approving a parked decision completes in 440ms, so at a one-second poll the
+    // screen goes from a decision card straight to a completed row and the two beats the design
+    // is built around never happen. Every state below is one the case's own timeline records.
+    let paced = pacedState(undefined, RUN, "READY_TO_EXECUTE", 0);
+    expect(paced.shown).toBe("READY_TO_EXECUTE");
+
+    paced = pacedState(paced, RUN, "DONE", 600);
+    expect(paced.shown).toBe("EXECUTING");
+
+    paced = pacedState(paced, RUN, "DONE", 1200);
+    expect(paced.shown).toBe("VERIFYING");
+
+    paced = pacedState(paced, RUN, "DONE", 1800);
+    expect(paced.shown).toBe("DONE");
+  });
+
+  it("holds a state for its dwell rather than racing through on a fast poll", () => {
+    const first = pacedState(undefined, RUN, "EXECUTING", 0);
+    const tooSoon = pacedState(first, RUN, "DONE", 200);
+    expect(tooSoon).toBe(first);
+  });
+
+  it("skips ahead rather than replaying a long history at walking pace", () => {
+    // A run that finished while the tab was in the background must not take four seconds to
+    // catch up. The display is never more than a bounded number of states behind the store.
+    const stale = { shown: "GATHERING_EVIDENCE", at: 0 };
+    expect(pacedState(stale, RUN, "DONE", 10_000).shown).toBe("EXECUTING");
+  });
+
+  it("jumps straight to the truth when the shown state is not in the recorded run", () => {
+    expect(pacedState({ shown: "WAITING_EXTERNAL", at: 0 }, RUN, "DONE", 10_000)).toEqual({
+      shown: "DONE",
+      at: 10_000
+    });
+  });
+
+  it("does nothing at all once the display has caught up", () => {
+    const settled = { shown: "DONE", at: 0 };
+    expect(pacedState(settled, RUN, "DONE", 99_999)).toBe(settled);
   });
 });
 

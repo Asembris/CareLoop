@@ -290,6 +290,20 @@ export function argLabel(toolName: string, argName: string): string {
   return ARG_LABELS[toolName]?.[argName] ?? argName.replace(/_/g, " ").toUpperCase();
 }
 
+/** A tool's arguments in the order the registry declares them, not the order JSON happened to
+ *  serialize them in.
+ *
+ *  It matters most on `send_email`, where the declared order puts the recipient first: the
+ *  destination is the safety-relevant field and a caregiver approving an email should read who it
+ *  is going to before they read what it says. Anything the table does not know keeps its
+ *  incoming order, appended after what it does. */
+export function orderedArgs(toolName: string, args: Record<string, string>): [string, string][] {
+  const declared = Object.keys(ARG_LABELS[toolName] ?? {});
+  const known = declared.filter((name) => name in args).map((name): [string, string] => [name, args[name]]);
+  const rest = Object.entries(args).filter(([name]) => !declared.includes(name));
+  return [...known, ...rest];
+}
+
 /** An argument value as a person reads it. Only `slot_start` needs help. */
 export function argValue(argName: string, value: string): string {
   if (!value) return "—";
@@ -439,7 +453,7 @@ export function decisionCopy(
   toolName: string,
   args: Record<string, string>
 ): DecisionCopy {
-  const facts = Object.entries(args)
+  const facts = orderedArgs(toolName, args)
     .filter(([, value]) => value !== "")
     .map(([name, value]) => ({ label: argLabel(toolName, name), value: argValue(name, value) }));
 
@@ -619,7 +633,7 @@ export function stageLabelFor(input: StageLabelInput): string {
  *  never see it. That matters to the gate; it is noise here. */
 export function actionIntentFor(toolName: string, args: Record<string, string>): string {
   if (!toolName) return "none proposed";
-  const rendered = Object.entries(args)
+  const rendered = orderedArgs(toolName, args)
     .filter(([, value]) => value !== "")
     .map(([name, value]) => `${name}=${value.length > 44 ? `${value.slice(0, 43)}…` : value}`)
     .join(", ");
@@ -660,6 +674,63 @@ export function verificationDetailFor(passed: boolean | null, readBack: boolean)
   if (passed === null) return "pending";
   if (passed) return readBack ? "MATCH — external read-back" : "MATCH — recorded effect checked";
   return readBack ? "MISMATCH — authorized ≠ observed" : "MISMATCH — authorized ≠ recorded";
+}
+
+/* ------------------------------------------------------------------ *
+ * Pacing
+ * ------------------------------------------------------------------ */
+
+/** How long each state the case passed through stays on screen before the next one replaces it. */
+export const STATE_DWELL_MS = 550;
+
+/** The most states the display will ever be behind. Past this it skips ahead.
+ *
+ *  Without it a case that ran while the tab was in the background would replay its whole history
+ *  at walking pace on the next poll, which is a stale dashboard rather than a paced one. */
+const MAX_LAG = 3;
+
+export interface PacedState {
+  shown: string;
+  at: number;
+}
+
+/** Which state the screen should be showing, given which one the case is actually in.
+ *
+ *  **The problem this solves, measured.** A real run reaches `DONE` about four seconds after the
+ *  scenario is pressed, and approving a parked decision completes in **440ms**. At a one-second
+ *  poll the dashboard therefore never observes `EXECUTING` or `VERIFYING` at all: the case goes
+ *  from a decision card straight to a completed row, and the two beats the design is built around
+ *  — "Making the arrangement…", "Confirming with the clinic…" — do not happen on screen. The
+ *  backend is not slow enough to watch.
+ *
+ *  **What this does, and what it refuses to do.** It walks the display forward one state at a
+ *  time, and the states it walks through come from the case's own `STATE_TRANSITION` entries —
+ *  every one is a state the case genuinely was in, in the order it was in them. Nothing is
+ *  invented and nothing is reordered. What it costs is freshness: the dashboard can be up to
+ *  {@link MAX_LAG} × {@link STATE_DWELL_MS} behind the store, which for the approval beat is
+ *  about a second. That is a deliberate trade — the alternative is a screen that is exactly
+ *  correct and shows nothing.
+ *
+ *  A case seen for the first time is shown as it is, with no replay: opening the dashboard on a
+ *  case that finished yesterday should not animate it. */
+export function pacedState(
+  previous: PacedState | undefined,
+  recorded: readonly string[],
+  current: string,
+  now: number
+): PacedState {
+  if (!previous) return { shown: current, at: now };
+  if (previous.shown === current) return previous;
+
+  const at = recorded.lastIndexOf(previous.shown);
+  // The shown state is not in the recorded run at all — nothing to walk through, so do not.
+  if (at < 0) return { shown: current, at: now };
+  if (now - previous.at < STATE_DWELL_MS) return previous;
+
+  const remaining = recorded.length - 1 - at;
+  const next =
+    remaining > MAX_LAG ? recorded[recorded.length - MAX_LAG] : (recorded[at + 1] ?? current);
+  return { shown: next, at: now };
 }
 
 /* ------------------------------------------------------------------ *

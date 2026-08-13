@@ -26,6 +26,11 @@ htmlcov/
 # CareLoop runtime artifacts
 *.sqlite3
 *.sqlite3-journal
+# SQLite in WAL mode writes two sidecars beside the database, and they are not covered by the
+# patterns above. A served CareLoop uses WAL, so a `git add -A` taken while the demo is running
+# sweeps in a multi-megabyte binary nothing can reproduce — which happened once, in this session.
+*.sqlite3-wal
+*.sqlite3-shm
 .careloop/
 caseloop.db
 

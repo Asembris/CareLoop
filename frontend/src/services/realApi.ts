@@ -540,6 +540,26 @@ export function buildRun(
  * The adapter
  * ------------------------------------------------------------------ */
 
+type Listener = (state: DashboardState) => void;
+
+/** How often the dashboard re-reads while anything is moving.
+ *
+ *  A second is fast enough that the Working column visibly progresses and slow enough that three
+ *  demo cases do not flood a local backend. It is not a pacing device: the beats are real, and
+ *  every node commits its transition before it finishes. */
+export const POLL_INTERVAL_MS = 1000;
+
+/** How long after a command the poller keeps going even if nothing looks busy yet.
+ *
+ *  The verbs return 202 before the graph has done anything, so the first poll after pressing a
+ *  button can legitimately still show the old state. Without this the poller would conclude the
+ *  world is at rest and stop one tick before the run it just started became visible. */
+export const SETTLE_GRACE_MS = 4000;
+
+/** Gap between attempts when a reset is refused because a run is in flight. */
+export const RESET_RETRY_MS = 300;
+const RESET_ATTEMPTS = 3;
+
 export class RealCareLoopApi implements CareLoopApi {
   /** Case detail by id, keyed on the version it was read at.
    *
@@ -551,6 +571,18 @@ export class RealCareLoopApi implements CareLoopApi {
   protected run: AgentRun = emptyRun();
   protected scenario: ScenarioId | null = null;
 
+  /** The last `RunView` seen, kept so the drawer survives the registry losing the run. */
+  private lastRunView: RunView | null = null;
+
+  private listeners = new Set<Listener>();
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private polling = false;
+  private graceUntil = 0;
+  /** Bumped by every stop. A tick that was already in flight when the poller was stopped
+   *  finishes its request and then finds its generation stale, so it cannot schedule the next
+   *  one — otherwise unsubscribing during a request would leave the poller running forever. */
+  private generation = 0;
+
   /* -------------------- reads -------------------- */
 
   /** Every case, in the section its state puts it in.
@@ -559,15 +591,7 @@ export class RealCareLoopApi implements CareLoopApi {
    *  section each case came in under. `completed` is the backend's `AT_REST_STATES`, so a FAILED
    *  case arrives there with the DONE ones and is told apart by `state` — never by the column. */
   async getDashboard(): Promise<DashboardState> {
-    const sections = await request<CaseSections>("/api/cases");
-    if (!sections.data) return { cases: [], run: this.run };
-
-    const cards = [...sections.data.needs_you, ...sections.data.working, ...sections.data.completed];
-    const now = new Date();
-    const cases = await Promise.all(
-      cards.map(async (card) => buildCase(card, await this.detailFor(card), this.runIdFor(card), now))
-    );
-    return { cases, run: this.run };
+    return { cases: await this.readCases(), run: this.run };
   }
 
   async getCase(caseId: string): Promise<CareCase | undefined> {
@@ -592,23 +616,182 @@ export class RealCareLoopApi implements CareLoopApi {
     return buildRun(run.data, detail.data ?? null, this.scenario);
   }
 
-  /* -------------------- writes, wired in the next commit -------------------- */
+  /* -------------------- writes -------------------- */
 
+  /** Approve or reject a pending decision.
+   *
+   *  `X-Caregiver` is required and a missing one is **400 by design, never 401** — nothing is
+   *  verified, so 401 would claim a check that is not happening. It is not a login and the 400 is
+   *  not "upgraded".
+   *
+   *  Both refusals are answers rather than errors, and both are reported honestly rather than
+   *  thrown: **409** means a run is already in flight for this case, or the approval has already
+   *  been decided — pressing again once it settles is the whole remedy. **404** means the case or
+   *  the approval is gone. `useCareLoop` calls this as `void api.approveAction(...)` and has
+   *  nowhere to show an exception, so the result is a value and the next poll tells the truth. */
   async approveAction(input: ApprovalInput): Promise<ApprovalResult> {
-    return { caseId: input.caseId, runId: this.run.id, accepted: false };
+    const verb = input.approved ? "approve" : "reject";
+    const path =
+      `/api/cases/${encodeURIComponent(input.caseId)}` +
+      `/decisions/${encodeURIComponent(input.decisionId)}/${verb}`;
+
+    const result = await request<RunView>(path, {
+      method: "POST",
+      headers: { "X-Caregiver": CAREGIVER }
+    });
+
+    if (result.data) this.adopt(result.data);
+    this.kick();
+    return {
+      caseId: input.caseId,
+      runId: result.data?.run_id ?? this.run.id,
+      accepted: result.status === 202
+    };
   }
 
+  /** Press one of the three scenarios.
+   *
+   *  Reset first, exactly as the mock adapter did, and for a reason the mock could not have
+   *  known: `referral` and `injection` both carry the same referral document, so both propose the
+   *  same slot. Pressing the second without a reset gets a correct 409 from a clinic that already
+   *  holds it — which surfaces as a FAILED case and reads, in front of a judge, like the
+   *  injection defence failing at something that has nothing to do with injection. */
   async runScenario(id: ScenarioId): Promise<ScenarioRun> {
-    return { scenarioId: id, runId: "", caseId: "" };
+    await this.resetDemo();
+    this.scenario = id;
+
+    const result = await request<RunView>(`/api/demo/scenarios/${encodeURIComponent(id)}`, {
+      method: "POST"
+    });
+    if (result.data) this.adopt(result.data);
+    this.kick();
+    return {
+      scenarioId: id,
+      runId: result.data?.run_id ?? "",
+      caseId: result.data?.case_id ?? ""
+    };
   }
 
-  async resetDemo(): Promise<void> {}
+  /** Clear every case and put the clinic back.
+   *
+   *  Refused with 409 while any run is in flight — clearing the store underneath a live graph is
+   *  a version conflict wearing a costume. Waiting and pressing again is the remedy the backend's
+   *  own error text names, so that is what this does rather than reporting it at a caregiver. */
+  async resetDemo(): Promise<void> {
+    for (let attempt = 0; attempt < RESET_ATTEMPTS; attempt += 1) {
+      const result = await request<unknown>("/api/demo/reset", { method: "POST" });
+      if (result.status !== 409) break;
+      await new Promise((resolve) => setTimeout(resolve, RESET_RETRY_MS));
+    }
+    this.forget();
+    this.run = emptyRun();
+    this.lastRunView = null;
+    this.scenario = null;
+    this.kick();
+  }
 
-  subscribe(): () => void {
-    return () => {};
+  /* -------------------- the subscription -------------------- */
+
+  /** Poll `GET /api/cases` and re-emit the same `DashboardState` the mock pushed.
+   *
+   *  `GET /api/cases` rather than `GET /api/runs/{id}`, because the *case* carries the state
+   *  transitions the dashboard exists to show; the run carries only the node trace. And never
+   *  `?wait=`, which blocks until the run settles and would make the Working column unreachable.
+   *
+   *  Polling **stops** when nothing is moving: no case in a working state and no command issued
+   *  in the last few seconds. It is not throttled to a slower beat — a stopped poller is a
+   *  checkable claim, and every way the world can change from this screen goes through a verb
+   *  that restarts it. */
+  subscribe(listener: Listener): () => void {
+    this.listeners.add(listener);
+    this.kick();
+    return () => {
+      this.listeners.delete(listener);
+      if (this.listeners.size === 0) this.stop();
+    };
   }
 
   /* -------------------- internals -------------------- */
+
+  private async readCases(): Promise<CareCase[]> {
+    const sections = await request<CaseSections>("/api/cases");
+    if (!sections.data) return [];
+
+    const cards = [...sections.data.needs_you, ...sections.data.working, ...sections.data.completed];
+    const now = new Date();
+    return Promise.all(
+      cards.map(async (card) => buildCase(card, await this.detailFor(card), this.runIdFor(card), now))
+    );
+  }
+
+  /** Note the run a verb just started, and give the poller something to follow. */
+  private adopt(view: RunView): void {
+    this.lastRunView = view;
+    this.run = buildRun(view, this.details.get(view.case_id)?.detail ?? null, this.scenario);
+    this.graceUntil = Date.now() + SETTLE_GRACE_MS;
+  }
+
+  /** Re-read the run record, surviving a registry that has never heard of it.
+   *
+   *  `GET /api/runs/{id}` is an in-memory, per-process registry (open decision 17): a backend
+   *  restart 404s a run id that was live a second ago. Everything the drawer actually shows —
+   *  the proposed call, the gate verdicts, the idempotency key, the verification — comes from the
+   *  case, so the last node trace is reused and the panel keeps telling the truth about the case
+   *  even when the run record behind it is gone. */
+  private async refreshRun(): Promise<void> {
+    if (!this.run.id) return;
+
+    const fetched = await request<RunView>(`/api/runs/${encodeURIComponent(this.run.id)}`);
+    const view = fetched.data ?? this.lastRunView;
+    if (!view) return;
+    if (fetched.data) this.lastRunView = fetched.data;
+
+    this.run = buildRun(view, this.details.get(view.case_id)?.detail ?? null, this.scenario);
+  }
+
+  private emit(state: DashboardState): void {
+    for (const listener of this.listeners) listener(state);
+  }
+
+  /** One read, then decide whether there is any reason to do another. */
+  private async tick(generation: number): Promise<void> {
+    const cases = await this.readCases();
+    await this.refreshRun();
+    if (generation !== this.generation) return;
+    this.emit({ cases, run: this.run });
+
+    // `working` is every case state except AWAITING_HUMAN, DONE and FAILED — which is exactly
+    // "the graph will move this again". A case parked for a decision is at rest until a person
+    // acts, and a person acting goes through a verb that restarts the poller.
+    const moving = cases.some((one) => one.section === "working");
+    if (this.listeners.size > 0 && (moving || Date.now() < this.graceUntil)) {
+      this.timer = setTimeout(() => void this.tick(generation), POLL_INTERVAL_MS);
+    } else {
+      this.polling = false;
+      this.timer = null;
+    }
+  }
+
+  /** Read now, and keep reading while anything moves. Safe to call when already polling. */
+  private kick(): void {
+    this.graceUntil = Date.now() + SETTLE_GRACE_MS;
+    if (this.polling || this.listeners.size === 0) return;
+    this.polling = true;
+    void this.tick(this.generation);
+  }
+
+  private stop(): void {
+    if (this.timer !== null) clearTimeout(this.timer);
+    this.timer = null;
+    this.polling = false;
+    this.generation += 1;
+  }
+
+  /** Whether a poll is currently scheduled. Exists so "polling stops on settle" is checkable. */
+  get isPolling(): boolean {
+    return this.polling;
+  }
+
 
   /** The case's detail, from cache when the version has not moved. */
   protected async detailFor(card: CaseCard): Promise<CaseDetail | null> {

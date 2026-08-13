@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentRun } from "@/types/domain";
 import type { CaseCard, CaseDetail, CaseSections, FactView, RunView, TimelineEventView } from "./backend";
 import {
   RealCareLoopApi,
@@ -492,5 +493,329 @@ describe("getDashboard", () => {
     }));
     const state = await new RealCareLoopApi().getDashboard();
     expect(state.cases).toEqual([]);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Polling
+ * ------------------------------------------------------------------ */
+
+interface Call {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+}
+
+/** A backend that answers from whatever `sections`/`details`/`runs` currently hold, so a test can
+ *  move the world between polls the way a real run does. */
+function fakeBackend() {
+  const calls: Call[] = [];
+  const world = {
+    sections: { needs_you: [], working: [], completed: [] } as CaseSections,
+    details: {} as Record<string, CaseDetail>,
+    runs: {} as Record<string, RunView>,
+    status: {} as Record<string, number>,
+    calls
+  };
+
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({
+        url,
+        method: init?.method ?? "GET",
+        headers: (init?.headers ?? {}) as Record<string, string>
+      });
+
+      const forced = world.status[url];
+      if (forced && forced !== 202) return new Response("", { status: forced });
+
+      if (url.endsWith("/api/cases")) return new Response(JSON.stringify(world.sections), { status: 200 });
+      if (url.includes("/decisions/")) {
+        const view: RunView = {
+          run_id: "run-demo-referral-1",
+          case_id: "demo-referral",
+          state: "RUNNING",
+          executed_nodes: ["dispatch"],
+          error: null
+        };
+        return new Response(JSON.stringify(view), { status: 202 });
+      }
+      if (url.startsWith("/api/cases/")) {
+        const id = decodeURIComponent(url.split("/")[3].split("?")[0]);
+        const found = world.details[id];
+        return found ? new Response(JSON.stringify(found), { status: 200 }) : new Response("", { status: 404 });
+      }
+      if (url.startsWith("/api/runs/")) {
+        const id = decodeURIComponent(url.split("/")[3]);
+        const found = world.runs[id];
+        return found ? new Response(JSON.stringify(found), { status: 200 }) : new Response("", { status: 404 });
+      }
+      if (url.startsWith("/api/demo/")) {
+        const view: RunView = {
+          run_id: "run-demo-referral-1",
+          case_id: "demo-referral",
+          state: "RUNNING",
+          executed_nodes: ["dispatch"],
+          error: null
+        };
+        return new Response(JSON.stringify(url.includes("reset") ? {} : view), { status: 202 });
+      }
+      return new Response("", { status: 404 });
+    })
+  );
+
+  return world;
+}
+
+function working(): CaseCard {
+  return card({ state: "EXECUTING", section: "working" });
+}
+
+function settled(): CaseCard {
+  return card({ state: "DONE", section: "completed" });
+}
+
+describe("subscribe", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  // `restoreMocks` does not put the clock back, and a fake clock leaking into the next describe
+  // makes an `await sleep(...)` hang until the suite times out.
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("emits immediately rather than making the first screen wait a second", async () => {
+    const world = fakeBackend();
+    world.sections = { needs_you: [], working: [working()], completed: [] };
+    world.details["demo-referral"] = detail({ state: "EXECUTING" });
+
+    const seen: string[] = [];
+    const api = new RealCareLoopApi();
+    api.subscribe((state) => seen.push(state.cases[0]?.statusLabel ?? "none"));
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(seen[0]).toBe("ACTING");
+  });
+
+  it("keeps polling while a case is still moving", async () => {
+    const world = fakeBackend();
+    world.sections = { needs_you: [], working: [working()], completed: [] };
+    world.details["demo-referral"] = detail({ state: "EXECUTING" });
+
+    const api = new RealCareLoopApi();
+    api.subscribe(() => {});
+    await vi.advanceTimersByTimeAsync(6000);
+
+    expect(api.isPolling).toBe(true);
+    const reads = world.calls.filter((c) => c.url === "/api/cases").length;
+    expect(reads).toBeGreaterThan(4);
+  });
+
+  it("stops polling once nothing is moving", async () => {
+    const world = fakeBackend();
+    world.sections = { needs_you: [], working: [working()], completed: [] };
+    world.details["demo-referral"] = detail({ state: "EXECUTING" });
+
+    const api = new RealCareLoopApi();
+    api.subscribe(() => {});
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(api.isPolling).toBe(true);
+
+    // The run finishes: the case moves out of the working section.
+    world.sections = { needs_you: [], working: [], completed: [settled()] };
+    world.details["demo-referral"] = detail({ state: "DONE", section: "completed" });
+
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(api.isPolling).toBe(false);
+
+    const before = world.calls.length;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(world.calls.length).toBe(before);
+  });
+
+  it("stops when a case parks for a decision, because a person is the next mover", async () => {
+    const world = fakeBackend();
+    world.sections = { needs_you: [card({ state: "AWAITING_HUMAN", section: "needs_you" })], working: [], completed: [] };
+    world.details["demo-referral"] = detail({ state: "AWAITING_HUMAN", section: "needs_you" });
+
+    const api = new RealCareLoopApi();
+    api.subscribe(() => {});
+    await vi.advanceTimersByTimeAsync(8000);
+    expect(api.isPolling).toBe(false);
+  });
+
+  it("never passes ?wait=, which would block until settle and empty the Working column", async () => {
+    const world = fakeBackend();
+    world.sections = { needs_you: [], working: [working()], completed: [] };
+    world.details["demo-referral"] = detail({ state: "EXECUTING" });
+
+    const api = new RealCareLoopApi();
+    api.subscribe(() => {});
+    await vi.advanceTimersByTimeAsync(4000);
+
+    expect(world.calls.every((c) => !c.url.includes("wait="))).toBe(true);
+  });
+
+  it("stops reading when the last listener goes away", async () => {
+    const world = fakeBackend();
+    world.sections = { needs_you: [], working: [working()], completed: [] };
+    world.details["demo-referral"] = detail({ state: "EXECUTING" });
+
+    const api = new RealCareLoopApi();
+    const unsubscribe = api.subscribe(() => {});
+    await vi.advanceTimersByTimeAsync(2000);
+    unsubscribe();
+
+    const before = world.calls.length;
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(world.calls.length).toBe(before);
+  });
+
+  it("keeps the drawer truthful when the run registry has forgotten the run", async () => {
+    // `GET /api/runs/{id}` is an in-memory, per-process registry: a restart 404s a live run id.
+    // Everything the drawer shows comes from the case, so the panel keeps working.
+    const world = fakeBackend();
+    world.sections = { needs_you: [], working: [working()], completed: [] };
+    world.details["demo-referral"] = detail({
+      state: "EXECUTING",
+      timeline: [entry("PLAN_PROPOSED", { tool_name: "book_appointment", args: BOOKING })]
+    });
+    world.runs["run-demo-referral-1"] = {
+      run_id: "run-demo-referral-1",
+      case_id: "demo-referral",
+      state: "RUNNING",
+      executed_nodes: ["dispatch", "plan", "gate", "execute"],
+      error: null
+    };
+
+    let latest: AgentRun | null = null;
+    const api = new RealCareLoopApi();
+    await api.runScenario("referral");
+    api.subscribe((state) => {
+      latest = state.run;
+    });
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(latest!.stage).toBe("EXECUTE");
+
+    delete world.runs["run-demo-referral-1"];
+    await vi.advanceTimersByTimeAsync(1500);
+
+    expect(latest!.stage).toBe("EXECUTE");
+    expect(latest!.actionIntent).toContain("book_appointment");
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Approve, reject, and the demo control surface
+ * ------------------------------------------------------------------ */
+
+describe("approve and reject", () => {
+  it("posts to approve, with the caregiver header", async () => {
+    const world = fakeBackend();
+    world.runs["run-demo-referral-1"] = {
+      run_id: "run-demo-referral-1",
+      case_id: "demo-referral",
+      state: "RUNNING",
+      executed_nodes: [],
+      error: null
+    };
+    world.status["/api/cases/demo-referral/decisions/apr-abc/approve"] = 202;
+
+    const api = new RealCareLoopApi();
+    const result = await api.approveAction({ caseId: "demo-referral", decisionId: "apr-abc", approved: true });
+
+    const call = world.calls.find((c) => c.url.endsWith("/approve"));
+    expect(call).toBeDefined();
+    expect(call!.url).toBe("/api/cases/demo-referral/decisions/apr-abc/approve");
+    expect(call!.method).toBe("POST");
+    // An audit identity, not authentication. A missing one is 400 by design, never 401.
+    expect(call!.headers["X-Caregiver"]).toBe("Maya");
+    expect(result.accepted).toBe(true);
+  });
+
+  it("posts to reject on the other button", async () => {
+    const world = fakeBackend();
+    world.status["/api/cases/demo-referral/decisions/apr-abc/reject"] = 202;
+
+    const api = new RealCareLoopApi();
+    await api.approveAction({ caseId: "demo-referral", decisionId: "apr-abc", approved: false });
+
+    expect(world.calls.some((c) => c.url.endsWith("/reject"))).toBe(true);
+    expect(world.calls.some((c) => c.url.endsWith("/approve"))).toBe(false);
+  });
+
+  it("reports a refusal honestly rather than throwing at a UI with nowhere to show it", async () => {
+    const world = fakeBackend();
+    // 409: a run is already in flight for this case, or the approval is already decided.
+    world.status["/api/cases/demo-referral/decisions/apr-abc/approve"] = 409;
+
+    const api = new RealCareLoopApi();
+    const conflicted = await api.approveAction({
+      caseId: "demo-referral",
+      decisionId: "apr-abc",
+      approved: true
+    });
+    expect(conflicted.accepted).toBe(false);
+
+    world.status["/api/cases/demo-referral/decisions/apr-gone/approve"] = 404;
+    const missing = await api.approveAction({
+      caseId: "demo-referral",
+      decisionId: "apr-gone",
+      approved: true
+    });
+    expect(missing.accepted).toBe(false);
+  });
+
+  it("does not send an approval id it has parsed or rebuilt", async () => {
+    // `apr-<args_digest[:16]>` is opaque and stays opaque: a decision made about one action must
+    // not be able to authorise another, and the digest is what stops that.
+    const world = fakeBackend();
+    const opaque = "apr-0123456789abcdef";
+    world.status[`/api/cases/demo-referral/decisions/${opaque}/approve`] = 202;
+
+    await new RealCareLoopApi().approveAction({
+      caseId: "demo-referral",
+      decisionId: opaque,
+      approved: true
+    });
+    expect(world.calls.some((c) => c.url.includes(opaque))).toBe(true);
+  });
+});
+
+describe("the demo control surface", () => {
+  it("resets before pressing a scenario", async () => {
+    // referral and injection both carry the same referral document and propose the same slot;
+    // pressing the second without a reset gets a correct 409 from a clinic that already holds it.
+    const world = fakeBackend();
+    const api = new RealCareLoopApi();
+    await api.runScenario("injection");
+
+    const order = world.calls.filter((c) => c.url.startsWith("/api/demo/")).map((c) => c.url);
+    expect(order).toEqual(["/api/demo/reset", "/api/demo/scenarios/injection"]);
+  });
+
+  it("waits out a reset refused because a run is in flight", async () => {
+    const world = fakeBackend();
+    world.status["/api/demo/reset"] = 409;
+
+    const api = new RealCareLoopApi();
+    await api.resetDemo();
+
+    // Refused every time, so it tried the full three and gave up rather than looping forever.
+    expect(world.calls.filter((c) => c.url === "/api/demo/reset")).toHaveLength(3);
+  });
+
+  it("keeps the run id the 202 handed back", async () => {
+    fakeBackend();
+    const api = new RealCareLoopApi();
+    const started = await api.runScenario("referral");
+    expect(started).toEqual({
+      scenarioId: "referral",
+      runId: "run-demo-referral-1",
+      caseId: "demo-referral"
+    });
   });
 });

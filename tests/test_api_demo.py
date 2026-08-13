@@ -418,3 +418,40 @@ class TestNothingElseClearsTheStore:
             "def reset(cache: dict) -> None:\n    cache.clear()\n", encoding="utf-8"
         )
         assert store_clear_calls(innocent) == []
+
+
+class TestTheScenarioTableIsCoherent:
+    """The table is the one place a demo scenario is declared. These are the properties that make
+    adding a fifth entry safe rather than a thing to be careful about."""
+
+    def test_case_ids_are_distinct(self) -> None:
+        """Two scenarios sharing a case id would have the second reopen the first's case.
+
+        Nothing raises when that happens — the reopen is legal — so the demo would simply show a
+        judge the wrong history under the right button. The ids are fixed on purpose (see the
+        module's own note about reset having a knowable set of cases), which is exactly what makes
+        a collision easy to introduce and invisible afterwards.
+        """
+        case_ids = [scenario.case_id for scenario in DEMO_SCENARIOS.values()]
+        assert len(case_ids) == len(set(case_ids))
+
+    def test_event_ids_are_distinct(self) -> None:
+        """Two scenarios on one event are two buttons that do the same thing."""
+        event_ids = [scenario.event_id for scenario in DEMO_SCENARIOS.values()]
+        assert len(event_ids) == len(set(event_ids))
+
+    def test_the_key_is_the_mapping_key(self) -> None:
+        assert all(key == scenario.key for key, scenario in DEMO_SCENARIOS.items())
+
+    def test_injection_only_is_reachable_and_is_not_the_mixed_scenario(self) -> None:
+        """The video's beat needs its own key.
+
+        ``injection`` mixes the poisoned notice with real work, so a refusal is genuine when it
+        happens and absent when it does not — session E measured 3 runs in 6. ``injection_only``
+        carries the poison alone, which is where the refusal is reachable without a model being
+        tuned into taking bait. Both exist; neither replaces the other.
+        """
+        assert "injection_only" in DEMO_SCENARIOS
+        alone, mixed = DEMO_SCENARIOS["injection_only"], DEMO_SCENARIOS["injection"]
+        assert alone.event_id != mixed.event_id
+        assert alone.case_id != mixed.case_id

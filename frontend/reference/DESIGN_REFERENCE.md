@@ -9,9 +9,20 @@ Preserve them closely.
 
 ## Capture conditions
 
-- Viewport 1280px wide (the design environment's preview), desktop layout.
+- **Viewport 909px wide**, desktop layout. This file said 1280px until session D1
+  measured it: Home's content column is `max-width: 820px` centred, and its left
+  edge sits at x=44 in every golden, which is exactly `(909 - 820) / 2`. Compare
+  at 1280 and the demo launcher's card titles wrap differently — a divergence that
+  is in the comparison, not in the app.
 - Fonts: Instrument Sans, Newsreader, IBM Plex Mono, all loaded.
 - Both themes captured for every state.
+
+**The goldens are JPEGs, despite the `.png` extension.** Every file in
+`screenshots/` begins `ff d8 ff e0` — JPEG SOI/JFIF, not the PNG signature — at
+909x540, lossy, cropped to the fold rather than full-page. They are eyeball
+references for a human comparing states. They are **not** pixel goldens, and a
+visual regression test that diffs against them will fail on compression artifacts
+alone. Anything wanting pixel comparison has to capture its own baseline first.
 
 ## Files
 

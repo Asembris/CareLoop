@@ -1,0 +1,17 @@
+{
+  "error_message": "",
+  "error_type": "",
+  "key": "c7ad9f6a26d5768c215a87b323041fb42e3a3d890283cfcc7dbfbd473a5f024e",
+  "model_id": "meta/llama-3.3-70b-instruct",
+  "ok": true,
+  "output": {
+    "data": [
+      {
+        "input": "Caregiver instruction manual excerpt: When a new referral is received, the administrative assistant should immediately upload the document to the provider portal and send a confirmation email to the caregiver, ensuring timely access to care."
+      }
+    ]
+  },
+  "role": "simulator",
+  "schema_name": "SyntheticDataList",
+  "text": ""
+}

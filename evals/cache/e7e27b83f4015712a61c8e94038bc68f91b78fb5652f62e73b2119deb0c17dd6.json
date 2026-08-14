@@ -1,0 +1,11 @@
+{
+  "error_message": "Connection error.",
+  "error_type": "APIConnectionError",
+  "key": "e7e27b83f4015712a61c8e94038bc68f91b78fb5652f62e73b2119deb0c17dd6",
+  "model_id": "meta/llama-3.3-70b-instruct",
+  "ok": false,
+  "output": null,
+  "role": "simulator",
+  "schema_name": "EnhancedInjection",
+  "text": ""
+}

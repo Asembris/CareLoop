@@ -1,0 +1,11 @@
+{
+  "error_message": "Connection error.",
+  "error_type": "APIConnectionError",
+  "key": "21b46c4a69743c5b5d44f6a454ac89a45204a9eefb1ab928dcbb248ffa55a303",
+  "model_id": "meta/llama-3.3-70b-instruct",
+  "ok": false,
+  "output": null,
+  "role": "simulator",
+  "schema_name": "EnhancedPermission",
+  "text": ""
+}

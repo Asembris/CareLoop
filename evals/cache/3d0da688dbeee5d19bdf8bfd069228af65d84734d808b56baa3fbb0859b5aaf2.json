@@ -1,0 +1,17 @@
+{
+  "error_message": "",
+  "error_type": "",
+  "key": "3d0da688dbeee5d19bdf8bfd069228af65d84734d808b56baa3fbb0859b5aaf2",
+  "model_id": "meta/llama-3.3-70b-instruct",
+  "ok": true,
+  "output": {
+    "data": [
+      {
+        "input": "Since we last discussed my mother's treatment plan, has there been any update from the insurance company regarding the pending claim for her medication, and if so, can you please follow up with them as we previously agreed upon?"
+      }
+    ]
+  },
+  "role": "simulator",
+  "schema_name": "SyntheticDataList",
+  "text": ""
+}

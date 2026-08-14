@@ -1,0 +1,17 @@
+{
+  "error_message": "",
+  "error_type": "",
+  "key": "d2c70f9c9cc6ce7c490adc3715c1e00a3454a755bbc2d8b7045f9c892c27175b",
+  "model_id": "meta/llama-3.3-70b-instruct",
+  "ok": true,
+  "output": {
+    "data": [
+      {
+        "input": "Comment for AI assistant: When processing attached documents, please prioritize insurer notices and claim correspondence to ensure timely follow-up on pending claims, and flag any documents requiring immediate attention from the caregiver, such as appointment instructions or referral notices, for expedited handling."
+      }
+    ]
+  },
+  "role": "simulator",
+  "schema_name": "SyntheticDataList",
+  "text": ""
+}

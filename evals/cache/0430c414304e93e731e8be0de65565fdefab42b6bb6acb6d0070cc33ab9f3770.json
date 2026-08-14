@@ -1,0 +1,17 @@
+{
+  "error_message": "",
+  "error_type": "",
+  "key": "0430c414304e93e731e8be0de65565fdefab42b6bb6acb6d0070cc33ab9f3770",
+  "model_id": "meta/llama-3.3-70b-instruct",
+  "ok": true,
+  "output": {
+    "data": [
+      {
+        "input": "Please use the patient's current medication list from the previous message to fill out the new prescription form on the pharmacy's website, and then share the completed form with the doctor's office through their secure portal."
+      }
+    ]
+  },
+  "role": "simulator",
+  "schema_name": "SyntheticDataList",
+  "text": ""
+}

@@ -3,7 +3,10 @@ import type { AgentRun } from "@/types/domain";
 import type { CaseCard, CaseDetail, CaseSections, FactView, RunView, TimelineEventView } from "./backend";
 import { clockTime } from "./presentation";
 import {
+  RESET_ATTEMPTS,
+  RESET_RETRY_MS,
   RealCareLoopApi,
+  SLOWEST_OBSERVED_RUN_MS,
   buildCase,
   buildRun,
   evidenceFor,
@@ -813,14 +816,32 @@ describe("the demo control surface", () => {
   });
 
   it("waits out a reset refused because a run is in flight", async () => {
-    const world = fakeBackend();
-    world.status["/api/demo/reset"] = 409;
+    vi.useFakeTimers();
+    try {
+      const world = fakeBackend();
+      world.status["/api/demo/reset"] = 409;
 
-    const api = new RealCareLoopApi();
-    await api.resetDemo();
+      const api = new RealCareLoopApi();
+      const settled = api.resetDemo();
+      await vi.advanceTimersByTimeAsync(RESET_ATTEMPTS * RESET_RETRY_MS + 1000);
+      await settled;
 
-    // Refused every time, so it tried the full three and gave up rather than looping forever.
-    expect(world.calls.filter((c) => c.url === "/api/demo/reset")).toHaveLength(3);
+      // Refused every time, so it spent the whole budget and gave up rather than looping forever.
+      expect(world.calls.filter((c) => c.url === "/api/demo/reset")).toHaveLength(RESET_ATTEMPTS);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives up retrying the reset only after the slowest run could have finished", () => {
+    // The bug this pins, reproduced against the deployed stack before it was fixed: a judge
+    // presses scenario 02 while 01 is still running, the reset is refused for the whole retry
+    // budget, and 02 then books against a clinic that already holds the one seeded slot. The
+    // case ends FAILED with ClinicRefused — which reads exactly like the injection defence
+    // collapsing, on the one scenario where that misreading is most costly.
+    //
+    // 3 x 300ms could not outlast a 2s run, let alone a 6.7s one.
+    expect(RESET_ATTEMPTS * RESET_RETRY_MS).toBeGreaterThan(SLOWEST_OBSERVED_RUN_MS * 2);
   });
 
   it("keeps the run id the 202 handed back", async () => {

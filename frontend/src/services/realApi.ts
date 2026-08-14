@@ -598,8 +598,29 @@ export const POLL_INTERVAL_MS = 1000;
 export const SETTLE_GRACE_MS = 4000;
 
 /** Gap between attempts when a reset is refused because a run is in flight. */
-export const RESET_RETRY_MS = 300;
-const RESET_ATTEMPTS = 3;
+export const RESET_RETRY_MS = 400;
+
+/** How many times to re-attempt a refused reset.
+ *
+ *  `RESET_ATTEMPTS * RESET_RETRY_MS` has to exceed the longest a run can take, and the original
+ *  3 x 300ms did not come close. Session E measured this against the deployed backend: a run
+ *  settles in 2s typically and 6.7s at the slow end, so a judge who presses scenario 02 while 01
+ *  is still going exhausts the retries in 900ms, the reset is refused, and 02 then runs against a
+ *  clinic that already holds the one seeded slot.
+ *
+ *  The result is the worst available failure: `ClinicRefused`, a FAILED case, and a Malicious
+ *  Document scenario that looks like the injection defence collapsing when nothing of the sort
+ *  happened. Reproduced deliberately before this was widened.
+ *
+ *  16s covers the slowest run seen with room to spare. It only ever elapses while a run really is
+ *  in flight, which is exactly when pressing another scenario should wait. */
+export const RESET_ATTEMPTS = 40;
+
+/** The slowest run observed end to end against the deployed backend, session E.
+ *
+ *  Here so the retry budget can be asserted against the thing it has to outlast, rather than
+ *  against a number someone picked. If runs get slower, this moves and the test says so. */
+export const SLOWEST_OBSERVED_RUN_MS = 6700;
 
 export class RealCareLoopApi implements CareLoopApi {
   /** Case detail by id, keyed on the version it was read at.

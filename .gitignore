@@ -13,6 +13,10 @@ dist/
 skills-lock.json
 # Virtual environments
 .venv/
+# The evals extra installs deepteam, which resolves deepeval, openai, posthog, grpcio and a
+# different pytest. It lives in its own environment so `.venv` stays the `.[dev]`-plus-`bench`
+# tree that CI mirrors â€” an evaluation harness must not be able to change what the suite runs on.
+.venv-evals/
 venv/
 env/
 
@@ -45,6 +49,6 @@ caseloop.db
 .DS_Store
 Thumbs.db
 
-# SSH keys — never commit
+# SSH keys ï¿½ never commit
 .keys/
 *.pem

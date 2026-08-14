@@ -233,12 +233,30 @@ All six vulnerability classes the session named exist, `ExternalSystemAbuse` inc
 
 | Vulnerability | Types |
 |---|---|
-| `ExcessiveAgency` | `FUNCTIONALITY`, `PERMISSIONS`, `AUTONOMY` |
-| `ToolOrchestrationAbuse` | `RECURSIVE_TOOL_CALLS`, `UNSAFE_TOOL_COMPOSITION`, `TOOL_BUDGET_EXHAUSTION`, `CROSS_TOOL_STATE_LEAKAGE` |
-| `IndirectInstruction` | `RAG_INJECTION`, `TOOL_OUTPUT_INJECTION`, `DOCUMENT_EMBEDDED_INSTRUCTIONS`, `CROSS_CONTENT_INJECTION` |
-| `AutonomousAgentDrift` | `GOAL_DRIFT`, `REWARD_HACKING`, `AGENT_COLLUSION`, `RUNAWAY_AUTONOMY` |
-| `ExternalSystemAbuse` | `DATA_EXFILTRATION`, `COMMUNICATIONS_SPAM`, `INTERNAL_SPOOFING` |
-| `PIILeakage` | `DATABASE_ACCESS`, `DIRECT`, `SESSION_LEAK`, `SOCIAL_MANIPULATION` |
+| `ExcessiveAgency` | `functionality`, `permissions`, `autonomy` |
+| `ToolOrchestrationAbuse` | `recursive_tool_calls`, `unsafe_tool_composition`, `tool_budget_exhaustion`, `cross_tool_state_leakage` |
+| `IndirectInstruction` | `rag_injection`, `tool_output_injection`, `document_embedded_instructions`, **`cross_context_injection`** |
+| `AutonomousAgentDrift` | `goal_drift`, `reward_hacking`, `agent_collusion`, `runaway_autonomy` |
+| `ExternalSystemAbuse` | `data_exfiltration`, `communications_spam`, `internal_spoofing` |
+| `PIILeakage` | **`api_and_database_access`**, **`direct_disclosure`**, `session_leak`, `social_manipulation` |
+
+**The table above lists enum *values*, and the first version of it listed member names.** The
+spike printed `str(t)` for each type, which renders as `IndirectInstructionType.CROSS_CONTENT_
+INJECTION`, and the suite table was then written by lower-casing those. Three of the twenty-two
+disagree with their own member name:
+
+| member name | actual value |
+|---|---|
+| `IndirectInstructionType.CROSS_CONTENT_INJECTION` | `cross_context_injection` (content -> context) |
+| `PIILeakageType.DATABASE_ACCESS` | `api_and_database_access` |
+| `PIILeakageType.DIRECT` | `direct_disclosure` |
+
+`Vulnerability(types=[...])` validates against the **value**, so all three raised at construction.
+This is an instrument defect of exactly the shape session B recorded twice: the measurement was
+wrong in a direction that looked plausible, and reading it more carefully would not have caught it
+— only executing against the real constructor did. **It cost nothing**, because `red_team()` is
+reached after the vulnerabilities are instantiated and the run aborted at 0 provider calls and
+$0.00, which is the dry-run-then-ceiling arrangement doing its job.
 
 The four attack techniques the session named all exist under `deepteam.attacks.single_turn`:
 `ContextPoisoning`, `GoalRedirection`, `PermissionEscalation`, `PromptInjection`.

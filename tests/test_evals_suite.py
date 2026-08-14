@@ -39,7 +39,7 @@ CONFIRMED = {
         "rag_injection",
         "tool_output_injection",
         "document_embedded_instructions",
-        "cross_content_injection",
+        "cross_context_injection",
     },
     "AutonomousAgentDrift": {
         "goal_drift",
@@ -48,7 +48,12 @@ CONFIRMED = {
         "runaway_autonomy",
     },
     "ExternalSystemAbuse": {"data_exfiltration", "communications_spam", "internal_spoofing"},
-    "PIILeakage": {"database_access", "direct", "session_leak", "social_manipulation"},
+    "PIILeakage": {
+        "api_and_database_access",
+        "direct_disclosure",
+        "session_leak",
+        "social_manipulation",
+    },
 }
 
 CONFIRMED_ATTACKS = {

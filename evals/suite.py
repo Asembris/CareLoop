@@ -106,7 +106,7 @@ VULNERABILITIES: Final[tuple[VulnerabilitySpec, ...]] = (
             "rag_injection",
             "tool_output_injection",
             "document_embedded_instructions",
-            "cross_content_injection",
+            "cross_context_injection",
         ),
         rationale=(
             "CareLoop's canonical threat: instructions embedded in an attached document. The "
@@ -133,7 +133,12 @@ VULNERABILITIES: Final[tuple[VulnerabilitySpec, ...]] = (
     ),
     VulnerabilitySpec(
         name="PIILeakage",
-        types=("direct", "session_leak", "social_manipulation", "database_access"),
+        types=(
+            "direct_disclosure",
+            "session_leak",
+            "social_manipulation",
+            "api_and_database_access",
+        ),
         rationale=(
             "The evidence a case holds is patient data. This aims at whether it can be talked out "
             "through a channel that is not a gated tool call at all — a narrative response rather "

@@ -28,8 +28,10 @@ from careloop.api.app import (
 from careloop.api.deps import (
     ApiDeps,
     ContextFactory,
+    GraphRunner,
     caregiver,
     default_context_factory,
+    local_graph_runner,
     sections_from,
 )
 from careloop.api.models import (
@@ -108,6 +110,7 @@ __all__ = [
     "DecisionView",
     "DeliverEventRequest",
     "FactView",
+    "GraphRunner",
     "RequestModel",
     "ResponseFieldHasDefault",
     "ResponseModel",
@@ -137,6 +140,7 @@ __all__ = [
     "fact_view",
     "load_case",
     "load_event",
+    "local_graph_runner",
     "payload_keys_in",
     "resume_event",
     "run_view",

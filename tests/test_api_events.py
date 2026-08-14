@@ -14,16 +14,19 @@ from api_helpers import (
     CASE_ID,
     EMAIL,
     api_client,
+    factory_proposing,
     finished_store,
     intent,
     parked_store,
 )
 from fastapi.testclient import TestClient
+from strands.multiagent.base import Status
 
 from careloop.api.app import create_app
 from careloop.api.projections import COMPLETED, NEEDS_YOU, WORKING
 from careloop.api.runs import RunAlreadyInFlight, RunRegistry
 from careloop.events.inbound import CLAIM_REJECTION_EVENT_ID, REFERRAL_EVENT_ID
+from careloop.graph.runner import RunResult
 from careloop.state import CaseState, InMemoryCaseStore
 
 WAIT = 10.0
@@ -224,6 +227,88 @@ class TestRuns:
 
         assert [card["case_id"] for card in sections[COMPLETED]] == [CASE_ID]
         assert sections[WORKING] == []
+
+
+class TestTheGraphRunnerSeam:
+    """*Where* a run happens is injectable. What it decides is not.
+
+    The seam exists so that
+    `docs/adr/0002-graph-execution-stays-on-the-host.md` is falsifiable: the ADR declines to move
+    graph execution onto AgentCore Runtime on measured grounds, and an ADR saying "we could move
+    it" is worth nothing if moving it would mean rewriting this layer. These tests are what make
+    "one implementation of one type" a checkable claim rather than a hopeful one.
+    """
+
+    def test_an_injected_runner_is_what_schedule_drives(self) -> None:
+        store = InMemoryCaseStore()
+        seen: list[tuple[object, str, str]] = []
+
+        async def elsewhere(given_store, inbound, case_id):
+            seen.append((given_store, inbound.event_id, case_id))
+            return RunResult(
+                case=given_store.get(case_id),
+                status=Status.COMPLETED,
+                executed_nodes=("ran-somewhere-else",),
+            )
+
+        with TestClient(create_app(store, graph_runner=elsewhere)) as client:
+            body = deliver(client).json()
+
+        # The store, the event and the case the route resolved — everything a remote runner would
+        # need to carry, and nothing it would have to decide for itself.
+        assert seen == [(store, REFERRAL_EVENT_ID, CASE_ID)]
+        assert body["executed_nodes"] == ["ran-somewhere-else"]
+        assert body["state"] == "SETTLED"
+
+    def test_an_injected_runner_replaces_local_execution_rather_than_layering_on_it(self) -> None:
+        """The vacuity proof: with a runner that does nothing, nothing happens.
+
+        Every other test in this module reaches ``AWAITING_HUMAN`` through the real graph, so a
+        seam that quietly ran the graph *as well* would pass all of them. This is the one that
+        fails if it does.
+        """
+        store = InMemoryCaseStore()
+
+        async def does_nothing(given_store, inbound, case_id):
+            return RunResult(
+                case=given_store.get(case_id), status=Status.COMPLETED, executed_nodes=()
+            )
+
+        with TestClient(create_app(store, graph_runner=does_nothing)) as client:
+            deliver(client)
+
+        # ``open_case`` is the API's own work and still happened; the graph's is entirely absent.
+        assert store.get(CASE_ID).state is CaseState.NEW
+        assert store.get(CASE_ID).actions == ()
+
+    def test_the_default_runner_runs_the_graph_in_this_process(self) -> None:
+        """What CareLoop ships, and the reason the two tests above are not testing a no-op."""
+        with api_client(InMemoryCaseStore(), *SEND_EMAIL) as client:
+            body = deliver(client).json()
+
+        assert {"triage", "evidence", "plan", "gate"} <= set(body["executed_nodes"])
+
+    def test_the_default_runner_is_built_over_the_factory_this_app_was_given(self) -> None:
+        """Resolution order, which was a live hazard rather than a hypothetical one.
+
+        ``create_app`` used to assign ``context_factory`` onto ``ApiDeps`` *after* constructing it.
+        A local runner built in ``__post_init__`` would then have closed over the default factory —
+        real agents against whatever the environment resolves — while every route went on
+        reporting the injected one. The failure mode is a suite that silently stops using its own
+        mock, which is the kind that stays green.
+        """
+        store = InMemoryCaseStore()
+        used: list[str] = []
+
+        def recording(given_store, inbound, case_id):
+            used.append(case_id)
+            return factory_proposing(*SEND_EMAIL)(given_store, inbound, case_id)
+
+        with TestClient(create_app(store, context_factory=recording)) as client:
+            deliver(client)
+
+        assert used == [CASE_ID]
+        assert store.get(CASE_ID).state is CaseState.AWAITING_HUMAN
 
 
 class TestTheRegistryIsNotABusinessFact:

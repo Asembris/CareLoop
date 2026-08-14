@@ -15,7 +15,7 @@ would sit in front of this, not replace it.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Annotated
 
@@ -25,7 +25,7 @@ from careloop.api.runs import RunRegistry
 from careloop.events.inbound import InboundEvent
 from careloop.events.simulator import EventSimulator
 from careloop.graph.context import RunContext
-from careloop.graph.runner import context_for
+from careloop.graph.runner import RunResult, context_for, run_case
 from careloop.state.case import Case, CaseState
 from careloop.state.store import CaseStore
 from careloop.tools.clinic import ClinicClient
@@ -56,6 +56,37 @@ def clinic_context_factory(clinic: ClinicClient) -> ContextFactory:
     return build
 
 
+#: How one graph run is performed, given the store, the event and the case it belongs to.
+#:
+#: One level out from :data:`ContextFactory`, and the two answer different questions. A context
+#: factory says *what a run is bound to* — which agents, which clinic, which clock — and still
+#: assumes the graph executes in this process. A ``GraphRunner`` says *where the run happens at
+#: all*, so an implementation is free to perform it somewhere else entirely and hand back the
+#: :class:`~careloop.graph.runner.RunResult` the caller expects.
+#:
+#: **The seam exists so that claim is falsifiable rather than asserted.** Session F evaluated moving
+#: graph execution onto Bedrock AgentCore Runtime and declined it on measurement — see
+#: `docs/adr/0002-graph-execution-stays-on-the-host.md`. An ADR saying "we could move it" is worth
+#: nothing if moving it would mean rewriting the API layer; with this in place, a remote runner is
+#: a new implementation of one type and the routes do not change. Nothing about the authority layer,
+#: the trust model or the state machine is on this seam, and nothing about them should ever be.
+GraphRunner = Callable[[CaseStore, InboundEvent, str], Awaitable[RunResult]]
+
+
+def local_graph_runner(context_factory: ContextFactory) -> GraphRunner:
+    """Run the graph in this process, which is what CareLoop ships.
+
+    The composition of :data:`ContextFactory` and
+    :func:`careloop.graph.runner.run_case`, and deliberately nothing more — a runner that did
+    anything else would be the API layer deciding something.
+    """
+
+    async def run(store: CaseStore, inbound: InboundEvent, case_id: str) -> RunResult:
+        return await run_case(context_factory(store, inbound, case_id))
+
+    return run
+
+
 @dataclass
 class ApiDeps:
     """The collaborators the routes are bound to.
@@ -69,6 +100,16 @@ class ApiDeps:
     context_factory: ContextFactory = default_context_factory
     runs: RunRegistry = field(default_factory=RunRegistry)
 
+    graph_runner: GraphRunner | None = None
+    """How a run is performed. ``None`` builds the local one over :attr:`context_factory`.
+
+    Filled in :meth:`__post_init__` and never ``None`` afterwards, the same shape
+    :class:`~careloop.graph.context.RunContext` uses for its executor. Supplying one *replaces*
+    local execution rather than layering on it, so a runner given here is the only thing that runs
+    the graph — which is why :attr:`context_factory` is meaningless alongside a remote one and is
+    not consulted by it.
+    """
+
     clinic: ClinicClient | None = None
     """The external clinic, if there is one. Held so ``POST /api/demo/reset`` can put it back.
 
@@ -78,6 +119,10 @@ class ApiDeps:
 
     demo: bool = False
     """Whether the demo control surface is mounted. Read at build time; no route consults it."""
+
+    def __post_init__(self) -> None:
+        if self.graph_runner is None:
+            self.graph_runner = local_graph_runner(self.context_factory)
 
 
 def deps(request: Request) -> ApiDeps:
@@ -135,9 +180,11 @@ __all__ = [
     "Caregiver",
     "ContextFactory",
     "Deps",
+    "GraphRunner",
     "caregiver",
     "clinic_context_factory",
     "default_context_factory",
     "deps",
+    "local_graph_runner",
     "sections_from",
 ]

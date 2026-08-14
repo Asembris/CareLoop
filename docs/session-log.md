@@ -2662,9 +2662,9 @@ but has been seen to take 21 when a model call is slow — so the take is not fi
 
 ---
 
-## Session E — 2026-08-14 (in progress)
+## Session E — 2026-08-14
 
-Deployment. The full record lands when the session closes; what is here is settled and measured.
+Deployment. What is here is settled and measured; session F closes the AgentCore question it opened.
 
 ### The video-script constraint, recorded so September does not rediscover it
 
@@ -2712,6 +2712,145 @@ press Approve on that card from any other client.
   is what keeps the beats watchable at that speed.
 - **The reset hazard is closed and was already closed.** `realApi.runScenario` calls `resetDemo()`
   before every scenario, so the two-scenarios-one-slot 409 cannot happen through the UI.
+
+## Session F — 2026-08-14
+
+**The backend is closed.** Two commits, both unpushed.
+
+| Commit | Subject | Pushed |
+|---|---|---|
+| `05d8e40` | Add a GraphRunner seam so where a run happens is injectable | no |
+| `0ce6422` | Add ADR 0002 rejecting the move of graph execution onto AgentCore Runtime | no |
+
+**1718 passed, 37 skipped.** `ruff check` and `ruff format --check` clean. Frontend: **101 passed
+across 6 files**. The Python suite was run at the previous commit as well — **1714 passed, 37
+skipped both before and after the seam**, which is what makes "pure refactor" a measurement rather
+than a description; the four new tests account for the whole difference.
+
+### What this session was for, and what it did instead
+
+The brief was Stage 2: move graph execution onto AgentCore Runtime. It was planned in full, costed
+against the live account, and **cut before any of it was written**. The full reasoning is
+[`adr/0002-graph-execution-stays-on-the-host.md`](adr/0002-graph-execution-stays-on-the-host.md);
+what follows is the position, not a second copy of the argument.
+
+**The deciding criterion.** Every graph node commits its transition to the host store before it
+finishes, which is what lets a browser polling `GET /api/cases` watch a case move. Stage 2 puts that
+store inside the runtime, so the host sees one commit at the end and the run becomes atomic from the
+dashboard's side. The *animation* survives — `pacedState` replays from the case's own
+`STATE_TRANSITION` entries, not from what the poller caught — but the card sits motionless for the
+length of the remote run first. ~1s worse warm, ~6s worse cold, and with a **300s** idle session
+timeout the cold path is the likely one for a judge who reads the page before clicking.
+
+### Measured before deciding, not after
+
+Everything below came from execution against the deployed hello-world runtime
+`careloop_hello-Ge04ZVAik3` and the live distribution. It is recorded here because it is the
+expensive part and it stays true whatever a later session decides.
+
+| | measured |
+|---|---|
+| cold AgentCore session (incl. one Nova Micro call) | **6.47 s** |
+| warm | **0.72 s**, **0.93 s** |
+| cold-start penalty | **≈ 5.5 s** |
+| Stage 1 deployed `referral`, for comparison | **1.96 s** |
+| Stage 1 approve-to-`DONE` | **0.16 s** |
+
+**Stage 1's runtime is not a container, and this was the session's biggest surprise.** It uses
+`codeConfiguration` — a Python 3.12 zip in
+`s3://careloop-agentcore-code-265243686715-us-east-1`, entrypoint `main.py`, `PUBLIC` network, role
+`CareLoopAgentCoreRuntimeRole`. No Docker, no ECR, no ARM64 image build. The deploy loop would have
+been minutes rather than the quarter-hour container cycle the session was braced for, and Docker
+Desktop was not even running on the machine.
+
+The runtime environment, from the hello-world's own `{"probe": true}` branch:
+
+```
+arch: aarch64   python: 3.12.12   cpu_count: 2   cwd: /var/task (read-only)   /tmp: writable
+credential_method: iam-role
+egress_bedrock: OK 6ms   egress_public_internet: OK 5ms   egress_arbitrary_host: OK 5ms
+```
+
+**Packaging was viable and was not the obstacle.** The hello package is 28 MB compressed / 60 MB
+uncompressed and already vendors `strands-agents`, `fastapi`, `httpx`, `pydantic`, `cryptography`
+and `yaml` as `cp312-manylinux2014_aarch64` wheels. The only tree Stage 2 adds is pdfplumber's,
+which resolves cleanly for aarch64 — 21 MB of wheels — landing around 85 MB uncompressed.
+
+**Two repo-side facts confirmed rather than assumed**, both of which Stage 2 would have rested on:
+`Case` round-trips `model_dump_json` → `model_validate_json` to equality, and `SqliteCaseStore.save`
+writes `case.version` verbatim while appending timeline entries past `stored_seq`, so a case that
+advanced N→N+k in another process commits correctly under `expected_version=N`.
+
+**`careloop-bench` can do more than session 4 recorded.** It lists, gets and invokes AgentCore
+runtimes and writes the code bucket. It is denied IAM read, which is why the runtime role's Bedrock
+scope stayed unresolved.
+
+### The two risks that made the cut cheap
+
+Neither blocked the decision; both are what a later session would have to close first.
+
+1. **`CareLoopAgentCoreRuntimeRole`'s Bedrock scope is unknown.** It demonstrably invokes
+   `us.amazon.nova-micro-v1:0`. CareLoop also needs `us.amazon.nova-2-lite-v1:0` for the planner. A
+   deploy cycle to diagnose rather than a policy read, since IAM read is denied here.
+2. **The read-back would have routed through a caching CDN, and this is the sharper one.** The
+   runtime cannot reach the host's loopback clinic, so `CARELOOP_CLINIC_URL` becomes the public
+   `/clinic` path — meaning the verification's *separate* `GET` traverses CloudFront. If that
+   behaviour caches, **the read-back reads the CDN's memory instead of the clinic and still shows
+   green**, with `read_back: true` reported over an observation of nothing. Two consecutive
+   `GET /clinic/slots` both returned `X-Cache: Miss from cloudfront` and the origin sets no
+   `Cache-Control` there, which is suggestive and is not the standard this project applies to the
+   read-back anywhere else.
+
+### The wire-format finding, kept although nothing was built
+
+Session E's sketch had `/invocations` receive `{case, event, clinic_url}`. **A clinic URL is a
+`DESTINATION`-shaped value and belongs in configuration, never in a request body.** Nothing could
+forge that request — `InvokeAgentRuntime` is IAM-gated — but "nothing can reach it" is the argument
+this project refuses everywhere else. It is the same reasoning that makes `case_id` a `ToolSet`
+constructor argument rather than a tool parameter: **if a value decides where an effect lands, it
+does not travel on the same channel as the request to perform it.** Recorded in the ADR so the next
+thing that grows a remote surface inherits it.
+
+### What was built — the `GraphRunner` seam
+
+`ApiDeps.graph_runner`, typed `GraphRunner = Callable[[CaseStore, InboundEvent, str],
+Awaitable[RunResult]]`, defaulting to `local_graph_runner` — the composition of the context factory
+and `run_case`, and nothing more. `schedule` drives it.
+
+One level out from `ContextFactory`, and the two answer different questions: a context factory says
+*what a run is bound to* and still assumes this process; a `GraphRunner` says *where the run happens
+at all*. Nothing about the authority layer, the trust model or the state machine is on this seam,
+and nothing about them should ever be.
+
+It exists so the ADR is falsifiable rather than a story. `TestTheGraphRunnerSeam` holds it open, and
+the vacuity proof is a runner that does nothing: after it, the case is still `NEW` and holds no
+actions, so a seam that quietly ran the graph *as well* would be caught.
+
+**One live hazard fixed in passing.** `create_app` assigned `context_factory` onto `ApiDeps` **after**
+constructing it. A local runner built in `__post_init__` would then have closed over the *default*
+factory — real agents against whatever the environment resolves — while every route went on
+reporting the injected one. The factory is now resolved before construction. The failure mode this
+prevents is a suite that silently stops using its own mock, which is the kind that stays green.
+
+### Guards proven non-vacuous by mutation
+
+Three mutations, each applied to a clean tree, suite re-run, reverted.
+
+| Mutation | Result |
+|---|---|
+| `schedule` ignores `graph_runner` and runs locally | 2 failed |
+| the local runner is built over `default_context_factory` | 8 failed |
+| `create_app` restored to assign-after-construction | 8 failed |
+
+### Cost and resources
+
+**No resource was created and no IAM was changed.** Nothing was deployed. The marginal AWS spend for
+the whole session is four Nova Micro invocations against the existing hello-world runtime —
+fractions of a cent. `CARELOOP_GRAPH_RUNTIME_ARN` and the deployment tree Stage 2 would have needed
+were deliberately **not** built: the seam is the deliverable, and an unused deployment script rots.
+
+**AgentCore Runtime is deployed, invoked and measured in this project.** The cut is about where the
+production graph runs, not about whether AgentCore works.
 
 ## Open decisions
 

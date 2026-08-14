@@ -140,6 +140,25 @@ reading signatures. Full detail in [`docs/spike-findings.md`](docs/spike-finding
   satisfied the old flat schema 8/8 while misquoting `slot_start` 8/8 — well-formed proposals that
   the exact-match trust rule denies. Schema fit and transcription fidelity are separate axes and
   are reported as separate columns.
+- **"Strict Structured Outputs" is a fact about OpenAI proper and does not transfer to every
+  OpenAI-compatible gateway.** Measured, session G: NVIDIA's endpoint accepts a `json_schema` with
+  `strict: true` whose *schema* is not strict-compliant — no `additionalProperties: false`, an
+  incomplete `required` — and decodes it **unconstrained** rather than rejecting it as OpenAI does.
+  The guard fails open and nothing reports it. Emit the compliant form yourself; do not rely on the
+  endpoint to demand one. With the compliant form, `meta/llama-3.3-70b-instruct` and
+  `nvidia/llama-3.3-nemotron-super-49b-v1.5` satisfied it 6/6 across both request shapes. The live
+  risk on that endpoint is **capacity, not schema** — `503 ResourceExhausted (16/16 workers)` and
+  120 s timeouts under modest concurrency.
+- **A USD ceiling does not bound a credit-metered endpoint.** `build.nvidia.com` is metered in
+  credits, not billed per token, so `bench/rates.json` prices it at `0.0` honestly and a
+  dollar-denominated cap over it is decoration. Anything spending NVIDIA calls needs a ceiling
+  counted in **calls**; `--max-spend` bounds only the Bedrock-backed target.
+- **`deepteam==1.0.9` phones home at import and cannot be imported as distributed.**
+  `deepteam/telemetry.py` runs `GET https://api.ipify.org` and `sentry_sdk.init(...)` against a
+  hard-coded DSN unless `DEEPTEAM_TELEMETRY_OPT_OUT=YES` is already set — so the opt-out belongs
+  *above the import statement*, not in the shell. It also imports `sentry_sdk` without declaring
+  it, so the `evals` extra pins `sentry-sdk` to make the install work at all. Full detail in
+  [`docs/spike-findings.md`](docs/spike-findings.md) §7.
 
 ## Layout
 

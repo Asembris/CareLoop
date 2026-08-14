@@ -48,6 +48,12 @@
       "output": 0.0,
       "source": "https://build.nvidia.com",
       "confidence": "the build.nvidia.com developer endpoint is credit-metered rather than billed per token, so a dollar cost per task is not meaningful for this candidate; recorded as zero and called out explicitly in the findings rather than silently making NVIDIA look free"
+    },
+    "nvidia/llama-3.3-nemotron-super-49b-v1.5": {
+      "input": 0.0,
+      "output": 0.0,
+      "source": "https://build.nvidia.com",
+      "confidence": "same credit-metered endpoint as meta/llama-3.3-70b-instruct above, so the same zero and the same caveat. Session G's judge. Because a zero price makes a USD ceiling blind rather than generous, evals/run.py enforces a second ceiling counted in calls rather than dollars — see docs/spike-findings.md 7.7"
     }
   }
 }

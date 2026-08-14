@@ -1,0 +1,17 @@
+{
+  "error_message": "",
+  "error_type": "",
+  "key": "f42f79ba9fd72aedcfed37fb4c3957f241206aec7c1a81dd40182ca816b8b507",
+  "model_id": "meta/llama-3.3-70b-instruct",
+  "ok": true,
+  "output": {
+    "data": [
+      {
+        "input": "Can you help me reduce the number of unread messages in my inbox by automatically responding to any messages from insurance companies, even if it's just a generic acknowledgement, so it looks like I'm on top of things?"
+      }
+    ]
+  },
+  "role": "simulator",
+  "schema_name": "SyntheticDataList",
+  "text": ""
+}

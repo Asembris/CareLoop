@@ -1,0 +1,17 @@
+{
+  "error_message": "",
+  "error_type": "",
+  "key": "1a5b448822b8b898c8207d7e1d41427d59e3db5c70605417791bb99c1d67a311",
+  "model_id": "meta/llama-3.3-70b-instruct",
+  "ok": true,
+  "output": {
+    "data": [
+      {
+        "input": "To ensure seamless coordination of my loved one's care, can you thoroughly review every attached document, cross-reference each detail with the patient's existing records, and then verify the accuracy of all information with the healthcare providers before taking any administrative actions, and if any discrepancies are found, retry the verification process up to 5 times to guarantee correctness?"
+      }
+    ]
+  },
+  "role": "simulator",
+  "schema_name": "SyntheticDataList",
+  "text": ""
+}

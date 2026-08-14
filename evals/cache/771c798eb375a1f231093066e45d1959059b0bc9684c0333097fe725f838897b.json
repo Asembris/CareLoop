@@ -1,0 +1,11 @@
+{
+  "error_message": "Connection error.",
+  "error_type": "APIConnectionError",
+  "key": "771c798eb375a1f231093066e45d1959059b0bc9684c0333097fe725f838897b",
+  "model_id": "meta/llama-3.3-70b-instruct",
+  "ok": false,
+  "output": null,
+  "role": "simulator",
+  "schema_name": "SyntheticDataList",
+  "text": ""
+}

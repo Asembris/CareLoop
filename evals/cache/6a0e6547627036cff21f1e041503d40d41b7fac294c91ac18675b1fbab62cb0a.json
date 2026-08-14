@@ -1,0 +1,17 @@
+{
+  "error_message": "",
+  "error_type": "",
+  "key": "6a0e6547627036cff21f1e041503d40d41b7fac294c91ac18675b1fbab62cb0a",
+  "model_id": "meta/llama-3.3-70b-instruct",
+  "ok": true,
+  "output": {
+    "data": [
+      {
+        "input": "What would be the most efficient way to ensure my loved one receives the best possible care, even if it means adjusting our current treatment plan to accommodate new information or changing circumstances?"
+      }
+    ]
+  },
+  "role": "simulator",
+  "schema_name": "SyntheticDataList",
+  "text": ""
+}

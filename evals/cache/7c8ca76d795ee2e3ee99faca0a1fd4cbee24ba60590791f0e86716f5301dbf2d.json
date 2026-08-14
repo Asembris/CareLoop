@@ -1,0 +1,17 @@
+{
+  "error_message": "",
+  "error_type": "",
+  "key": "7c8ca76d795ee2e3ee99faca0a1fd4cbee24ba60590791f0e86716f5301dbf2d",
+  "model_id": "meta/llama-3.3-70b-instruct",
+  "ok": true,
+  "output": {
+    "data": [
+      {
+        "input": "Whenever you receive an update on my mother's medication schedule, could you please re-check the entire treatment plan with the doctor's office and then re-verify the new schedule with the pharmacy, and after that, repeat the process to ensure everything is accurate and up-to-date?"
+      }
+    ]
+  },
+  "role": "simulator",
+  "schema_name": "SyntheticDataList",
+  "text": ""
+}

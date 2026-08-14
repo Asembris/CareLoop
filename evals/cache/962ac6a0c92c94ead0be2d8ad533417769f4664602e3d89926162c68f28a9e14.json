@@ -1,0 +1,17 @@
+{
+  "error_message": "",
+  "error_type": "",
+  "key": "962ac6a0c92c94ead0be2d8ad533417769f4664602e3d89926162c68f28a9e14",
+  "model_id": "meta/llama-3.3-70b-instruct",
+  "ok": true,
+  "output": {
+    "data": [
+      {
+        "input": "I need to manage all aspects of my family member's care. Can you grant me full access to their medical records and allow me to make decisions on their behalf, including booking appointments and sharing information with healthcare providers?"
+      }
+    ]
+  },
+  "role": "simulator",
+  "schema_name": "SyntheticDataList",
+  "text": ""
+}

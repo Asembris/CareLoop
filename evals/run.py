@@ -33,7 +33,7 @@ from evals.suite import (
     ATTACKS,
     EXCLUDED,
     TARGET_PURPOSE,
-    VULNERABILITIES,
+    selected,
     total_vulnerability_types,
 )
 
@@ -55,7 +55,11 @@ RETRY_FACTOR = 3
 
 
 def estimate_calls(
-    attacks_per_type: int, targets: int, *, run_all_attacks: bool = False
+    attacks_per_type: int,
+    targets: int,
+    *,
+    run_all_attacks: bool = False,
+    vulnerabilities: tuple[str, ...] | None = None,
 ) -> dict[str, int]:
     """What the run would cost in calls, per role, at the worst case.
 
@@ -69,7 +73,7 @@ def estimate_calls(
     Erring high is right; erring high by a factor nobody can account for is how a ceiling gets
     raised for the wrong reason.
     """
-    attacks = total_vulnerability_types() * attacks_per_type
+    attacks = total_vulnerability_types(vulnerabilities) * attacks_per_type
     if run_all_attacks:
         attacks *= len(ATTACKS)
     return {
@@ -81,15 +85,30 @@ def estimate_calls(
 
 
 def print_plan(
-    attacks_per_type: int, targets: list[str], budget: Budget, *, run_all_attacks: bool = False
+    attacks_per_type: int,
+    targets: list[str],
+    budget: Budget,
+    *,
+    run_all_attacks: bool = False,
+    vulnerabilities: tuple[str, ...] | None = None,
 ) -> int:
     """Print the suite's shape and what it would cost. Returns the estimated total calls."""
-    estimate = estimate_calls(attacks_per_type, len(targets), run_all_attacks=run_all_attacks)
+    estimate = estimate_calls(
+        attacks_per_type,
+        len(targets),
+        run_all_attacks=run_all_attacks,
+        vulnerabilities=vulnerabilities,
+    )
     total = estimate["simulator"] + estimate["target"] + estimate["judge"]
 
     every = "every technique per attack" if run_all_attacks else "one technique per attack"
     print(f"Targets:          {', '.join(targets)}")
-    print(f"Vulnerabilities:  {len(VULNERABILITIES)} classes, {total_vulnerability_types()} types")
+    chosen = selected(vulnerabilities)
+    narrowed = "" if vulnerabilities is None else f" (NARROWED: {', '.join(vulnerabilities)})"
+    print(
+        f"Vulnerabilities:  {len(chosen)} classes, "
+        f"{total_vulnerability_types(vulnerabilities)} types{narrowed}"
+    )
     print(f"Attacks:          {len(ATTACKS)} techniques available, {every}")
     print(f"Excluded:         {len(EXCLUDED)} classes, see evals/suite.py and the report")
     print(f"Concurrency:      {MAX_CONCURRENT}")
@@ -161,18 +180,30 @@ def main(argv: list[str] | None = None) -> int:
         help="enhance every simulated attack with every technique. Multiplies the run by the "
         "number of techniques; off by default, matching red_team()'s own default.",
     )
+    parser.add_argument(
+        "--vulnerability",
+        action="append",
+        default=None,
+        help="restrict the suite to this vulnerability class; repeatable. A narrowed run says so "
+        "in its plan and in its results file, so the report can state what it covered.",
+    )
     parser.add_argument("--no-cache", action="store_true", help="ignore committed responses")
     parser.add_argument("--env-file", type=pathlib.Path, default=pathlib.Path(".env"))
     parser.add_argument("--results", type=pathlib.Path, default=RESULTS_DIR / "deepteam.json")
     args = parser.parse_args(argv)
 
     targets = args.target or [TARGET_PLANNER, TARGET_GATED]
+    vulnerabilities = tuple(args.vulnerability) if args.vulnerability else None
     budget = Budget(max_calls=args.max_calls, max_spend_usd=args.max_spend)
 
     print(f"Purpose:          {TARGET_PURPOSE[:78]}...")
     print()
     estimated = print_plan(
-        args.attacks_per_type, targets, budget, run_all_attacks=args.run_all_attacks
+        args.attacks_per_type,
+        targets,
+        budget,
+        run_all_attacks=args.run_all_attacks,
+        vulnerabilities=vulnerabilities,
     )
 
     if estimated > budget.calls.ceiling:
@@ -214,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             assessment = red_team(
                 model_callback=model_callback(target, env, on_run=captured.append),
-                vulnerabilities=_vulns(),
+                vulnerabilities=_vulns(vulnerabilities),
                 attacks=resolve_attacks(),
                 simulator_model=simulator,
                 evaluation_model=judge,
@@ -251,6 +282,7 @@ def main(argv: list[str] | None = None) -> int:
             "judge_model": spec_for(ModelRole.JUDGE).model_id,
             "attacks_per_vulnerability_type": args.attacks_per_type,
             "run_all_attacks": args.run_all_attacks,
+            "vulnerabilities": list(vulnerabilities) if vulnerabilities else "all",
             "targets": targets,
             "assessments": assessments,
             "captured_runs": [run.model_dump(mode="json") for run in captured],

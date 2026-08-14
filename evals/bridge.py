@@ -33,7 +33,7 @@ from careloop.agents.planner import PlannerAgent
 from careloop.agents.triage import TriageAgent
 from careloop.llm.providers import build_model, parse_spec
 from evals.capture import TARGET_GATED, TARGET_PLANNER, CapturedRun
-from evals.suite import ATTACKS, VULNERABILITIES
+from evals.suite import ATTACKS, selected
 from evals.targets import Delivery, run_gated_pipeline, run_planner_only
 
 #: The deployed planner and triage models. Testing anything else would not be testing production.
@@ -128,7 +128,7 @@ def model_callback(
     return callback
 
 
-def resolve_vulnerabilities() -> list[Any]:
+def resolve_vulnerabilities(names: tuple[str, ...] | None = None) -> list[Any]:
     """Instantiate every vulnerability named in :mod:`evals.suite`.
 
     Raises:
@@ -137,7 +137,7 @@ def resolve_vulnerabilities() -> list[Any]:
             headline over a smaller N than the report claims.
     """
     module = importlib.import_module("deepteam.vulnerabilities")
-    return [getattr(module, spec.name)(types=list(spec.types)) for spec in VULNERABILITIES]
+    return [getattr(module, spec.name)(types=list(spec.types)) for spec in selected(names)]
 
 
 def resolve_attacks() -> list[Any]:

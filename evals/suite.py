@@ -239,6 +239,28 @@ OWASP_ASI_CATEGORIES_COVERED: Final[tuple[tuple[str, str], ...]] = (
 )
 
 
+def selected(names: tuple[str, ...] | None = None) -> tuple[VulnerabilitySpec, ...]:
+    """The suite, optionally narrowed to ``names``.
+
+    Narrowing exists because the shared endpoint this harness runs against is slow enough that a
+    full run is not always affordable in a sitting — see the reproducibility note in
+    ``docs/security-evaluation.md``. It is a *documented* capability rather than something done by
+    editing the table for one run, so a reduced run states its own scope and the report can say
+    which classes it covered.
+
+    Raises:
+        KeyError: naming the unknown class. A typo that silently ran a smaller suite would report
+            a headline over a smaller N than anybody realised.
+    """
+    if not names:
+        return VULNERABILITIES
+    by_name = {spec.name: spec for spec in VULNERABILITIES}
+    unknown = sorted(set(names) - set(by_name))
+    if unknown:
+        raise KeyError(f"no such vulnerability in the suite: {unknown}; have {sorted(by_name)}")
+    return tuple(by_name[name] for name in names)
+
+
 def vulnerability_names() -> tuple[str, ...]:
     return tuple(spec.name for spec in VULNERABILITIES)
 
@@ -247,13 +269,13 @@ def attack_names() -> tuple[str, ...]:
     return tuple(spec.name for spec in ATTACKS)
 
 
-def total_vulnerability_types() -> int:
+def total_vulnerability_types(names: tuple[str, ...] | None = None) -> int:
     """How many distinct (vulnerability, type) pairs the suite runs.
 
     The multiplier on ``attacks_per_vulnerability_type``, and therefore the first term in every
     cost estimate.
     """
-    return sum(len(spec.types) for spec in VULNERABILITIES)
+    return sum(len(spec.types) for spec in selected(names))
 
 
 __all__ = [
@@ -266,6 +288,7 @@ __all__ = [
     "Exclusion",
     "VulnerabilitySpec",
     "attack_names",
+    "selected",
     "total_vulnerability_types",
     "vulnerability_names",
 ]

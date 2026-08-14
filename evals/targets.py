@@ -33,8 +33,13 @@ from typing import Final
 from careloop.agents.planner import PlannerAgent
 from careloop.agents.triage import TriageAgent
 from careloop.events.inbound import InboundEvent
+from careloop.graph.context import RunContext
 from careloop.graph.extract import record_document, validate_and_promote
 from careloop.graph.runner import approve, context_for, open_case, run_case
+from careloop.policy.engine import PolicyEngine
+from careloop.policy.gate import PolicyGate
+from careloop.policy.gated import GatedToolSet
+from careloop.policy.hook import PolicyHook, policy_registry
 from careloop.state import CaseState, InMemoryCaseStore
 from careloop.state.machine import transition
 from careloop.tools.callables import ToolSet, UnknownTool
@@ -124,6 +129,32 @@ def attack_event(attack_text: str, *, attack_id: str, delivery: Delivery) -> Inb
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def install_engine(context: RunContext, engine: PolicyEngine) -> RunContext:
+    """Rebuild a run context's enforcement over a different policy engine.
+
+    **This exists for exactly one caller: the vacuity proof.** ``evals/replay.py`` replays the
+    whole corpus through an allow-all engine and requires the unauthorised-action count to come
+    out *non-zero*, because a "0 of N" that also holds with the authority layer removed is a
+    measurement of the harness rather than of CareLoop.
+
+    Both enforcement points are rebuilt, not one. Replacing the gate and leaving the gated toolset
+    wrapped around the old one would produce a context whose two layers disagreed — which is a
+    third thing, neither the shipped system nor the mutant, and would make the proof meaningless
+    in a way nothing would report.
+
+    :class:`~careloop.graph.context.RunContext` deliberately takes no engine, and this does not
+    argue that it should: the ability to swap one belongs to a harness, not to the system.
+    """
+    context.gate = PolicyGate(context.current_case, engine)
+    context.hook = PolicyHook(context.gate)
+    context.hooks = policy_registry(context.hook) if context.register_hook else context.hooks
+    context.tools = GatedToolSet(
+        ToolSet(context.case_id, executor=context.executor, documents=context.documents),
+        context.gate,
+    )
+    return context
 
 
 def _case_ready_to_plan(
@@ -261,6 +292,7 @@ async def run_gated_pipeline(
     delivery: Delivery = Delivery.DOCUMENT,
     alongside_real_work: bool = False,
     approve_everything: bool = False,
+    engine: PolicyEngine | None = None,
     case_id: str = "case-eval-gated",
     max_node_executions: int = MAX_NODE_EXECUTIONS,
 ) -> CapturedRun:
@@ -269,6 +301,11 @@ async def run_gated_pipeline(
     The production configuration, unmodified. Restricting capability during red teaming hides
     real vulnerabilities, so the toolset, the rules and the prompts are the deployed ones and the
     node budget is the shipped one.
+
+    ``engine`` is ``None`` in every measurement, which means the shipped ``rules.yaml``. It is a
+    parameter only so :mod:`evals.replay` can run its vacuity proof through the same function the
+    measurements use — a proof that took a different code path would be proving something about
+    that path. See :func:`install_engine`.
 
     ``approve_everything`` models a caregiver who rubber-stamps whatever they are shown. It is
     **off by default**, because auto-approving on an ordinary run would simulate a human being
@@ -294,6 +331,8 @@ async def run_gated_pipeline(
         executor=executor,
         documents=documents,
     )
+    if engine is not None:
+        install_engine(context, engine)
 
     try:
         await run_case(context, max_node_executions=max_node_executions)
@@ -305,6 +344,7 @@ async def run_gated_pipeline(
                 documents,
                 triage=triage,
                 planner=planner,
+                engine=engine,
                 case_id=case_id,
                 max_node_executions=max_node_executions,
             )
@@ -345,6 +385,7 @@ async def _approve_and_resume(
     *,
     triage: TriageAgent,
     planner: PlannerAgent,
+    engine: PolicyEngine | None,
     case_id: str,
     max_node_executions: int,
 ) -> None:
@@ -370,6 +411,8 @@ async def _approve_and_resume(
             executor=executor,
             documents=documents,
         )
+        if engine is not None:
+            install_engine(resumed, engine)
         await run_case(resumed, max_node_executions=max_node_executions)
 
 

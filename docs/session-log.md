@@ -3016,6 +3016,127 @@ fractional-cent of Bedrock; the dollar ledger reports `$0.0000` against a `$2.00
 the simulator and judge have no per-token price, which is the finding above rather than an omission.
 Responses are cached and committed, so the table reproduces with no credentials.
 
+## Session H — 2026-08-15
+
+### Position
+
+Presentation, not features. **Nothing under `careloop/`, `frontend/`, `demoworld/`, `evals/` or
+`deploy/` was touched.** The repo opened on 110+ commits of context with no entry point; it now
+opens on a pitch a judge can read in ninety seconds.
+
+Five commits, all unpushed.
+
+| Commit | Subject |
+|---|---|
+| `3af63fa` | Add the CareLoop mark as a standalone SVG for documents |
+| `580b9a2` | Add the architecture diagram as hand-authored SVG |
+| `c759ba7` | Add docs/architecture.md as the diagram's caption |
+| `855124f` | Rewrite the README as a judge-facing pitch |
+| `bacb982` | Assert the README security badge against the replay that measures it |
+
+**1880 passed, 37 skipped** — 1873 before, and the seven new tests are the whole difference.
+`ruff check` and `ruff format --check` clean. Frontend: **101 passed across 6 files**, `tsc`
+clean, `vite build` clean.
+
+### The badge could have drifted, so it cannot
+
+`README.md` carries a static shields.io badge reading `0 / 320`. A live badge would have needed a
+gist and a CI write token — new infrastructure for a number that changes only when the corpus does.
+So the badge is static and `tests/test_docs_claims.py` holds it to the measurement: it runs
+`replay_corpus` on the committed corpus and requires the badge's two numbers to *be*
+`(unauthorised_actions, attempts)`. Every statement of the form "N of M adversarial attempts" in
+either the README or `security-evaluation.md` must be one of the two measured pairs — shipped rules
+or the allow-all mutant. Nothing else is a result.
+
+**The count of statements is asserted too, and that is the load-bearing part.** "Every number found
+matches the measurement" is satisfied by a document containing no numbers, so a README that lost the
+claim entirely would pass. The minimum-statements assertion is what stops that.
+
+### Guards proven non-vacuous by mutation
+
+| Mutation | Result |
+|---|---|
+| badge denominator `320` → `400` | `test_the_badge_matches_the_replay` red |
+| the badge deleted from the README | both `TestTheSecurityBadgeCannotDrift` tests red |
+| the report's headline `0 of 320` → `0 of 999` | `test_every_statement_is_one_of_the_two_measured_results` red |
+
+### The diagram is hand-written SVG, and Mermaid was not a close call
+
+The one thing `docs/architecture.svg` must do is separate three trust zones at a glance. Mermaid
+subgraph styling is per-theme and GitHub renders it in its own theme with its own colours, so the
+zones would have been whatever GitHub decided. Hand-written SVG is also text: it diffs, it greps,
+and it is edited rather than re-exported.
+
+It paints its own background in a self-contained light palette. No `prefers-color-scheme`: an SVG
+served through GitHub's image proxy cannot be relied on to see the reader's theme, and a diagram
+that inverts unpredictably is worse than one that always looks the same.
+
+**Verified by looking at it**, not by asserting it renders — headless Edge screenshot, read back.
+Three render cycles: the first had four arrows painted *under* the trust-zone band that was drawn
+after them, a label colliding with the band header, a stray connector, and text overflowing the
+`Fact` box. Also rendered at **830 px**, GitHub's markdown column width: zones, band labels, node
+names and the policy engine stay legible; the fine print does not, which is why the README links the
+image to the SVG rather than only embedding it.
+
+**AgentCore is drawn dashed and off the production path**, labelled with its measured cold and warm
+numbers and a pointer to ADR 0002. Drawing it as production would be a lie a judge could catch by
+reading the ADR two clicks away.
+
+### Three things found by running
+
+**XML comments cannot contain `--`, and an SVG with one does not render.** The mark's comment
+documented the brand tokens as `var(--brand-forest)`; the file parsed as malformed XML and Edge
+displayed an error page where the drawing should have been. Anything hand-authoring SVG that
+mentions a CSS custom property in a comment hits this.
+
+**A credential-free local demo fails at the first triage call, exactly as predicted.** With the
+model role variables unset every role resolves to `MockModel()`, whose script is empty outside the
+test suite:
+
+```
+{"run_id":"run-demo-referral-1","state":"ERRORED","error":"MockScriptExhausted"}
+failure_reason: "a graph node raised: MockScriptExhausted"
+```
+
+That is the design working — a process never told about a real provider cannot reach one by
+accident — but it means **the local demo block in the README is labelled as needing credentials**,
+and the credential-free paths are the live URL and `python -m evals.replay`.
+
+**Port 8000 cannot be bound on this machine.** `[Errno 13] error while attempting to bind on
+address ('127.0.0.1', 8000)` — a Windows excluded port range, not anything of CareLoop's. Local
+demo runs here used `--port 8010`. The README keeps 8000 because that is what `deploy/` and every
+other document use.
+
+### Every command in the README was executed
+
+| | measured |
+|---|---|
+| clean clone, fresh venv, `pip install -e ".[dev]"`, `python -m evals.replay` | exit `0`, `0 of 320` / `320 of 320` |
+| `npm --prefix frontend ci && npm --prefix frontend run build` | clean |
+| the local demo, shipped Bedrock models, `--static-dir frontend/dist` | `/` serves the built app; `DONE` in **3.89 s** and **5.38 s** on two runs; clinic slots 3 → 2 |
+| the same, with no model variables set | `FAILED`, `MockScriptExhausted` |
+| `https://d2heuwvhvrdyig.cloudfront.net/api/health` and `/clinic/slots` | `200`, live |
+
+**The CI badge 404s anonymously, and so does the repository root** — the repo is still private, and
+both resolve the moment it is made public at submission. Nothing to fix; recorded so it is not
+rediscovered as a broken badge.
+
+### What the README lost, and where it went
+
+The three-enforcement-points table, extraction and its three deliberate omissions, the verification
+essay, Demo World, the resume walkthrough and the seven-endpoint HTTP table are all out of the
+README. They live in `docs/architecture.md`, `docs/judges.md`, the ADRs and this log. The old
+**Status** section was rewritten as a visible **Honest limits** list — visible rather than collapsed,
+because a short list of known gaps stated plainly reads as confidence and the same list behind a
+toggle reads as concealment. Two stale entries were dropped: the frontend and the AWS deployment
+both shipped.
+
+### Cost and resources
+
+No resource created, no IAM changed. The only spend is the two local demo runs against Bedrock —
+Nova Micro triage plus Nova 2 Lite planning on one case each, fractions of a cent. Everything else
+this session was offline and free.
+
 ## Open decisions
 
 Carry these forward. Nothing here is blocking the next commit except where it says so.

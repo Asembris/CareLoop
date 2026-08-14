@@ -1,9 +1,10 @@
-# Spike findings — Strands Agents SDK surfaces
+# Spike findings — SDK and tooling surfaces
 
 Pinned against **`strands-agents==1.51.0`**, Python 3.12.0, Windows.
 
-These are the four SDK surfaces the CareLoop design depends on, plus the Bedrock model-id question.
-Each was verified by executing code, not by reading signatures.
+Sections 1–6 are the four SDK surfaces the CareLoop design depends on, plus the Bedrock model-id
+question. Section 7 is `deepteam==1.0.9`, added in session G for the adversarial evaluation under
+`evals/`. Each was verified by executing code, not by reading signatures.
 
 ## 1. GraphBuilder — CONFIRMED
 
@@ -153,3 +154,185 @@ require a profile.
 from the resolved region using the same rule, and allow a full override via
 `CARELOOP_BEDROCK_MODEL_ID`. Not exercised in tests — no AWS credentials are present in this
 environment, and the suite runs entirely on the mock provider.
+
+## 7. DeepTeam 1.0.9 — CONFIRMED, with three findings that change how it is used
+
+Verified in a throwaway virtualenv against `deepteam==1.0.9`, which resolved `deepeval==4.1.8`,
+`openai==3.0.0`, `pydantic==2.13.4`, `posthog`, `grpcio` and `opentelemetry-sdk`. That dependency
+set is why the package belongs to an extra of its own and never to `dev`: CI's "no provider SDK is
+installed" step exists to keep the default suite unable to reach a provider, and `openai` arrives
+transitively here.
+
+### 7.1 `import deepteam` fails on a clean install — undeclared `sentry_sdk`
+
+```
+File "deepteam/telemetry.py", line 7, in <module>
+    import sentry_sdk
+ModuleNotFoundError: No module named 'sentry_sdk'
+```
+
+`deepteam/telemetry.py` imports `sentry_sdk` at module scope and `deepteam/__init__.py` reaches
+that module transitively, but `sentry-sdk` appears nowhere in the distribution's `requires_dist`.
+A `pip install deepteam==1.0.9` into an empty environment therefore produces a package that cannot
+be imported. `sentry-sdk` is pinned explicitly in the `evals` extra as a consequence — not as a
+preference, as the only way the extra installs something that works.
+
+### 7.2 Importing it makes a network call and sends your public IP to a third party
+
+`deepteam/telemetry.py`, executed at import unless opted out:
+
+```python
+def telemetry_opt_out():
+    return os.getenv("DEEPTEAM_TELEMETRY_OPT_OUT") == "YES"
+
+if not telemetry_opt_out():
+    anonymous_public_ip = get_anonymous_public_ip()      # GET https://api.ipify.org
+    sentry_sdk.init(dsn="https://...@o4506098477236224.ingest.sentry.io/...", ...)
+```
+
+`blocked_by_firewall()` in the same module opens a socket to `www.google.com:80`. So the default
+behaviour of the tool being used to evaluate this system's security is to resolve the operator's
+public IP address and register a crash reporter against a hard-coded DSN, before any evaluation
+runs.
+
+**`DEEPTEAM_TELEMETRY_OPT_OUT=YES` and `DEEPEVAL_TELEMETRY_OPT_OUT=YES` must therefore be set
+before the import, not before the run**, and setting them in a shell is not good enough — an
+`import deepteam` at the top of a module executes before any statement in that module could set
+them. `evals/` sets both in the single module that imports deepteam, above the import, and a test
+asserts the ordering. Opting out is checked rather than trusted because the failure is silent:
+nothing reports that the call was made.
+
+### 7.3 `ignore_errors` defaults to `True`
+
+The published documentation says `False`. The measured signature says otherwise:
+
+```python
+ignore_errors: bool = True
+```
+
+An attack whose target callback raises is then counted into `RedTeamingOverview.errored` and the
+run carries on. That is survivable — the count is visible — but a run reporting "0 failures" with
+a non-zero `errored` is reporting that the judge never saw those attacks, not that they passed.
+Errored counts are reported alongside pass and fail in `docs/security-evaluation.md` for that
+reason.
+
+### 7.4 The API surface, confirmed
+
+Everything the harness depends on exists and has the shape the plan assumed.
+
+| Surface | Measured |
+|---|---|
+| `deepteam.test_case` | `RTTurn`, `ToolCall`, `RTTestCase` |
+| `RTTurn` | `role: Literal["user","assistant"]`, `content: str`, `tools_called: list[ToolCall] \| None`, `turn_level_attack`, `metadata`, … |
+| `ToolCall` | `name: str`, `input_parameters: dict \| None`, `output: Any \| None`, `description`, `reasoning`, `type` |
+| `model_callback` | `Callable[[str, list[RTTurn] \| None], RTTurn]`; both sync and awaited call sites exist, so an async callback is supported |
+| `red_team()` returns | `RiskAssessment(overview: RedTeamingOverview, test_cases: list[RTTestCase])`, a pydantic model with `model_dump_json` and `save()` |
+| `RedTeamingOverview` | `vulnerability_type_results`, `attack_method_results`, `errored: int`, `run_duration: float`, `cvss_score` |
+
+All six vulnerability classes the session named exist, `ExternalSystemAbuse` included:
+
+| Vulnerability | Types |
+|---|---|
+| `ExcessiveAgency` | `FUNCTIONALITY`, `PERMISSIONS`, `AUTONOMY` |
+| `ToolOrchestrationAbuse` | `RECURSIVE_TOOL_CALLS`, `UNSAFE_TOOL_COMPOSITION`, `TOOL_BUDGET_EXHAUSTION`, `CROSS_TOOL_STATE_LEAKAGE` |
+| `IndirectInstruction` | `RAG_INJECTION`, `TOOL_OUTPUT_INJECTION`, `DOCUMENT_EMBEDDED_INSTRUCTIONS`, `CROSS_CONTENT_INJECTION` |
+| `AutonomousAgentDrift` | `GOAL_DRIFT`, `REWARD_HACKING`, `AGENT_COLLUSION`, `RUNAWAY_AUTONOMY` |
+| `ExternalSystemAbuse` | `DATA_EXFILTRATION`, `COMMUNICATIONS_SPAM`, `INTERNAL_SPOOFING` |
+| `PIILeakage` | `DATABASE_ACCESS`, `DIRECT`, `SESSION_LEAK`, `SOCIAL_MANIPULATION` |
+
+The four attack techniques the session named all exist under `deepteam.attacks.single_turn`:
+`ContextPoisoning`, `GoalRedirection`, `PermissionEscalation`, `PromptInjection`.
+
+`OWASP_ASI_2026` exists in `deepteam.frameworks` and takes `categories=["ASI_01".."ASI_10"]`,
+exposing `.vulnerabilities` and `.attacks`. **It is not adopted whole.** Its full set drags in
+`SQLInjection`, `ShellInjection`, `UnexpectedCodeExecution`, `DebugAccess`, `Ethics`,
+`IntellectualProperty` and `Misinformation` — surfaces CareLoop does not have, since it executes no
+code, runs no database and generates no content. Padding the report with categories that pass
+because the capability is absent would weaken it. The two categories that map cleanly are recorded
+so the report can cite the framework without claiming coverage it does not have:
+
+- **ASI_01** (agent goal hijack) — `ExcessiveAgency`, `GoalTheft`, `IndirectInstruction`,
+  `RecursiveHijacking`, `Robustness`
+- **ASI_02** (tool misuse) — `BFLA`, `ExcessiveAgency`, `ToolOrchestrationAbuse`
+
+### 7.5 A custom model is accepted, and it must satisfy one specific contract
+
+`simulator_model` and `evaluation_model` are annotated `DeepEvalBaseLLM` and default to the string
+`"gpt-4o-mini"`. `deepeval.metrics.utils.initialize_model(probe)` returns **the same object** with
+`using_native_model=False`, so a custom subclass is passed straight through rather than being
+re-resolved by name.
+
+The contract a non-native model must satisfy, read from
+`deepteam/attacks/attack_simulator/utils.py` and mirrored in every metric:
+
+```python
+res = await model.a_generate(prompt=..., schema=SomePydanticModel)
+# a pydantic instance is used as-is; a str is run through trimAndLoadJson and fed to schema(**data);
+# a TypeError from the schema kwarg falls back to a_generate(prompt) and JSON-parses the text
+```
+
+Two consequences for the budget guard. **Cost is `None` for a non-native model** — deepteam's own
+`simulation_cost` and `evaluation_cost` fields stay empty, so spend accounting has to be ours. And
+a failure is retried **three times with exponential backoff**, so one schema failure is three
+calls, which the estimate must assume rather than discover.
+
+### 7.6 NVIDIA and strict Structured Outputs — the premise holds, for a different reason
+
+`CLAUDE.md` records that OpenAI-compatible providers reach structured output through *strict*
+Structured Outputs. That is a fact about OpenAI proper, and session G's plan leaned on it to choose
+NVIDIA for the judge. It does not transfer unexamined, and the first probe appeared to refute it:
+`meta/llama-3.3-70b-instruct` returned an object carrying an **extra key** (`"verdict "`) that
+`strict: True` should have made unrepresentable.
+
+That first reading was wrong, and the correction is the finding. The probe had sent a bare
+`model_json_schema()`, which omits `additionalProperties: false` and does not list every property
+in `required` — **a schema OpenAI proper rejects outright as invalid for strict mode.** NVIDIA
+accepted it and decoded unconstrained.
+
+> **NVIDIA's endpoint does not validate a strict-mode schema for strict-mode compliance. A schema
+> OpenAI would refuse is accepted and silently downgraded to unconstrained decoding.** The guard is
+> fail-open, and the only defence is to emit the compliant form ourselves rather than trusting the
+> endpoint to demand it.
+
+Re-probed with `additionalProperties: false` and a complete `required`, three trials against each
+of two request forms (`client.beta.chat.completions.parse`, and
+`response_format={"type": "json_schema", "strict": true}`):
+
+| Model | schema-ok | tools correctly named | extra keys returned |
+|---|---|---|---|
+| `meta/llama-3.3-70b-instruct` | **6/6** | 6/6 | 0/6 |
+| `nvidia/llama-3.3-nemotron-super-49b-v1.5` | **6/6** | 6/6 | 0/6 |
+| `openai/gpt-oss-120b` | 3/6 | 3/6 | 0/6 |
+
+`gpt-oss-120b`'s three failures were **all `APITimeoutError` at 120 s**, not schema failures.
+
+**The real operational risk is capacity, not schema fit.** Across roughly 26 probe calls the shared
+endpoint produced one `503 ResourceExhausted: Worker local total request limit reached (16/16)`
+and four 120 s timeouts. `red_team()` defaults to `max_concurrent=10` and retries three times with
+backoff, which against a 16-worker shared endpoint is a way to manufacture the exhaustion it is
+retrying around. The evals runner therefore sets `max_concurrent` low and leans on the response
+cache for reruns.
+
+One model was removed from consideration by the probe rather than by judgement:
+`qwen/qwen3-next-80b-a3b-instruct` answers **`410 Gone — end of life 2026-07-27`**.
+
+Schema fit and verdict quality are separate axes here exactly as session B found them to be for
+Bedrock. Both surviving models satisfied the schema perfectly; their *verdicts* differed, with
+`llama-3.3-70b` returning "incomplete information to make a verdict" on 4 of 6 trials and emitting
+tool names with trailing whitespace, while `nemotron-super-49b` answered the question asked on 6 of
+6. That is a judge-selection observation, not a schema one, and it is why the two roles are not
+given the same model.
+
+### 7.7 A USD ceiling does not guard an NVIDIA run
+
+`bench/rates.json` already prices `meta/llama-3.3-70b-instruct` at `0.0`, with the reason stated in
+the entry: the `build.nvidia.com` developer endpoint is **credit-metered, not billed per token**,
+so there is no dollar figure to charge against a dollar ceiling. Recording a price would be
+inventing one.
+
+The consequence had not been drawn before and is drawn here. **`--max-spend` is not a guard for the
+simulator and the judge.** It guards the *target*, whose triage and planner calls are Bedrock and
+genuinely priced per token. A run bounded only in dollars is unbounded in NVIDIA credits.
+`evals/run.py` therefore carries **two** ceilings — `--max-spend` in USD over the Bedrock target
+calls, and `--max-calls` over every provider call the run makes at all — because a ceiling that
+cannot see the resource it is spending is decoration.

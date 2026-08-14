@@ -73,6 +73,30 @@ bench = [
     "python-dotenv>=1.0",
 ]
 
+# The DeepTeam adversarial evaluation under evals/ only. Separate from `bench` and emphatically not
+# part of `dev`, for the reason stated above and one more: deepteam resolves deepeval, openai,
+# posthog, grpcio and opentelemetry, and CI's "no provider SDK is installed" step is what keeps the
+# default suite structurally unable to reach a provider.
+#
+# The offline half of evals/ — the attack corpus, the replay and the capture layer — imports none of
+# this. That is deliberate and is what lets the CI job that prints the headline number install
+# `.[dev]` alone. See docs/security-evaluation.md.
+evals = [
+    # Pinned exactly. docs/spike-findings.md §7 was verified against this release, and §7.3 records
+    # that its published defaults and its real ones disagree — a range would let the surface move
+    # under findings that were measured against one version.
+    "deepteam==1.0.9",
+    # NOT a preference. deepteam/telemetry.py imports sentry_sdk at module scope and the
+    # distribution does not declare it, so `pip install deepteam==1.0.9` alone produces a package
+    # that raises ModuleNotFoundError on import. spike-findings.md §7.1. Remove this the day
+    # upstream declares its own dependency, not before.
+    "sentry-sdk>=2.0",
+    # The same pin `bench` restates, and for the same reason: installing an extra must never
+    # quietly move strands-agents off the version the spike was verified against. evals/ reaches
+    # NVIDIA over the OpenAI-compatible path for the simulator and the judge.
+    "strands-agents[openai]==1.51.0",
+]
+
 # No [project.scripts] yet. The `careloop` console script comes back with careloop/cli.py in
 # commit 9; declaring it now installs a launcher that fails on invocation for anyone following
 # the README.

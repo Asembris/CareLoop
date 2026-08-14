@@ -21,7 +21,9 @@ from careloop.api.deps import (
     Caregiver,
     ContextFactory,
     Deps,
+    GraphRunner,
     clinic_context_factory,
+    default_context_factory,
     sections_from,
 )
 from careloop.api.models import CaseDetail, CaseSections, DeliverEventRequest, RunView
@@ -38,7 +40,6 @@ from careloop.graph.runner import (
     open_case,
     reject,
     reopen_case,
-    run_case,
 )
 from careloop.state.case import Case
 from careloop.state.machine import IllegalTransition
@@ -67,6 +68,7 @@ def create_app(
     *,
     events: EventSimulator | None = None,
     context_factory: ContextFactory | None = None,
+    graph_runner: GraphRunner | None = None,
     clinic: ClinicClient | None = None,
     demo: bool = False,
     static_dir: str | Path | None = None,
@@ -89,12 +91,26 @@ def create_app(
     keep the browser same-origin without any CORS middleware — see :mod:`careloop.api.static`.
     Off by default for the same reason ``demo`` is: an app that serves files nobody asked for is
     not the app the tests exercise.
+
+    ``graph_runner`` says *where* a run happens rather than what it is bound to, and supplying one
+    replaces local execution entirely — including ``context_factory``, which a remote runner has no
+    use for. See :data:`careloop.api.deps.GraphRunner`.
     """
-    bound = ApiDeps(store=store, events=events or EventSimulator(), clinic=clinic, demo=demo)
-    if context_factory is not None:
-        bound.context_factory = context_factory
-    elif clinic is not None:
-        bound.context_factory = clinic_context_factory(clinic)
+    factory = context_factory
+    if factory is None:
+        factory = clinic_context_factory(clinic) if clinic is not None else default_context_factory
+
+    # Resolved before construction rather than assigned onto the instance afterwards: the local
+    # graph runner is built from whichever factory this app ended up with, and a field patched in
+    # after ``__post_init__`` would have been built from the default one.
+    bound = ApiDeps(
+        store=store,
+        events=events or EventSimulator(),
+        context_factory=factory,
+        graph_runner=graph_runner,
+        clinic=clinic,
+        demo=demo,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -383,13 +399,12 @@ async def schedule(deps: ApiDeps, case_id: str, inbound: InboundEvent, *, wait: 
     """Start a graph run for ``case_id`` and report where it got to.
 
     The only thing this layer originates: *when* a run happens. It decides nothing about what the
-    run does — the context factory supplies the collaborators and
-    :func:`careloop.graph.runner.run_case` does the rest.
+    run does, and — since :data:`~careloop.api.deps.GraphRunner` — nothing about where: the runner
+    supplies the collaborators and performs the run, and all this knows is that it got a
+    :class:`~careloop.graph.runner.RunResult` back.
     """
     try:
-        record = deps.runs.start(
-            case_id, lambda: run_case(deps.context_factory(deps.store, inbound, case_id))
-        )
+        record = deps.runs.start(case_id, lambda: deps.graph_runner(deps.store, inbound, case_id))
     except RunAlreadyInFlight as clash:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(clash)) from None
 

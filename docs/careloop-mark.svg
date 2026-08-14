@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-labelledby="careloop-mark-title">
+  <title id="careloop-mark-title">CareLoop</title>
+  <!--
+    The CareLoop mark, for documents. Geometry is copied verbatim from
+    frontend/src/components/brand/CareLoopMark.tsx, which is the source of truth; the only
+    change is that the brand custom properties are resolved to their light-theme literals,
+    because nothing outside the app resolves a var().
+
+      brand-forest  #315e52   the caregiver, the larger figure
+      brand-sage    #a6b09d   the person cared for
+
+    Two figures whose bodies sweep into one shared point. Their paths converge without meeting,
+    leaving the loop open at the top — the gap a human decision fills.
+  -->
+  <circle cx="18.5" cy="11.5" r="5.4" fill="#315e52"/>
+  <circle cx="45.5" cy="15" r="4.3" fill="#a6b09d"/>
+  <path
+    d="M32 55.5c11.5-7.2 24.5-14.7 24.5-24.2 0-8-6.8-11.3-12-7.9-2.5 1.6-3.9 3.7-4.3 6"
+    stroke="#a6b09d" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path
+    d="M32 55.5C20 48 7.5 40.5 7.5 30.5c0-8.5 7.5-12 13-8.5 2.6 1.7 4.1 3.9 4.5 6.5"
+    stroke="#315e52" stroke-width="6.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>

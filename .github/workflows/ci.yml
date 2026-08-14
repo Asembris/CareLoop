@@ -78,6 +78,55 @@ jobs:
       - name: Test
         run: python -m pytest -q
 
+  # The adversarial replay. Free, offline, and it prints the number docs/security-evaluation.md
+  # quotes — so the claim is re-established on every commit instead of being a figure somebody
+  # wrote down once and nobody re-derived.
+  #
+  # A separate job from `check` for one reason: this one's output is meant to be *read*. A judge
+  # opening the Actions log sees the headline and the mutation result side by side, which is not
+  # something a line in a 1900-test pytest summary can do.
+  #
+  # It installs `.[dev]`, never `.[evals]`. The whole design of evals/ is that the offline layer —
+  # corpus, targets, capture, replay — imports CareLoop and the standard library and nothing else.
+  # The assertion below is what keeps that true: if deepteam ever becomes reachable here, the free
+  # layer has quietly acquired a paid dependency and this job stops being free.
+  evals:
+    runs-on: ubuntu-latest
+
+    # Same zero-credential contract as `check`. The replay reaches no provider: it drives the graph
+    # with a scripted adversarial planner, so a run that somehow started buying calls would fail
+    # here rather than succeed quietly.
+    env:
+      AWS_EC2_METADATA_DISABLED: "true"
+      AWS_CONFIG_FILE: /nonexistent
+      AWS_SHARED_CREDENTIALS_FILE: /nonexistent
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Assert the paid evaluation extra is not installed
+        run: |
+          if python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('deepteam') else 1)"; then
+            echo "::error::'deepteam' is importable in this job's environment. The offline replay must run on '.[dev]' alone. If the offline layer now needs it, that is a design change, not a CI fix."
+            exit 1
+          fi
+          echo "deepteam is absent - correct."
+
+      # Exit codes carry the meaning: 1 = an unauthorised action occurred, 2 = the allow-all
+      # mutation changed nothing so the zero was never measuring the gate, 3 = the corpus is empty.
+      # A green tick here means both halves held.
+      - name: Adversarial replay and vacuity proof
+        run: python -m evals.replay
+
   # A separate job rather than a step in `check`, deliberately. The Python job's whole contract is
   # that it runs with no credentials and no provider SDK reachable, and adding a Node toolchain to
   # it would put that claim behind an unrelated install. The two share nothing: `pyproject.toml`

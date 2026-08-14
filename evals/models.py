@@ -45,11 +45,18 @@ from careloop.llm.providers import ModelSpec, openai_client_args, parse_spec
 SIMULATOR_SPEC: Final[str] = "nvidia:meta/llama-3.3-70b-instruct"
 JUDGE_SPEC: Final[str] = "nvidia:nvidia/llama-3.3-nemotron-super-49b-v1.5"
 
-#: Generous on purpose. The judge is a reasoning model and spent 300 tokens thinking before
-#: emitting anything during the spike, which surfaced as a ``LengthFinishReasonError`` rather than
-#: as a schema failure — a truncation misreported as a refusal.
+#: Generous on purpose, twice over.
+#:
+#: The judge is a reasoning model and spent 300 tokens thinking before emitting anything during the
+#: spike, which surfaced as a ``LengthFinishReasonError`` rather than as a schema failure — a
+#: truncation misreported as a refusal.
+#:
+#: The simulator started at 2048 and the live smoke found that too low: constrained decoding will
+#: happily run a free-text ``reason`` field to the ceiling, and the response came back **truncated
+#: mid-string at 9655 characters**. See :class:`TruncatedResponse` for why raising this is only
+#: half the fix.
 JUDGE_MAX_TOKENS: Final[int] = 4096
-SIMULATOR_MAX_TOKENS: Final[int] = 2048
+SIMULATOR_MAX_TOKENS: Final[int] = 4096
 
 #: Well below deepteam's default of 10. The spike measured one
 #: ``503 ResourceExhausted: Worker local total request limit reached (16/16)`` and four 120 s
@@ -60,6 +67,26 @@ MAX_CONCURRENT: Final[int] = 2
 
 #: Per-request timeout. Longer than the spike's 120 s, which the judge occasionally exceeded.
 REQUEST_TIMEOUT_SECONDS: Final[float] = 180.0
+
+#: Client-level retries for transient failures — connection errors, 429, 5xx. See the comment at
+#: the construction site for why these are absorbed here rather than left to deepteam's loop.
+TRANSIENT_RETRIES: Final[int] = 3
+
+
+class TruncatedResponse(Exception):
+    """Raised when a response stopped because it ran out of tokens, not because it finished.
+
+    **Found by the live smoke, and the reason it is a named exception rather than a bigger
+    ``max_tokens``.** Under constrained decoding a model that runs out of budget mid-string emits
+    *syntactically incomplete JSON*, and pydantic reports that as
+    ``Invalid JSON: EOF while parsing a string at line 1 column 9655`` — a message that describes
+    the symptom and hides the cause. Anyone reading it mid-run would go looking for a schema bug.
+
+    Raising here also puts the failure on the path deepteam already has for it: its ``a_generate``
+    helper retries three times with an escalating prompt, so a truncation gets another attempt
+    instead of ending the attack. A larger ceiling reduces how often this fires; only detecting it
+    makes it legible when it does.
+    """
 
 
 class ModelRole(StrEnum):
@@ -166,12 +193,34 @@ def _adapter_class() -> type:
                 self._client = OpenAI(
                     **client_args_for(self.role, self.env),
                     timeout=REQUEST_TIMEOUT_SECONDS,
-                    max_retries=0,
+                    # Transient-only, and it belongs here rather than being left to deepteam. The
+                    # SDK retries connection errors, 429 and 5xx with its own backoff; the spike
+                    # and the live smoke both hit `503 ResourceExhausted (16/16 workers)` on this
+                    # shared endpoint. Absorbing that here keeps deepteam's three retries for what
+                    # they are for — a model that answered badly — instead of spending them on a
+                    # queue that was briefly full. Both loops sit inside the estimate's retry
+                    # factor, which is why that factor is deliberately an over-estimate.
+                    max_retries=TRANSIENT_RETRIES,
                 )
             return self._client
 
         def get_model_name(self) -> str:
             return self.spec.model_id
+
+        def _check_complete(self, response: Any, schema: type[BaseModel] | None) -> Any:
+            """Return the message content, or raise if the model ran out of room.
+
+            Checked before parsing, so a truncation is reported as a truncation. See
+            :class:`TruncatedResponse`.
+            """
+            choice = response.choices[0]
+            if choice.finish_reason == "length":
+                raise TruncatedResponse(
+                    f"{self.spec.model_id} stopped at the {self.max_tokens}-token ceiling with "
+                    f"{'an incomplete ' + schema.__name__ if schema else 'an incomplete response'};"
+                    f" this is a truncation, not a schema failure"
+                )
+            return choice.message.content
 
         def _call(self, prompt: str, schema: type[BaseModel] | None) -> Any:
             client = self.load_model()
@@ -181,7 +230,7 @@ def _adapter_class() -> type:
                     messages=[{"role": "user", "content": prompt}],
                     max_tokens=self.max_tokens,
                 )
-                return response.choices[0].message.content
+                return self._check_complete(response, None)
 
             response = client.chat.completions.create(
                 model=self.spec.model_id,
@@ -196,7 +245,7 @@ def _adapter_class() -> type:
                 },
                 max_tokens=self.max_tokens,
             )
-            return schema.model_validate_json(response.choices[0].message.content)
+            return schema.model_validate_json(self._check_complete(response, schema))
 
         def generate(self, prompt: str, schema: type[BaseModel] | None = None, **_: Any) -> Any:
             self.calls += 1
@@ -234,6 +283,7 @@ __all__ = [
     "SIMULATOR_MAX_TOKENS",
     "SIMULATOR_SPEC",
     "ModelRole",
+    "TruncatedResponse",
     "build_model",
     "client_args_for",
     "max_tokens_for",

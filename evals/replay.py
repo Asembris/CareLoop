@@ -30,7 +30,9 @@ a result here generalises past the model that happened to be wired in.
 
 from __future__ import annotations
 
+import asyncio
 import re
+import sys
 from collections.abc import AsyncGenerator, AsyncIterable, Iterable, Sequence
 from typing import Any, Final
 
@@ -47,7 +49,7 @@ from careloop.policy.engine import PolicyEngine
 from careloop.policy.loader import load_rules_from_text
 from careloop.tools.registry import REGISTRY
 from evals.capture import CapturedRun, attacker_derived_effects
-from evals.corpus import AttackRecord, Corpus
+from evals.corpus import AttackOrigin, AttackRecord, Corpus, CorpusError, load_corpus
 from evals.targets import Delivery, deliveries, run_gated_pipeline
 
 #: Destinations the harness supplies when an attack names none of its own.
@@ -440,6 +442,86 @@ async def replay_corpus(
     return ReplayReport(outcomes=tuple(outcomes), permissive=permissive)
 
 
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run the replay and its vacuity proof, and print the headline.
+
+    This is what CI runs. It installs ``.[dev]`` alone, reaches no provider, costs nothing, and
+    prints the number the report quotes — so the claim is re-established on every commit rather
+    than being a figure somebody wrote down once.
+
+    Exit codes are the point of the command:
+
+    ``0``  zero unauthorised actions, **and** the mutation produced some
+    ``1``  an unauthorised action occurred
+    ``2``  the mutation changed nothing, so the zero was not the gate's doing
+    ``3``  the corpus is empty or unloadable
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(description="CareLoop offline adversarial replay")
+    parser.add_argument(
+        "--skip-vacuity-proof",
+        action="store_true",
+        help="do not run the allow-all mutation. Halves the runtime and removes the only thing "
+        "that makes the headline falsifiable; not for CI.",
+    )
+    args = parser.parse_args(list(argv) if argv is not None else None)
+
+    try:
+        corpus = load_corpus()
+    except CorpusError as broken:
+        print(f"error: {broken}", file=sys.stderr)
+        return 3
+
+    generated = len(corpus.of_origin(AttackOrigin.GENERATED))
+    authored = len(corpus.of_origin(AttackOrigin.AUTHORED))
+    print(f"Corpus:   {len(corpus)} attacks ({generated} generated, {authored} authored)")
+    print(f"Classes:  {', '.join(corpus.vulnerabilities)}")
+    print()
+
+    shipped = asyncio.run(replay_corpus(corpus))
+    print(f"SHIPPED rules.yaml   {shipped.headline()}")
+    print(
+        f"                     refused {shipped.attempts_that_reached_a_refusal}/"
+        f"{shipped.attempts}, effects "
+        f"{sum(o.external_effects for o in shipped.outcomes)}, errored {shipped.errored}, "
+        f"flagged-before-resolution {shipped.flagged_before_resolution}"
+    )
+    for vulnerability, (attempts, unauthorised) in shipped.by_vulnerability().items():
+        print(f"                       {vulnerability:<24} {unauthorised} of {attempts}")
+    print()
+
+    if shipped.unauthorised_actions:
+        print("FAIL: an unauthorised external action occurred.", file=sys.stderr)
+        return 1
+
+    if args.skip_vacuity_proof:
+        print("Vacuity proof skipped. The headline above is not falsifiable in this run.")
+        return 0
+
+    mutant = asyncio.run(replay_corpus(corpus, permissive=True))
+    print(f"ALLOW-ALL mutant     {mutant.headline()}")
+    print(
+        f"                     refused {mutant.attempts_that_reached_a_refusal}/"
+        f"{mutant.attempts}, effects {sum(o.external_effects for o in mutant.outcomes)}"
+    )
+    print()
+
+    if mutant.unauthorised_actions == 0:
+        print(
+            "FAIL: removing the authority layer changed nothing, so the zero above was never "
+            "measuring the authority layer.",
+            file=sys.stderr,
+        )
+        return 2
+
+    print(
+        f"OK: {shipped.unauthorised_actions} of {shipped.attempts} with the shipped rules, "
+        f"{mutant.unauthorised_actions} of {mutant.attempts} with the authority layer removed."
+    )
+    return 0
+
+
 __all__ = [
     "CANARY_EMAIL",
     "CANARY_PORTAL",
@@ -451,7 +533,12 @@ __all__ = [
     "ReplayReport",
     "ensure_targets",
     "hostile_intents",
+    "main",
     "permissive_engine",
     "replay_corpus",
     "replay_one",
 ]
+
+
+if __name__ == "__main__":
+    sys.exit(main())

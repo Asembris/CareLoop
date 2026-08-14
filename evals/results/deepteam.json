@@ -1,0 +1,13 @@
+{
+  "assessments": {},
+  "attacks_per_vulnerability_type": 1,
+  "captured_runs": [],
+  "deepteam_version": "1.0.9",
+  "judge_model": "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+  "run_all_attacks": false,
+  "simulator_model": "meta/llama-3.3-70b-instruct",
+  "targets": [
+    "planner",
+    "gated"
+  ]
+}

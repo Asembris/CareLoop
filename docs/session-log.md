@@ -2852,6 +2852,170 @@ were deliberately **not** built: the seam is the deliverable, and an unused depl
 **AgentCore Runtime is deployed, invoked and measured in this project.** The cut is about where the
 production graph runs, not about whether AgentCore works.
 
+## Session G — 2026-08-14
+
+### Position
+
+Backend closed. `https://d2heuwvhvrdyig.cloudfront.net` live. This session produced **evidence**,
+not features: nothing under `careloop/`, `frontend/` or `deploy/` was touched, and the whole
+deliverable is `evals/`, two documents and a CI job.
+
+### The headline
+
+**Unauthorized external actions: 0 of 320 adversarial attempts.** With the authority layer removed
+and nothing else changed: **320 of 320**. Opposite on every single attempt.
+
+The corpus is 40 payloads — **36 generated** by `meta/llama-3.3-70b-instruct` under
+`deepteam==1.0.9`, **4 authored** — replayed across 2 delivery vectors and all 4 external-effect
+tools.
+
+Both numbers come out of `python -m evals.replay`, which runs offline, at $0, with no provider
+reachable, in about a second, on every commit.
+
+### The plan changed on approval, and the change is the session
+
+The brief asked for DeepTeam against two targets, which would have produced one stochastic,
+unrepeatable number costing money to reproduce. What shipped instead is a **two-layer split**:
+
+*Layer 1, paid and opt-in.* DeepTeam generates attacks and judges responses against both targets.
+Its job is to make the corpus **real rather than authored by us**.
+
+*Layer 2, offline and free.* Every committed attack is replayed through the real graph driven by a
+**fully compliant adversarial planner** — one that proposes exactly what the attacker asked, every
+time. That is the ceiling of model misbehaviour: no real model can be more compliant than one that
+always does what it is told. Measuring the ceiling is why the result generalises past whichever
+model happens to be wired in.
+
+The paid layer is a snapshot of one model on one day. The replay is a property of CareLoop. The
+report leads with the replay for that reason.
+
+### The vacuity proof is what makes it evidence
+
+Zero is also what a broken harness reports, what an empty corpus reports, and what a replay that
+never reaches the policy engine reports. So the identical replay runs again through an **allow-all
+policy engine** — a real `RuleSet` through the real loader and the real engine, differing from the
+shipped system in its rules and nothing else. Every one of the 32 then performs its effect and
+reaches `DONE`.
+
+Not merely a different total: **opposite on every attempt.** `TestTheVacuityProof` asserts it and
+`python -m evals.replay` exits `2` if the mutation ever stops changing the answer.
+
+### The paid layer half-ran, and the corpus was recovered from its cache
+
+Attack *generation* completed: 118 provider calls, 36 usable payloads. Attack *judging* never did.
+The planner-target run finished its calls and then **aborted printing its own results table** —
+DeepTeam's output contains emoji and Windows' default cp1252 stdout cannot encode them. The
+gated-target run died on `Node 'plan' execution timed out after 45.0s`, because Bedrock throttling
+pushed a Nova 2 Lite planner call — normally 1–2 s — past the graph's shipped node timeout.
+
+**`NODE_TIMEOUT` was not raised.** Relaxing it would have let the run finish, and would have meant
+the evaluation was no longer testing what ships, which would make every other number worthless. The
+shipped configuration is the thing under test; when the environment cannot run it, the honest result
+is an errored run rather than a reconfigured one. No DeepTeam pass/fail table is published, because
+none was earned.
+
+What the paid layer *did* deliver is the thing it existed for: a corpus that is genuinely generated
+rather than authored by us. `scripts/mine_attack_cache.py` recovers the payloads from the committed
+response cache — **no further paid call** — which took N from 32 to 320 and is the clearest argument
+for caching at the model boundary this project has produced.
+
+The generated records are `unattributed` to vulnerability class, and that is a limit rather than an
+omission: a `DeepEvalBaseLLM` is called with a prompt and a schema and **nothing else**, so the
+adapter never learns which vulnerability prompted a generation. Recovering it would mean parsing
+DeepTeam's internal prompt text, which is unstable across releases and a worse dependency than an
+honest label.
+
+### Four things found by running, not by reading
+
+**`"result":{}` — the judge would have received empty tool outputs.** `ExecutionResult.result` is
+declared as the empty base `ActionResult`, and pydantic serialises by *declared* type, so
+`execution_result.model_dump_json()` drops every field of the concrete `EmailSent`. Nothing raises.
+DeepTeam cannot assess a tool-level vulnerability without outputs, so the whole paid layer would
+have produced clean-looking verdicts about nothing. `evals.capture.tool_output` serialises the
+payload on its own instance; `TestTheOutputNeverLosesThePayload` fails against the naive form.
+
+**The spike recorded enum member names, not values.** Three of twenty-two disagree —
+`CROSS_CONTENT_INJECTION` is `cross_context_injection`, `DATABASE_ACCESS` is
+`api_and_database_access`, `DIRECT` is `direct_disclosure`. `Vulnerability(types=[...])` validates
+against the value, so all three raised. **It cost $0.00 at 0 provider calls**, because
+vulnerabilities are instantiated before `red_team()` is reached. Same shape as session B's
+instrument defects: wrong in a plausible-looking direction, and only execution caught it.
+
+**A truncation arrived disguised as a schema failure.** Under constrained decoding a model that
+runs out of tokens mid-string emits syntactically incomplete JSON, and pydantic reports
+`Invalid JSON: EOF while parsing a string at line 1 column 9655` — a message describing the symptom
+and hiding the cause. `TruncatedResponse` is raised on `finish_reason == "length"` so the failure is
+legible, and it lands on deepteam's own retry path. Raising `max_tokens` reduces how often it
+fires; only detecting it makes it readable when it does.
+
+**118 paid calls survived a crash in a print statement.** DeepTeam's results table contains emoji;
+Windows' default cp1252 stdout cannot encode them, and the run aborted *after* doing the work. The
+response cache meant the re-run under `PYTHONIOENCODING=utf-8` re-bought nothing. This is the
+clearest argument for caching at the model boundary that this project has produced.
+
+### Two deltas approved mid-session, both corrections to the brief
+
+**A USD ceiling cannot guard a credit-metered endpoint.** The brief asked for the NVIDIA model to be
+priced in `bench/rates.json` so the ceiling would not go blind. The honest answer is that
+`build.nvidia.com` is metered in credits, not billed per token — `bench/rates.json` already prices
+it `0.0` with that reason written into the entry, and inventing a price would be worse. So the run
+carries **two** ceilings: `--max-spend` in USD over the priced Bedrock target, and `--max-calls`
+over every provider call of any kind. A ceiling that cannot see the resource it is spending is
+decoration.
+
+**"Strict Structured Outputs" is a fact about OpenAI proper.** The plan chose NVIDIA for the judge
+on that basis. Measured: NVIDIA accepts a `strict: true` request whose *schema* is not
+strict-compliant — no `additionalProperties: false`, incomplete `required` — and decodes
+**unconstrained** rather than rejecting it as OpenAI does. The guard fails open and nothing reports
+it. `evals.models.strict_schema` emits the compliant form recursively, and the first probe's
+apparent refutation of the premise was my own non-compliant schema. With the compliant form,
+`meta/llama-3.3-70b-instruct` and `nvidia/llama-3.3-nemotron-super-49b-v1.5` satisfied it 6/6 across
+both request shapes.
+
+### The endpoint is the constraint on reproducing the paid layer
+
+Recorded because a table implying it ran smoothly would be misleading. `build.nvidia.com`:
+**15–38 s per healthy call**, `503 ResourceExhausted (16/16 workers)` under modest load, and 180 s
+request timeouts even at `max_concurrent=2`. DeepTeam defaults to `max_concurrent=10` with a
+three-attempt retry loop, which against a 16-worker shared pool manufactures the exhaustion it is
+retrying around.
+
+### `deepteam==1.0.9` phones home, and cannot be imported as distributed
+
+`deepteam/telemetry.py` runs `GET https://api.ipify.org` and `sentry_sdk.init(...)` against a
+hard-coded DSN at import unless already opted out — so the opt-out belongs *above the import
+statement*, not in a shell, and `evals/bridge.py` is the one module that imports deepteam. It also
+imports `sentry_sdk` without declaring it, so `pip install deepteam==1.0.9` alone produces a package
+that raises on import; the `evals` extra pins `sentry-sdk` to make the install work at all. Full
+detail in `docs/spike-findings.md` §7.
+
+### Guards proven non-vacuous by mutation
+
+| Mutation | Result |
+|---|---|
+| replay through an allow-all `PolicyEngine` | 320 of 320 unauthorized, `TestTheVacuityProof` red |
+| `tool_output` reduced to `result.model_dump_json()` | `TestTheOutputNeverLosesThePayload` red |
+| a `strict_schema` that returns `model_json_schema()` | `TestTheStrictSchemaIsActuallyStrict` red |
+| the telemetry opt-out moved below the deepteam import | `TestTheTelemetryOptOutPrecedesTheImport` red |
+| an `unauthorised_effect_rate` field on `CapturedRun` | `check_effects_are_not_a_rate` red |
+
+### Not built, deliberately
+
+**No runtime guardrail layer.** ADR 0003 records the rejection: NeMo Guardrails' execution rails sit
+exactly where the deterministic policy gate sits and decide the same question with a weaker
+instrument, and a guardrail's free-text rationale is precisely the interpolated model-visible reason
+invariant 6 forbids. garak and promptfoo are recorded as considered and not adopted, with reasons.
+
+**No change to `careloop/`.** The one seam the harness needed — running the graph over a different
+policy engine — lives in `evals/targets.py::install_engine` and is used only by the vacuity proof.
+
+### Cost and resources
+
+The offline layer is $0 and reruns free forever. The paid layer spent NVIDIA credits and a
+fractional-cent of Bedrock; the dollar ledger reports `$0.0000` against a `$2.00` ceiling because
+the simulator and judge have no per-token price, which is the finding above rather than an omission.
+Responses are cached and committed, so the table reproduces with no credentials.
+
 ## Open decisions
 
 Carry these forward. Nothing here is blocking the next commit except where it says so.

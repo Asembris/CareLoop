@@ -468,15 +468,25 @@ def check_promotable_keys_match_the_registry(registry: ToolRegistry = REGISTRY) 
     references them. A key the registry calls ``DESTINATION`` appearing here as ``VALUE`` is a
     contradiction, and the whole trust model rests on that classification being in one place.
 
+    **Resolved through :attr:`careloop.tools.registry.ArgSpec.trust_key`, not through argument
+    names.** The keys in this table are *fact* keys, and an argument's name is not its fact key —
+    ``send_email.to`` draws on ``caregiver_email``. Matching by name worked only for as long as
+    every promotable key happened to be spelled the same as the argument consuming it, and it would
+    have gone on silently checking nothing the first time one was not. Matching by ``trust_key`` is
+    the same question asked of the field that actually answers it.
+
     Raises:
         UnpromotableKeyDeclared: on any disagreement.
     """
     wrong: list[str] = []
     for key, declared in PROMOTABLE_KEYS.items():
         for tool in registry:
-            actual = tool.arg_class(key)
-            if actual is not None and actual is not declared:
-                wrong.append(f"{key}: table says {declared}, {tool.name} declares {actual}")
+            for arg in tool.args:
+                if arg.trust_key != key or arg.arg_class is declared:
+                    continue
+                wrong.append(
+                    f"{key}: table says {declared}, {tool.name}.{arg.name} declares {arg.arg_class}"
+                )
     if wrong:
         raise UnpromotableKeyDeclared(
             "promotable key table contradicts the tool registry: " + "; ".join(sorted(wrong))

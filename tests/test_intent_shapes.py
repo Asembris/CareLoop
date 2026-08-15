@@ -290,7 +290,7 @@ class TestAWellFormedProposalCanStillBeUnusable:
         case = make_case(
             facts=(make_fact("slot_start", facts["slot_start"], TrustLevel.CONTROLLED),)
         )
-        assert resolve_trust(supplied, case) is TrustLevel.UNTRUSTED
+        assert resolve_trust("slot_start", supplied, case) is TrustLevel.UNTRUSTED
         proposal = normalise("book_appointment", {"slot_start": supplied})
         assert transcription_defects(proposal, evidence_facts(user)) == ["slot_start"]
 
@@ -305,8 +305,8 @@ class TestAWellFormedProposalCanStillBeUnusable:
         case = make_case(
             facts=(make_fact("slot_start", facts["slot_start"], TrustLevel.CONTROLLED),)
         )
-        assert resolve_trust(facts["slot_start"], case) is TrustLevel.CONTROLLED
-        assert resolve_trust(facts["slot_start"] + ".", case) is TrustLevel.UNTRUSTED
+        assert resolve_trust("slot_start", facts["slot_start"], case) is TrustLevel.CONTROLLED
+        assert resolve_trust("slot_start", facts["slot_start"] + ".", case) is TrustLevel.UNTRUSTED
 
     def test_composed_prose_is_never_a_defect(self):
         """``body`` and ``reason`` are the planner's own words and no fact states them."""

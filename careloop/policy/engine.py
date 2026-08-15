@@ -8,9 +8,25 @@ from the timeline months later.
 Two ideas carry the weight.
 
 **Trust resolution.** An argument arrives as a bare value; its trust comes from looking that value
-up in the case's recorded facts. The lowest trust level among matching facts wins, and a value the
-case has never recorded resolves ``UNTRUSTED``. Deny-by-default therefore extends from rules to
-provenance: an argument that appeared from nowhere is untrusted, not unclassified.
+up in the case's recorded facts **under the fact key the argument declares**. The lowest trust
+level among facts matching *both* wins, and a value the case has never recorded under that key
+resolves ``UNTRUSTED``. Deny-by-default therefore extends from rules to provenance: an argument
+that appeared from nowhere is untrusted, not unclassified.
+
+**The key half of that pair is load-bearing and was once absent.** Until it was added, resolution
+matched on ``fact.value`` alone, so the question actually being asked was *"has this string ever
+been seen at this trust level, under any key at all?"* — and a value that earned trust for one
+purpose satisfied a requirement for another. A ``patient_id`` validated as ``PT-0000`` satisfied
+``upload_document.document_id``; a ``document_id`` satisfied ``book_appointment.slot_start`` and
+reached the clinic over HTTP; and the configured ``portal_id``, named as a *role*, resolved
+``TRUSTED`` and walked past ``deny-authority-grant-below-trusted`` — the system's only
+``AUTHORITY`` guard — with no promotion involved and nothing but trusted configuration on the case.
+``tests/test_typed_trust.py`` refuses all four, and proves it would still notice if the key were
+ignored again.
+
+There is deliberately **no fallback to matching by value** when an argument declares no key. Such an
+argument resolves ``UNTRUSTED`` outright, and a rule that tries to require trust of one fails in
+:mod:`careloop.policy.loader` at startup rather than becoming a rule that can never match.
 
 The text an argument is reduced to before that lookup comes from
 :func:`careloop.provenance.canonical.canonical_value`, re-exported here for the callers that have
@@ -37,20 +53,34 @@ from careloop.tools.idempotency import UncanonicalizableArgument, args_digest
 from careloop.tools.registry import REGISTRY, ToolRegistry
 
 
-def resolve_trust(value: object, case: Case) -> TrustLevel:
-    """Return the trust level ``value`` carries within ``case``.
+def resolve_trust(fact_key: str | None, value: object, case: Case) -> TrustLevel:
+    """Return the trust level ``value`` carries within ``case`` **as a** ``fact_key``.
 
-    The **lowest** level among facts whose recorded value matches exactly. Lowest rather than
-    highest so that a poisoned duplicate cannot be laundered by a legitimate twin: if the same
-    string was seen both in trusted config and in an attacker-controlled PDF, the PDF wins.
+    ``fact_key`` is the :attr:`careloop.provenance.facts.Fact.key` the consuming argument declares
+    in :data:`careloop.tools.registry.REGISTRY`, and it is required and positional so that no
+    caller can perform a value-only lookup by omitting it. ``None`` means the argument declares no
+    key, and resolves ``UNTRUSTED`` without consulting the case at all — there is no fallback to
+    matching by value, because a fallback would restore exactly the defect this parameter exists to
+    close.
+
+    The **lowest** level among facts matching that key *and* that canonical value. Lowest rather
+    than highest so that a poisoned duplicate cannot be laundered by a legitimate twin: if the same
+    string was recorded under one key both from trusted config and from an attacker-controlled PDF,
+    the PDF wins. Scoped to one key rather than applied across all of them, because a fact under an
+    unrelated key is not a duplicate of this one — it is a different statement that happens to be
+    spelled the same, and letting it participate was both the vulnerability above and a standing
+    false-denial hazard in the other direction.
     """
+    if fact_key is None:
+        return TrustLevel.UNTRUSTED
+
     canonical = canonical_value(value)
     if canonical is None:
         return TrustLevel.UNTRUSTED
 
     lowest: TrustLevel | None = None
     for fact in case.facts:
-        if fact.value != canonical:
+        if fact.key != fact_key or fact.value != canonical:
             continue
         if lowest is None or not at_least(fact.trust_level, lowest):
             lowest = fact.trust_level
@@ -157,7 +187,10 @@ class PolicyEngine:
             )
 
         arg_classes = {name: spec.arg_class(name) for name in supplied}
-        arg_trust = {name: resolve_trust(value, case) for name, value in supplied.items()}
+        arg_trust = {
+            name: resolve_trust(spec.trust_key(name), value, case)
+            for name, value in supplied.items()
+        }
 
         for effect in _MATCH_ORDER:
             for rule in self._ruleset.by_effect(effect):

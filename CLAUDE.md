@@ -71,7 +71,8 @@ working around it.
    `CONTROLLED` fact exists on the case" passes in both worlds and distinguishes neither.
 4. **`Case` is frozen.** `transition()` is the only writer of `Case.state`. `DONE` is reachable only
    from `VERIFYING`, which makes "did not finish via the unsafe path" structural rather than
-   observational.
+   observational — and `VERIFYING` reaches no state from which an effect can be proposed, which
+   makes "did not act again on an outcome it could not certify" structural in the same way.
 5. **Loop bounds come from Strands graph primitives** — `set_max_node_executions`,
    `set_execution_timeout`, `set_node_timeout`. Never hand-roll a counter.
 6. **Model-visible denial reasons come from a closed `ReasonCode` enum**, with no interpolation
@@ -413,6 +414,55 @@ influenced by document evidence. This patch verifies external fidelity, not prov
 appropriateness; whether the reason should additionally be templated from controlled facts,
 constrained, or removed is still open and deliberately untouched, so the two properties keep
 independent causal evidence.
+
+**Once an external effect has been attempted, a failed verification cannot return the case to
+autonomous planning.** `VerifyNode` parks it in `AWAITING_HUMAN` through a manual handoff carrying
+**no `Approval`** — a `MANUAL_HANDOFF_REQUIRED` entry with `EXTERNAL_STATE_NOT_CONFIRMED`, written by
+`_park_with_nothing_certifiable`. The graph has **no `verify → plan` edge** and the state machine
+**forbids `VERIFYING → PLANNING`**; both halves are load-bearing, because the edge stops the graph
+routing there and the transition rule stops a future node writing the state at all.
+
+It used to route to `PLANNING`, and the standing account of the cost — open decision 18, "it burns a
+node budget but books nothing twice" — was **true only because the reproposal was identical**. Every
+entry into `VERIFYING` is post-effect: it is reachable only from `EXECUTING` and `WAITING_EXTERNAL`,
+`ExecuteNode` transitions there after recording an action or suppressing a duplicate of one, and
+`VerifyNode` fails the case outright when no `ActionRecord` exists. So "a proposal that did not verify
+deserves another attempt" was never a description of a reachable state. `book_appointment.reason` is
+planner-authored free text carrying no `trust_key` and named by no rule, so a reproposal changing only
+*that* moved the argument digest, moved the idempotency key, and defeated duplicate suppression in
+CareLoop **and** in Demo World. Measured through the real graph on a loopback clinic: against a clinic
+that could not confirm the first booking, **two `ACTION_EXECUTED` entries, two `ActionRecord`s, two
+executor invocations, two confirmation ids** — a second autonomous external booking issued after
+CareLoop already knew it could not certify the first. Against a diverging clinic, the second `POST`
+left CareLoop and only Demo World's own slot-collision rule refused it, which is an external service's
+consistency check standing where an authority decision should have been.
+
+**Verified divergence and unavailable read-back share this lifecycle, deliberately.** `Verification`
+collapses "the independent read succeeded and the values disagree" with "the read established
+nothing", and `VerifyNode._verify` says so. Their *remediation* may differ — a bounded
+observation-only retry is defensible for the second and never for the first, since Demo World is
+deterministic with no eventual-consistency model — but retrying the *effect* is wrong for both, and
+stopping is the only lifecycle correct for both today. Splitting them needs a discriminator
+`Verification` does not carry and is deliberately deferred. **A malformed observation does not use
+this path yet**: a 200 whose body omits a required field raises out of the node, `run_case` marks the
+case `FAILED` and re-raises. That already fails closed, never replans and issues no second effect;
+routing it here is a separate patch.
+
+`EXTERNAL_STATE_NOT_CONFIRMED` is the eighth `ReasonCode` and the second that parks a *case* rather
+than refusing a call, so no rule carries it and the engine never emits it. It is named for what
+CareLoop knows rather than for what happened, because one code covers both evidence states; reusing
+`NO_SAFE_ACTION_AVAILABLE` would have said every action was refused, which is close to the opposite of
+what occurred and would have put a false statement in an append-only trail. The timeline keeps all
+three facts separately — `ACTION_EXECUTED` (what happened), `VERIFICATION_FAILED` (why it could not be
+certified), `MANUAL_HANDOFF_REQUIRED` (what CareLoop decided) — and `MAX_NODE_EXECUTIONS` is a runaway
+detector again rather than the thing that decides a domain outcome.
+
+`tests/test_post_effect_lifecycle.py` owns the property, over reason drift, patient drift and a 404
+read-back, with the second-effect prevention as its load-bearing class. A mutant restoring **all
+three** halves — the node's transition, the graph edge, and the transition-table entry, which is what
+it takes to recreate the bug rather than trip over one of its own guards — turns 17 tests red across
+four files while every `verify_action` comparison test, the whole happy path, idempotency, and every
+policy and approval suite stay green.
 
 **An `Approval` is a capability, and a manual handoff is not one.** An approval says a caregiver was
 asked about *one exact call*, identified by `(tool_name, args_digest)`; deciding it releases that

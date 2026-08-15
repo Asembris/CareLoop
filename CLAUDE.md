@@ -329,11 +329,39 @@ was covering this before: nothing was.
 No migration, and none was possible to need — `Approval` already stored both fields, so a persisted
 record gains the stronger reading and keeps its identifier byte for byte.
 
-**`approval_for` and `is_approved` are the enforced action identity; `proposal_for` is not.** It
-still resolves the caregiver's decision card by digest alone. That is a display surface, it
-authorises nothing, and it was kept out of this patch on purpose so the authority property has one
-attributable cause — but a card is what a person reads before granting authority, so it is an open
-question rather than a settled one.
+**The decision surface resolves the proposal by the same capability identity, and the three
+identities stay distinct.** `approval_id` names the *occurrence of asking*; `(tool_name,
+args_digest)` names the *exact capability*; `proposal_for(case, tool_name, digest)` returns the
+*exact proposal reconstructed for that capability*. A proposal belonging to another tool cannot
+supply proposal-derived display data for a pending decision, however its arguments hash.
+
+Session M closed the half session L deliberately left open. `decision_view` held
+`Approval.tool_name` and passed only `Approval.args_digest` to `proposal_for`, so the card asked
+"which proposal has arguments that hash like this?" while the approval meant "this exact call".
+**It authorised nothing** — `Case.approval_for` and `Case.is_approved` were already tool-bound, and
+`args` is the only proposal-derived field on `DecisionView` — so this was human-consent integrity,
+not the authority path, and it was **not reachable under the shipped workflow** for three
+independent reasons: the two `REQUIRE_HUMAN` tools declare disjoint argument names, the approval is
+raised from the newest proposal inside the same gate execution that read it, and nothing plans while
+a case is `AWAITING_HUMAN`. All three are facts about registry shape and node write order, stated in
+no rule, which is the reason to close it rather than note it.
+
+What the repair could *not* fix is worth stating, because reading the code suggests otherwise.
+`Proposal.args` is `dict[str, str]` and `canonical_value` returns a `str` verbatim, so **an equal
+digest is an equal argument map** short of a SHA-256 collision: two same-digest proposals for
+different tools never rendered *different* values, and `rationale` is not projected. The one
+observable form was **borrowing** — an approval whose own proposal is absent taking another tool's
+arguments instead of the documented no-match `args = {}` — and that is what
+`tests/test_decision_surface.py` proves through `decision_view` and through `case_detail`. Record
+identity is proven at helper level on `rationale`, which the digest does not cover. A mutant that
+removes the tool guard **and nothing else** turns seven of that file's tests red while every
+same-tool positive, the different-digest case and the no-match case stay green, and the four closed
+approval suites plus `test_api_projections.py` and `test_graph_wiring.py` — 191 tests — do not move.
+
+`proposal_for` takes both halves positionally and there is **no digest-only variant anywhere**;
+adding one would reopen this under a different name. No migration: `Approval` already stored both
+fields and `PLAN_PROPOSED` already stored the tool name, so the stronger lookup is purely
+interpretive.
 
 **`careloop/api/` decides nothing.** It projects stored cases and calls `open_case`, `reopen_case`,
 `approve`, `reject` and `run_case`. The one thing it originates is *when* a run happens, and

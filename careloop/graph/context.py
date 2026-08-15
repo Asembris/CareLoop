@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict
 
 from careloop.agents.planner import PlannerAgent
 from careloop.agents.triage import TriageAgent
-from careloop.graph.verify import ReadBack, ReadBackFailed
+from careloop.graph.verify import ObservationAbsent, ObservationUnavailable, ReadBack
 from careloop.policy.gate import PolicyGate
 from careloop.policy.gated import GatedToolSet
 from careloop.policy.hook import PolicyHook, policy_registry
@@ -37,7 +37,13 @@ from careloop.policy.verdicts import ReasonCode
 from careloop.state.case import Approval, Case, CaseState, TimelineKind
 from careloop.state.store import CaseStore
 from careloop.tools.callables import ToolSet
-from careloop.tools.clinic import ClinicClient, ClinicRefused, ClinicUnavailable, clinic_executor
+from careloop.tools.clinic import (
+    AppointmentNotFound,
+    ClinicClient,
+    ClinicRefused,
+    ClinicUnavailable,
+    clinic_executor,
+)
 from careloop.tools.documents import DocumentStore
 from careloop.tools.executor import MockExternalExecutor
 from careloop.tools.idempotency import args_digest
@@ -370,16 +376,43 @@ def _clinic_readback(client: ClinicClient) -> ReadBack:
 
     **A separate GET, keyed on the confirmation the effect returned.** It is not the booking's own
     response replayed, and it is not read from anything CareLoop stored — those would both make the
-    check a re-read of CareLoop's receipt. The refusal and the outage are both turned into
-    :class:`~careloop.graph.verify.ReadBackFailed`, so a verifier sees one failure vocabulary and
-    the graph layer does not have to know what an HTTP client's exceptions are called.
+    check a re-read of CareLoop's receipt.
+
+    **This is the boundary where HTTP stops.** Everything the client can raise is translated into
+    the observation vocabulary of :mod:`careloop.graph.verify`, so a verifier and a graph node see
+    what the read *established* rather than what status a service returned. Nothing above this
+    function knows that a clinic speaks HTTP at all, which is what lets a second integration answer
+    the same question in its own terms.
+
+    Two answers, and they are different facts:
+
+    ``AppointmentNotFound`` — the clinic answered about the exact confirmation it minted and said
+    it holds no such appointment. A definite external answer, so
+    :class:`~careloop.graph.verify.ObservationAbsent`.
+
+    Anything else — nobody answered, or what answered could not serve the read. CareLoop
+    established nothing, so :class:`~careloop.graph.verify.ObservationUnavailable`. The originating
+    exception is kept as ``__cause__`` rather than discarded: distinguishing a transient cause from
+    a permanent one is a judgement Patch 2A deliberately does not make, and re-deriving it later
+    should not mean re-plumbing this.
+
+    The ordering is load-bearing — ``AppointmentNotFound`` is a ``ClinicRefused``, so the narrower
+    clause has to come first or the absence is swallowed by the general case.
+
+    **The message is identical for both**, and that is deliberate too. What the failure *means*
+    lives in its type; a reader who wants the clinic's own words has the diagnostic. Making the two
+    texts differ would invite something downstream to tell them apart by reading it.
     """
 
     def observe(result: ActionResult) -> ActionResult:
         try:
             return client.appointment(result.confirmation_id)
+        except AppointmentNotFound as absent:
+            raise ObservationAbsent(
+                f"the clinic could not confirm {result.confirmation_id}: {absent}"
+            ) from absent
         except (ClinicRefused, ClinicUnavailable) as failure:
-            raise ReadBackFailed(
+            raise ObservationUnavailable(
                 f"the clinic could not confirm {result.confirmation_id}: {failure}"
             ) from failure
 

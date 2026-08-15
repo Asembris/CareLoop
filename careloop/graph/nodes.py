@@ -561,6 +561,7 @@ class VerifyNode(DeterministicNode):
                 payload={
                     "tool_name": proposal.tool_name,
                     "read_back": str(verification.externally_observed).lower(),
+                    "observation": str(verification.outcome),
                 },
                 now=self.context.now(),
             )
@@ -581,6 +582,7 @@ class VerifyNode(DeterministicNode):
                 payload={
                     "tool_name": proposal.tool_name,
                     "read_back": str(verification.externally_observed).lower(),
+                    "observation": str(verification.outcome),
                 },
                 now=self.context.now(),
             )
@@ -592,11 +594,17 @@ class VerifyNode(DeterministicNode):
     def _verify(self, proposal: Proposal, record: ActionRecord, result) -> Verification:
         """Verify the recorded effect, reading the external system back where there is one.
 
-        A read-back failure is a *verification* failure, not an exception out of the node. The two
-        outcomes look the same from here on purpose: "the clinic says something different" and "the
-        clinic cannot show me the appointment at all" are both reasons not to call an effect
-        verified, and turning the second into a crash would make an integration outage look like a
-        CareLoop fault.
+        A read-back failure is a *verification* failure, not an exception out of the node. Every
+        way of failing to certify still parks the case identically, and that is unchanged: "the
+        clinic says something different" and "the clinic cannot show me the appointment at all" are
+        both reasons not to call an effect verified, and turning the second into a crash would make
+        an integration outage look like a CareLoop fault.
+
+        **What the two no longer share is a description.** The failure's *type* names the evidence
+        class — an absence the clinic asserted, or a read that established nothing — and it is
+        carried onto the ``Verification`` and from there to the timeline. Read from the type and
+        never from the message, so a clinic whose error text claims the observation matched changes
+        nothing: see ``tests/test_observation_outcome.py::TestTheOutcomeIsNotReadOutOfText``.
         """
         observed = None
         readback = self.context.readbacks.get(record.action_type)
@@ -605,7 +613,10 @@ class VerifyNode(DeterministicNode):
                 observed = readback(result)
             except ReadBackFailed as unreadable:
                 return Verification(
-                    passed=False, diagnostic=str(unreadable), externally_observed=True
+                    passed=False,
+                    diagnostic=str(unreadable),
+                    externally_observed=True,
+                    outcome=unreadable.outcome,
                 )
 
         return verify_action(
@@ -793,17 +804,21 @@ def _park_with_nothing_certifiable(case: Case, proposal: Proposal, now) -> Case:
     second ``POST`` left CareLoop and only the clinic's own slot-collision rule refused it — an
     external service's consistency check standing where an authority decision should have been.
 
-    **Both failure conditions land here, deliberately.** ``Verification`` collapses "the read
-    succeeded and disagreed" with "the read established nothing", and
-    :meth:`VerifyNode._verify` says so. Their remediation may diverge later — retrying the
-    *observation* is defensible for the second and never for the first — but retrying the *effect*
-    is wrong for both, and stopping is the only lifecycle that is correct for both today.
+    **Every failure condition lands here, deliberately, and they are no longer indistinguishable
+    while doing so.** :class:`careloop.graph.verify.ObservationOutcome` now tells the three apart —
+    the read succeeded and disagreed, the external system answered that it holds nothing, the read
+    established nothing at all — and the ``VERIFICATION_FAILED`` entry above records which. That
+    changed what the trail *says* and deliberately not what the case *does*: retrying the effect is
+    wrong for all three, and stopping is the only lifecycle correct for all three today. Whether
+    any of them should later be recovered differently is a question the vocabulary makes askable,
+    and this function is not where it is answered.
 
     The ``VERIFICATION_FAILED`` entry is written by the caller and stays: what happened, why it
     could not be certified, and what CareLoop decided are three separate facts and the trail keeps
     all three. The proposal is named here so the diagnostic says which action is unconfirmed, and
     its arguments are deliberately absent — they are already on the ``PLAN_PROPOSED`` entry, and the
     values read back from the outside world stay in the verification diagnostic the API withholds.
+
     """
     case = append_event(
         case,

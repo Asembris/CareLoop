@@ -203,6 +203,15 @@ TIMELINE_PAYLOAD_FIELDS: Final[frozenset[str]] = frozenset(
         # be read as the stronger. It carries no external content — the observed values stay in the
         # diagnostic, which is withheld wholesale.
         "read_back",
+        # "observation" is one member of the closed careloop.graph.verify.ObservationOutcome
+        # vocabulary and can be nothing else — a name CareLoop chose, never a value it was told.
+        # That is what makes exposing it safe where the diagnostic beside it is not: the diagnostic
+        # quotes whatever the external system said, and this says only which of five things the read
+        # established. It is exposed for the same reason "read_back" is, one level sharper: a panel
+        # that cannot tell "the clinic disagreed with us" from "the clinic holds no such booking"
+        # from "we could not reach the clinic" is showing a caregiver three different situations as
+        # one, and they call for different things to be done next.
+        "observation",
     }
 )
 

@@ -36,6 +36,7 @@ from careloop.graph.runner import (
     ApprovalAlreadyDecided,
     CaseNotReopenable,
     NoSuchApproval,
+    NotAnApprovableAction,
     approve,
     open_case,
     reject,
@@ -366,7 +367,11 @@ async def decide(
         record(deps.store, case_id, approval_id, decided_by=who)
     except NoSuchApproval as missing:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(missing)) from None
-    except (ApprovalAlreadyDecided, IllegalTransition) as refusal:
+    except (ApprovalAlreadyDecided, NotAnApprovableAction, IllegalTransition) as refusal:
+        # 409 rather than 400: the request is well formed and names a record the case really
+        # carries. What it conflicts with is the state of that record — already decided, or, for a
+        # manual handoff persisted before those stopped being written as approvals, a record that
+        # authorises no call at all. A 400 would blame the caller for the case's history.
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(refusal)) from None
 
     return await schedule(deps, case_id, inbound, wait=wait)

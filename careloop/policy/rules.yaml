@@ -116,6 +116,44 @@ rules:
       is remediable: slot_start is VALUE-class and therefore promotable, so a time lifted from a
       document becomes usable once a deterministic validator has passed it.
 
+  # The subject of the booking, held to the same standard as its time. Session J: this rule did not
+  # exist, and allow-booking-on-validated-slot guarded patient_id with `args_present`, which the
+  # engine implements as "the canonical value is neither absent nor empty". The engine *computed*
+  # patient_id's trust and no rule read it, so a booking with a configured provider and a validated
+  # slot reached ALLOW carrying any non-empty string — an invented identifier, a literal borrowed
+  # from an unrelated fact key, a patient_id that never validated, or the real one misquoted. All
+  # four were reproduced against these rules, and book_appointment is the one tool whose effect is
+  # genuinely external, so the string reached the clinic over HTTP and was recorded there as the
+  # person being seen. Demo World validates the slot and the idempotency key and never the patient;
+  # a third-party service's own consistency check would not be an authority decision if it did.
+  #
+  # This is independent of session I's typed trust and is not a variation on it: resolution was
+  # already returning UNTRUSTED for every one of those shapes, correctly. One is about how trust is
+  # computed, this is about whether it is required.
+  #
+  # CONTROLLED rather than TRUSTED, deliberately. Nothing in CareLoop produces a TRUSTED patient —
+  # TRUSTED_CONFIG declares caregiver_email, provider_id and portal_id — so requiring it would make
+  # booking unreachable in the way grant_portal_access already honestly is. CONTROLLED is exactly
+  # what a passed format validator plus a passed patient-id-agrees-across-documents check earns.
+  - id: deny-booking-for-unverified-patient
+    effect: DENY
+    tools: [book_appointment]
+    when:
+      arg_trust_below:
+        - arg: patient_id
+          level: CONTROLLED
+          arg_class: VALUE
+    reason_code: INSUFFICIENT_FACT_TRUST
+    diagnostic: >-
+      book_appointment.patient_id resolved below CONTROLLED. Remediable in the same way the slot is
+      and for the same reason: patient_id is VALUE-class and promotable, so an identifier lifted
+      from a document becomes usable once its format validator and the cross-document agreement
+      check have both passed. Note what this refuses beyond the not-yet-validated case — an
+      identifier no document mentions, one borrowed from a different fact key that happens to be
+      spelled the same, and the correct identifier transcribed inexactly. Trust is resolved against
+      the fact key the argument declares (patient_id) and canonical values are compared verbatim, so
+      "PT-4417 " and "pt-4417" are different values and match nothing.
+
   # ---------------------------------------------------------------------------------------------
   # REQUIRE_HUMAN — evaluated only when no DENY matched.
   # ---------------------------------------------------------------------------------------------
@@ -174,10 +212,19 @@ rules:
         - arg: slot_start
           level: CONTROLLED
           arg_class: VALUE
-      args_present: [patient_id]
+        - arg: patient_id
+          level: CONTROLLED
+          arg_class: VALUE
     diagnostic: >-
-      Booking against a provider from trusted config, at a validated time, with the case cleared
-      for execution. This is the autonomous path.
+      Booking against a provider from trusted config, at a validated time, for a patient the case's
+      own evidence establishes, with the case cleared for execution. This is the autonomous path,
+      and it stays autonomous: all three requirements are met from documents CareLoop already read,
+      so no caregiver is asked anything.
+      The patient clause replaced `args_present: [patient_id]` in session J, and the presence check
+      was removed rather than kept beside it because the trust clause strictly dominates it: an
+      argument the call omits resolves UNTRUSTED, and no fact can carry an empty value under
+      patient_id because patient_id_format requires PT-0000. Keeping both would leave two conditions
+      where one is stronger, and the weaker one is what let an invented identifier through.
 
   - id: allow-upload-to-trusted-portal
     effect: ALLOW

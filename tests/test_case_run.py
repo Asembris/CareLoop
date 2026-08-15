@@ -738,12 +738,17 @@ class TestT4LoopBound:
 
 
 class TestVerificationCanFail:
-    """The ``VERIFYING`` to ``PLANNING`` edge, which no happy path exercises.
+    """The node's failure branch, which no happy path exercises.
 
     Written after a mutation survived: making :class:`~careloop.graph.nodes.VerifyNode` pass
     unconditionally left the whole suite green. ``verify_action`` was unit-tested for failure, but
     the node's failure *branch* was not — and a verification step that cannot refuse is the same
     hollow guard invariant 4 exists to avoid.
+
+    The branch used to end at ``PLANNING`` and now parks the case; what this class is still for is
+    the *refusal*, closed-loop and without a clinic, on a recorded effect that is not the effect
+    that was authorised. Where that refusal leads belongs to
+    ``tests/test_post_effect_lifecycle.py``.
 
     In a normal run the record and the result are both written by the execute node from one
     proposal, so they cannot disagree. Disagreement is constructed here, which is exactly the
@@ -802,8 +807,9 @@ class TestVerificationCanFail:
         return store
 
     def _run(self):
-        # The planner is given several attempts because a failed verification returns the case to
-        # it, which is the behaviour under test. The bound stops the run either way.
+        # The planner is given several attempts it no longer gets. A failed verification used to
+        # return the case to it; the script stays long so a regression that planned again reports
+        # *that* rather than MockScriptExhausted standing in front of it.
         return run(
             self._case_in_verifying_with_a_mismatched_action(),
             REFERRAL_EVENT,
@@ -822,10 +828,19 @@ class TestVerificationCanFail:
 
         assert result.case.state is not CaseState.DONE
 
-    def test_the_failure_routes_back_to_the_planner(self) -> None:
+    def test_the_failure_does_not_route_back_to_the_planner(self) -> None:
+        """Inverted, and the inversion is the repair.
+
+        This asserted ``"plan" in executed_nodes`` — a verification failure returning the case to
+        the planner. Every entry into ``VERIFYING`` is post-effect, so what that described was
+        replanning on top of an action already carried out, and a reproposal differing in one
+        free-text argument could execute a second real one. The case is resumed here directly into
+        ``VERIFYING``, so the planner running at all would mean the failure sent it there.
+        """
         result, _ = self._run()
 
-        assert "plan" in result.executed_nodes
+        assert result.executed_nodes == ("dispatch", "verify")
+        assert result.case.state is CaseState.AWAITING_HUMAN
 
     def test_the_diagnostic_names_the_field_that_disagreed(self) -> None:
         result, _ = self._run()

@@ -116,9 +116,17 @@ def book_a_referral(
 def diverging_run(clinic_service: tuple[str, Clinic], clinic_factory):
     """One run against a clinic that diverges from what was authorised.
 
-    Bounded deliberately: a failed verification returns the case to ``PLANNING``, so the run cycles
-    until the SDK's node bound stops it. That is the standing cost recorded as open decision 18 —
-    loud, terminal and bounded, but a burnt node budget where a single ``FAILED`` would do.
+    The run ends in seven nodes with the case parked for a caregiver. It used to cycle: a failed
+    verification returned the case to ``PLANNING`` until the SDK's node bound stopped it, which was
+    open decision 18 and is closed — the cost was never only the budget, since a reproposal
+    differing in one argument keyed differently and executed a second real effect. ``verify`` no
+    longer has an outgoing edge and ``VERIFYING → PLANNING`` is an illegal transition.
+
+    ``planner_repeats`` stays above one deliberately. The mock raises rather than inventing an
+    answer when its script runs out, so a script sized to the fixed behaviour would report
+    ``MockScriptExhausted`` in front of any regression that planned again — a confusing failure
+    standing where the real one should be. The bound stays low for the same reason it always did.
+    ``tests/test_post_effect_lifecycle.py`` is where the lifecycle itself is asserted.
     """
     base_url, world = clinic_service
     return book_a_referral(
@@ -598,34 +606,53 @@ class TestTheExecutedReasonIsCheckedOnTheWayOutToo:
         assert held[0].slot_start == BOOKING["slot_start"]
 
 
-class TestTheCostOfAFailedReadBack:
+class TestWhatAMismatchCosts:
     """What a mismatch costs, asserted rather than left to be discovered on camera.
 
-    A failed verification returns the case to ``PLANNING``, so the run replans, finds the effect
-    already recorded, suppresses it, verifies again, and fails again — until the SDK's node bound
-    stops it. Loud, terminal and bounded, and it books nothing twice; but it burns the node budget
-    where a single ``FAILED`` would do. Routing a read-back failure straight to ``FAILED`` is a
-    change to verification behaviour that predates this session, so it is recorded as open decision
-    18 rather than made in passing. These tests are what that decision would change.
+    It used to cost a node budget. A failed verification returned the case to ``PLANNING``, so the
+    run replanned, found the effect already recorded, suppressed it, verified again and failed
+    again — until the SDK's node bound stopped it and ``run_case`` marked the case ``FAILED``. That
+    was open decision 18, and closing it found the cost was never only the budget: the loop was
+    survivable *because* the reproposal was identical, and one that differed in a single free-text
+    argument keyed differently, walked past duplicate suppression and executed a second real effect.
+
+    So the mismatch now costs one proposal, one effect and one verification, and the case is parked
+    for a person. The two assertions below are what that decision changed; the lifecycle itself
+    belongs to ``tests/test_post_effect_lifecycle.py``, which is also where the second-effect proof
+    lives.
     """
 
-    def test_the_run_ends_bounded_rather_than_hung(
+    def test_the_run_ends_by_deciding_rather_than_by_running_out(
         self, clinic_service: tuple[str, Clinic], clinic_state: Clinic
     ) -> None:
+        """``hit_the_bound`` is the whole point: the SDK's ceiling is a runaway detector again."""
         result, _context = diverging_run(clinic_service, MovedByTheFrontDesk)
 
-        assert result.hit_the_bound
-        assert result.case.state is CaseState.FAILED
+        assert not result.hit_the_bound
+        assert result.case.state is CaseState.AWAITING_HUMAN
+        assert result.executed_nodes == (
+            "dispatch",
+            "triage",
+            "evidence",
+            "plan",
+            "gate",
+            "execute",
+            "verify",
+        )
 
-    def test_the_cycle_never_books_a_second_appointment(
+    def test_one_proposal_one_effect_one_verification(
         self, clinic_service: tuple[str, Clinic], clinic_state: Clinic
     ) -> None:
-        """The expensive part of the hazard is nodes, not effects. Idempotency holds throughout."""
+        """Stronger than "idempotency held". Nothing was proposed twice for it to hold *over*."""
         result, context = diverging_run(clinic_service, MovedByTheFrontDesk)
+        kinds = [event.kind for event in result.case.timeline]
 
         assert len(clinic_state.appointments()) == 1
         assert context.executor.invocation_count == 1
         assert len(result.case.actions) == 1
+        assert kinds.count(TimelineKind.PLAN_PROPOSED) == 1
+        assert kinds.count(TimelineKind.VERIFICATION_FAILED) == 1
+        assert kinds.count(TimelineKind.DUPLICATE_SUPPRESSED) == 0
 
 
 class TestWhenTheClinicCannotBeRead:

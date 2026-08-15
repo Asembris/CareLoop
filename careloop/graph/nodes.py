@@ -27,7 +27,15 @@ The node bodies read top to bottom in the order a case moves through them:
                                                                   PLANNING → AWAITING_HUMAN
 ``execute``   dispatches the tool through both enforcement points READY_TO_EXECUTE → EXECUTING
                                                                   EXECUTING → VERIFYING
-``verify``    checks the effect against what was authorised       VERIFYING → DONE | PLANNING
+``verify``    checks the effect against what was authorised       VERIFYING → DONE
+                                                                  VERIFYING → AWAITING_HUMAN
+
+**Two transitions reach ``PLANNING`` and both are pre-effect.** The gate leaves a denied proposal
+there for another attempt, and a caregiver's rejection returns a parked case there. ``verify`` does
+not and may not: by the time it runs an effect has been carried out, so its failure means "this
+cannot be certified" rather than "this did not work", and the case goes to a person.
+:data:`careloop.state.machine.TRANSITIONS` refuses ``VERIFYING → PLANNING`` outright, so that is a
+property of the state machine rather than of this module remembering.
 """
 
 from __future__ import annotations
@@ -494,7 +502,7 @@ class ExecuteNode(DeterministicNode):
 
 
 class VerifyNode(DeterministicNode):
-    """Check the effect against what was authorised. ``VERIFYING`` → ``DONE`` or ``PLANNING``.
+    """Check the effect against what was authorised. ``VERIFYING`` → ``DONE`` or ``AWAITING_HUMAN``.
 
     The only path to ``DONE``. See :mod:`careloop.graph.verify` for what "verified" means and,
     just as importantly, what it does not claim.
@@ -503,6 +511,12 @@ class VerifyNode(DeterministicNode):
     separate request rather than the effect's own response, and a system that cannot be reached or
     does not hold the effect fails verification rather than crashing the run — an effect the world
     cannot show CareLoop is an effect CareLoop cannot claim happened.
+
+    **A failure parks the case for a person; it does not return it to the planner.** It used to, and
+    the difference is the whole of this node's lifetime contribution. Every entry into ``VERIFYING``
+    is post-effect, so a verification failure is never "that did not work, try again" — it is
+    "something was carried out and cannot be certified", and the planner is the wrong thing to hand
+    that to. See :func:`_park_with_nothing_certifiable` for what it cost while it was.
     """
 
     async def run(self) -> str:
@@ -570,13 +584,7 @@ class VerifyNode(DeterministicNode):
                 },
                 now=self.context.now(),
             )
-            case = transition(
-                case,
-                CaseState.PLANNING,
-                reason=f"{proposal.tool_name} did not verify",
-                actor="system",
-                now=self.context.now(),
-            )
+            case = _park_with_nothing_certifiable(case, proposal, self.context.now())
 
         self.context.commit(case, expected_version=base)
         return f"verify: {'passed' if verification.passed else 'failed'}"
@@ -752,6 +760,75 @@ def _park_with_nothing_safe_to_do(case: Case, now) -> Case:
         CaseState.AWAITING_HUMAN,
         reason="every available action was refused",
         actor="policy",
+        now=now,
+    )
+
+
+def _park_with_nothing_certifiable(case: Case, proposal: Proposal, now) -> Case:
+    """Stop after an effect that cannot be certified, and hand the case to a person.
+
+    ``VERIFYING`` → ``AWAITING_HUMAN``. **No approval is raised**, for the reason
+    :func:`_park_with_nothing_safe_to_do` raises none and then one further reason of its own: not
+    only is there no proposal to authorise, there is nothing a decision *could* do. The effect
+    already happened. No answer a caregiver posts changes what the clinic holds, and a card offering
+    Approve would be inviting somebody to authorise the past.
+
+    **A sibling rather than a branch, because the two handoffs mean opposite things.** That one says
+    every available action was refused and nothing was done; this one says something *was* done and
+    CareLoop cannot confirm the result. They share a state and a timeline kind because both are "a
+    person is needed now", and they are told apart by their reason code — which is what a reason
+    code is for. Folding them into one writer would save a few lines and buy a diagnostic that is
+    false for whichever case it was not written about.
+
+    **Why this is not a replan, measured rather than argued.** The failure branch used to transition
+    to ``PLANNING`` and the cost had two shapes. An identical reproposal was suppressed by
+    :meth:`careloop.state.case.Case.action_for`, re-verified against the same divergent state and
+    failed again — four cycles, then the SDK's node bound stopped the run and the case ended
+    ``FAILED`` because the *framework* ran out of budget, not because CareLoop decided anything. And
+    a reproposal differing in one argument was worse: ``book_appointment.reason`` is
+    planner-authored free text carrying no ``trust_key`` and named by no rule, so changing it moved
+    the argument digest, moved the idempotency key, and defeated duplicate suppression in CareLoop
+    *and* in Demo World. That reached ``ALLOW`` and dispatched. Against a clinic that could not
+    confirm the first booking it produced a second real one; against a clinic that diverged, the
+    second ``POST`` left CareLoop and only the clinic's own slot-collision rule refused it — an
+    external service's consistency check standing where an authority decision should have been.
+
+    **Both failure conditions land here, deliberately.** ``Verification`` collapses "the read
+    succeeded and disagreed" with "the read established nothing", and
+    :meth:`VerifyNode._verify` says so. Their remediation may diverge later — retrying the
+    *observation* is defensible for the second and never for the first — but retrying the *effect*
+    is wrong for both, and stopping is the only lifecycle that is correct for both today.
+
+    The ``VERIFICATION_FAILED`` entry is written by the caller and stays: what happened, why it
+    could not be certified, and what CareLoop decided are three separate facts and the trail keeps
+    all three. The proposal is named here so the diagnostic says which action is unconfirmed, and
+    its arguments are deliberately absent — they are already on the ``PLAN_PROPOSED`` entry, and the
+    values read back from the outside world stay in the verification diagnostic the API withholds.
+    """
+    case = append_event(
+        case,
+        kind=TimelineKind.MANUAL_HANDOFF_REQUIRED,
+        actor="system",
+        summary=f"{proposal.tool_name} was carried out but could not be confirmed",
+        diagnostic=(
+            f"{proposal.tool_name} was performed for this case and independent verification could "
+            f"not confirm the result — see the VERIFICATION_FAILED entry above for what disagreed "
+            f"or could not be read. Parked rather than replanned: the effect has already happened, "
+            f"so proposing anything else would be planning on top of an outcome nobody has "
+            f"established. No approval is raised — there is no call to authorise, and no decision "
+            f"could change what the external system holds."
+        ),
+        payload={
+            "tool_name": proposal.tool_name,
+            "reason_code": str(ReasonCode.EXTERNAL_STATE_NOT_CONFIRMED),
+        },
+        now=now,
+    )
+    return transition(
+        case,
+        CaseState.AWAITING_HUMAN,
+        reason=f"{proposal.tool_name} could not be confirmed and needs a person",
+        actor="system",
         now=now,
     )
 

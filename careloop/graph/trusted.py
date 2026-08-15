@@ -9,12 +9,18 @@ if it could also mint ``TRUSTED`` facts there would be one code path that both t
 attacker-controlled text and produces the trust level nothing else can reach. Keeping the seeding
 at case creation means document content and trusted configuration never meet in the same function.
 
-**No value here may also appear in a document.** Trust resolution takes the *lowest* level among
-facts whose value matches, so a trusted destination that also appears in the poisoned continuity
-notice would be dragged to ``UNTRUSTED`` and the legitimate action denied. That is not a
-hypothetical: it is the same lowest-wins consequence that made fact promotion silently invisible
-before commit 6. ``tests/test_graph_trusted.py`` checks the shipped values against every fixture
-document, in both directions.
+**No value here also appears in a document, and correctness no longer depends on that.** It used
+to. Trust resolution took the lowest level among facts whose *value* matched, under any key at all,
+so a configured destination that also appeared in the poisoned continuity notice would have been
+dragged to ``UNTRUSTED`` and the legitimate action denied for a reason no diagnostic explained —
+the same lowest-wins consequence that made fact promotion silently invisible before commit 6.
+
+Resolution is now scoped to the argument's declared
+:attr:`~careloop.tools.registry.ArgSpec.trust_key`, so only a fact recorded under *this same key*
+can lower one of these, and an excerpt or an unrelated field carrying the same literal cannot touch
+it. The disjointness check in ``tests/test_graph_evidence.py`` stays as defence in depth and
+because a configured literal turning up in a document is worth knowing about — but it is no longer
+load-bearing, and nothing here relies on these strings being globally unique.
 
 There is deliberately **no allowlist**. These are ordinary :class:`~careloop.provenance.facts.Fact`
 objects on the case, which is what lets invariant 6's "no allowlist contents reach the model" be

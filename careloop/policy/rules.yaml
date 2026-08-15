@@ -96,6 +96,11 @@ rules:
       PROMOTABLE_ARG_CLASSES, so no validator can ever raise one, and revalidating this value would
       change nothing. What powers a grant confers must come from trusted config or a human
       decision. Contrast deny-booking-on-unvalidated-slot, where validation is the remedy.
+      Note that promotion was never the only way in. Trust is resolved against the fact key the
+      argument declares (role), and until it was, naming the configured portal id as a role
+      resolved TRUSTED by collision and walked past this rule with no promotion involved at all.
+      Nothing in CareLoop records a fact under the role key, so this rule now refuses every grant
+      the shipped configuration can produce.
 
   - id: deny-booking-on-unvalidated-slot
     effect: DENY
@@ -229,6 +234,13 @@ rules:
       caregiver. Unreachable for anything a document named: role is AUTHORITY-class and absent from
       PROMOTABLE_ARG_CLASSES, so a role lifted from evidence can never resolve TRUSTED and
       deny-authority-grant-below-trusted refuses it before this rule is considered.
+      It is in fact unreachable full stop under the shipped configuration, because no producer
+      anywhere records a fact under the role key: TRUSTED_CONFIG declares caregiver_email,
+      provider_id and portal_id and nothing else. That is deliberate and is left as it stands. The
+      rule is kept because it states what a legitimate grant would require, and because inventing a
+      trusted role purely to restore reachability would be manufacturing authority to satisfy a
+      symmetry nobody asked for. Pinned by
+      tests/test_typed_trust.py::TestTheGrantPathHasNoProductionAuthority.
 
   # fetch_document has no external effect, but deny-by-default applies to every tool call, so the
   # read path needs a rule of its own or nothing could read a document at all.

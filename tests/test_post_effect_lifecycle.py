@@ -552,6 +552,202 @@ class TestTheParkingCarriesNoAuthority:
         assert after.timeline == case.timeline
 
 
+# -- the parking names the action it could not certify ---------------------------------------------
+
+
+class TestTheHandoffNamesTheActionItCouldNotCertify:
+    """**The durable recovery identity.**
+
+    The handoff used to record the tool name and the reason code, which between them say *"a
+    booking on this case could not be confirmed"*. That is enough for a caregiver's card and not
+    enough for anything to act on later: a case can carry more than one ``ActionRecord``, and "the
+    booking" is not an identity.
+
+    So the entry now carries the ``idempotency_key`` of the exact record that failed certification
+    — the same key :class:`careloop.graph.nodes.VerifyNode` had already derived to *find* that
+    record, passed through rather than recomputed. The digest is deliberately not used: it covers
+    argument names and canonical values and not the case or the tool, and this project has closed
+    three digest-only identity defects already.
+
+    This is representation, not capability. Nothing consumes the key yet; what it buys is that a
+    parked case is bound to one action rather than to a tool name, which is the precondition any
+    later re-check has to be able to trust.
+    """
+
+    @staticmethod
+    def _handoff(case: Case):
+        found = entries(case, TimelineKind.MANUAL_HANDOFF_REQUIRED)
+        assert len(found) == 1
+        return found[0]
+
+    @pytest.mark.parametrize(
+        "clinic_factory",
+        [ChangesTheReason, SwapsThePatient, LosesTheRecord],
+        ids=["diverged-reason", "diverged-patient", "absent"],
+    )
+    def test_the_handoff_carries_the_key_of_the_record_that_failed(
+        self, clinic_service: tuple[str, Clinic], clinic_state: Clinic, clinic_factory
+    ) -> None:
+        base_url, world = clinic_service
+        result, _context = run_against(clinic_factory(base_url, world))
+        case = result.case
+
+        assert len(case.actions) == 1
+        handoff = self._handoff(case)
+        assert handoff.payload["reason_code"] == str(ReasonCode.EXTERNAL_STATE_NOT_CONFIRMED)
+        assert handoff.payload["idempotency_key"] == case.actions[0].idempotency_key
+
+    def test_the_key_resolves_to_the_very_record_that_was_verified(
+        self, clinic_service: tuple[str, Clinic], clinic_state: Clinic
+    ) -> None:
+        """Object identity, not equal-looking strings.
+
+        ``Case.action_for`` returns the record out of ``case.actions``, so ``is`` is the strongest
+        available statement that the key names *that* record rather than one that happens to
+        stringify the same way.
+        """
+        base_url, world = clinic_service
+        result, _context = run_against(ChangesTheReason(base_url, world))
+        case = result.case
+
+        resolved = case.action_for(self._handoff(case).payload["idempotency_key"])
+
+        assert resolved is not None
+        assert resolved is case.actions[0]
+        assert resolved.action_type == "book_appointment"
+
+    def test_a_handoff_with_nothing_carried_out_names_no_action(self) -> None:
+        """The other handoff is unchanged, and must be: ``NO_SAFE_ACTION_AVAILABLE`` means every
+        tool was refused and nothing happened, so there is no action for a key to name."""
+        from test_no_safe_action import EVERY_TOOL_REFUSED, drive
+
+        parked, _context = drive(*EVERY_TOOL_REFUSED)
+        handoff = next(
+            event for event in parked.timeline if event.kind is TimelineKind.MANUAL_HANDOFF_REQUIRED
+        )
+
+        assert handoff.payload["reason_code"] == str(ReasonCode.NO_SAFE_ACTION_AVAILABLE)
+        assert "idempotency_key" not in handoff.payload
+
+
+class TestTheHandoffIdentityIsNotTheLatestRecord:
+    """A case with more than one recorded action, where the one being verified is *not* the last.
+
+    "Which action could not be certified" and "which action was recorded most recently" are
+    different questions that agree on every case the shipped flow produces today, which is exactly
+    the shape of accident this repository has been bitten by three times. So the case here is built
+    with a second, unrelated ``ActionRecord`` sitting *after* the booking, and the handoff must
+    still name the booking.
+
+    Verification fails closed-loop — the recorded result names a provider nobody authorised — so no
+    clinic is needed and the divergence is unambiguous. The evidence class is therefore
+    ``NOT_OBSERVED``, which is correct and is not what this class is about.
+    """
+
+    @staticmethod
+    def _case_carrying_two_actions() -> tuple[InMemoryCaseStore, str, str]:
+        """A case in ``VERIFYING`` whose proposal names the *first* of two recorded actions."""
+        from careloop.state.case import ActionRecord
+        from careloop.state.machine import append_event, transition
+        from careloop.tools.idempotency import args_digest, idempotency_key
+        from careloop.tools.results import AppointmentBooked, EmailSent
+
+        store = InMemoryCaseStore()
+        case = open_case(store, REFERRAL_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+        base = case.version
+
+        booking_key = idempotency_key(CASE_ID, "book_appointment", BOOKING)
+        booked = ActionRecord(
+            idempotency_key=booking_key,
+            action_type="book_appointment",
+            args_digest=args_digest(BOOKING),
+            result=AppointmentBooked(
+                confirmation_id=f"apt-{booking_key[:16]}",
+                provider_id="PROV-SOMEWHERE-ELSE",  # not what was authorised
+                patient_id=BOOKING["patient_id"],
+                slot_start=BOOKING["slot_start"],
+                reason=BOOKING["reason"],
+            ).model_dump_json(),
+            recorded_at=FIXED_NOW,
+        )
+
+        email_args = {"to": "rosa@example.test", "subject": "update", "body": "an update"}
+        email_key = idempotency_key(CASE_ID, "send_email", email_args)
+        emailed = ActionRecord(
+            idempotency_key=email_key,
+            action_type="send_email",
+            args_digest=args_digest(email_args),
+            result=EmailSent(
+                message_id=f"msg-{email_key[:16]}",
+                to=email_args["to"],
+                subject=email_args["subject"],
+            ).model_dump_json(),
+            recorded_at=FIXED_NOW,
+        )
+
+        # The booking first, the unrelated effect last. "Latest" is now the wrong answer.
+        case = case.model_copy(update={"actions": (booked, emailed)})
+        case = append_event(
+            case,
+            kind=TimelineKind.PLAN_PROPOSED,
+            actor="planner",
+            summary="proposed book_appointment",
+            payload={"tool_name": "book_appointment", "args": dict(BOOKING), "rationale": "r"},
+            now=FIXED_NOW,
+        )
+        for target in (
+            CaseState.GATHERING_EVIDENCE,
+            CaseState.PLANNING,
+            CaseState.READY_TO_EXECUTE,
+            CaseState.EXECUTING,
+            CaseState.VERIFYING,
+        ):
+            case = transition(case, target, reason="setup", actor="test", now=FIXED_NOW)
+        store.save(case, expected_version=base)
+        return store, booking_key, email_key
+
+    def _run(self):
+        store, booking_key, email_key = self._case_carrying_two_actions()
+        context = context_for(
+            store,
+            REFERRAL_EVENT,
+            case_id=CASE_ID,
+            triage=_triage(),
+            planner=_planner((BOOKING,) * 4),
+            now=lambda: FIXED_NOW,
+        )
+        result = asyncio.run(run_case(context, max_node_executions=6))
+        return result, booking_key, email_key
+
+    def test_the_setup_really_does_carry_two_records_with_the_decoy_last(self) -> None:
+        """Vacuity: without this the test below passes against a "latest record" implementation."""
+        result, booking_key, email_key = self._run()
+
+        assert [record.action_type for record in result.case.actions] == [
+            "book_appointment",
+            "send_email",
+        ]
+        assert result.case.actions[-1].idempotency_key == email_key
+        assert booking_key != email_key
+
+    def test_the_handoff_names_the_verified_booking_and_not_the_later_record(self) -> None:
+        result, booking_key, email_key = self._run()
+        handoff = entries(result.case, TimelineKind.MANUAL_HANDOFF_REQUIRED)[0]
+
+        assert result.case.state is CaseState.AWAITING_HUMAN
+        assert handoff.payload["reason_code"] == str(ReasonCode.EXTERNAL_STATE_NOT_CONFIRMED)
+        assert handoff.payload["idempotency_key"] == booking_key
+        assert handoff.payload["idempotency_key"] != email_key
+
+    def test_and_it_resolves_to_the_booking_record_itself(self) -> None:
+        result, _booking_key, _email_key = self._run()
+        handoff = entries(result.case, TimelineKind.MANUAL_HANDOFF_REQUIRED)[0]
+
+        resolved = result.case.action_for(handoff.payload["idempotency_key"])
+
+        assert resolved is result.case.actions[0]
+
+
 # -- and none of this touched the path that works --------------------------------------------------
 
 

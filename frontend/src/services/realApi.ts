@@ -313,6 +313,11 @@ export function timelineText(event: TimelineEventView): string {
       return "Policy requires your decision";
     case "APPROVAL_REQUESTED":
       return "Decision requested";
+    // Written out rather than left to the `summary` fallback. This is the end of the strongest
+    // story the product tells — every action refused, nothing done — and the spine should say so
+    // in its own words instead of relying on a default that a backend rewording could change.
+    case "MANUAL_HANDOFF_REQUIRED":
+      return "CareLoop stopped — manual follow-up needed";
     case "APPROVAL_GRANTED":
       return `${who || "The caregiver"} approved`;
     case "APPROVAL_REJECTED":

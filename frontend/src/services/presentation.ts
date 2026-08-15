@@ -373,6 +373,10 @@ const TONES: Record<string, EventTone> = {
   APPROVAL_REQUESTED: "decision",
   APPROVAL_GRANTED: "decision",
   APPROVAL_REJECTED: "decision",
+  // "decision" rather than "denied": the refusals are already rendered as denied on their own
+  // entries, and this row is the one that says a person is needed — the same tone the Needs You
+  // card it produces is drawn in.
+  MANUAL_HANDOFF_REQUIRED: "decision",
   ACTION_EXECUTED: "neutral",
   DUPLICATE_SUPPRESSED: "neutral",
   VERIFICATION_PASSED: "verified",

@@ -170,6 +170,23 @@ describe("the timeline the spine renders", () => {
     ]);
   });
 
+  it("says CareLoop stopped, in its own words rather than the backend's", () => {
+    // The end of the strongest story the product tells: every action refused, nothing done, a
+    // person needed. It is its own timeline kind precisely so it does not read as "Decision
+    // requested" — nothing here was requested, and there is no approval behind it to grant.
+    const events = timelineFor([
+      entry("PLAN_PROPOSED", { tool_name: "send_email", args: { to: "attacker@evil.example" } }),
+      entry("POLICY_DENY", { tool_name: "send_email", reason_code: "DESTINATION_NOT_TRUSTED" }),
+      entry("MANUAL_HANDOFF_REQUIRED", { reason_code: "NO_SAFE_ACTION_AVAILABLE" })
+    ]);
+
+    expect(events.map((e) => e.text)).toEqual([
+      "Next step: send an email",
+      "CareLoop stopped — manual follow-up needed"
+    ]);
+    expect(events.map((e) => e.text)).not.toContain("Decision requested");
+  });
+
   it("keeps the state machine's narration off the spine", () => {
     const events = timelineFor([
       entry("CASE_CREATED", { event_id: "evt-0001-referral" }),

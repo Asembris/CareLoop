@@ -34,7 +34,13 @@ export type CaseState =
 /** The backend's section names. Renamed to the UI's `needs | working | done` in the adapter. */
 export type BackendSection = "needs_you" | "working" | "completed";
 
-/** The eighteen members of `careloop.state.case.TimelineKind`. */
+/** The nineteen members of `careloop.state.case.TimelineKind`.
+ *
+ *  `MANUAL_HANDOFF_REQUIRED` is the newest and the one worth reading twice. It is deliberately
+ *  *not* `APPROVAL_REQUESTED`: that means "CareLoop has one exact action and needs your authority",
+ *  this means "CareLoop has no safe action left". A case parked this way raises no approval at all,
+ *  so there is nothing to approve — see `DecisionCard`, which renders no approval affordance for
+ *  the matching reason code. */
 export type TimelineKind =
   | "CASE_CREATED"
   | "CASE_REOPENED"
@@ -50,6 +56,7 @@ export type TimelineKind =
   | "APPROVAL_REQUESTED"
   | "APPROVAL_GRANTED"
   | "APPROVAL_REJECTED"
+  | "MANUAL_HANDOFF_REQUIRED"
   | "ACTION_EXECUTED"
   | "DUPLICATE_SUPPRESSED"
   | "VERIFICATION_PASSED"

@@ -3443,6 +3443,10 @@ Carry these forward. Nothing here is blocking the next commit except where it sa
     button off `decision.reason_code` and this is the one value where pressing it is wrong.
 
 20. **`approval_id` is not unique, and a second decision on a duplicated id rewrites the first.**
+    **Closed by session K** — request identity is now `apr-{seq}` and `_decide` replaces one record
+    by position. The account below is left as written, because it is the measurement that motivated
+    the repair.
+
     Found while closing 19 and deliberately left open: it is a defect in the *legitimate* approval
     path and repairing it under a handoff patch would have given one change two attributable
     properties.
@@ -3623,6 +3627,174 @@ no-producer test says plainly what production can actually reach.
 14. **`grant_portal_access.portal_id` is `DESTINATION`-class and no rule names it.** Smaller than
     it looks, because the tool is denied outright on `role` before any portal is considered. Worth
     closing when the grant workflow is decided either way.
+
+## Session K — 2026-08-15
+
+### Position
+
+**Open decision 20, closed.** An approval identifier now names the *request* rather than the
+*action*, and a caregiver decision replaces exactly one record rather than every record sharing an
+identifier. Nothing about authority moved: `args_digest`, `approval_for`, `is_approved`,
+`_approval_problem`, `args_approved`, the rules and the idempotency key are untouched.
+
+**1998 passed, 37 skipped** — 1968 before, and the 30 new tests are the whole difference.
+`ruff check` and `ruff format --check` clean. `evals.replay` unchanged at **0 / 320** shipped and
+**320 / 320** allow-all. All three `resume_demo` phases reach their intended resting states, across
+three real processes, with the new identifier round-tripping through SQLite. Frontend: 102 tests
+green, `tsc --noEmit` clean, and **no frontend file changed**.
+
+### The defect, reproduced before anything was touched
+
+Two identities were doing business under one name. `approval_id` answers *which occurrence of asking
+a caregiver is this?*; `args_digest` answers *which exact argument set is involved?*
+`approval_id_for(digest)` derived the first from the second, so the two questions had one answer.
+
+Driven through the real gate on the mock model — no hand-built record anywhere:
+
+```
+after first park          [0] apr-0996ea3e5c60393e  PENDING   by=None
+after reject A            [0] apr-0996ea3e5c60393e  REJECTED  by=rosa.first
+after repropose           [0] apr-0996ea3e5c60393e  REJECTED  by=rosa.first
+                          [1] apr-0996ea3e5c60393e  PENDING   by=None
+AFTER approving B         [0] apr-0996ea3e5c60393e  APPROVED  by=rosa.second   <- rewritten
+                          [1] apr-0996ea3e5c60393e  APPROVED  by=rosa.second
+```
+
+The mechanism is that `_decide`'s guard and `_decide`'s mutation had **different scopes**. It
+inspected `matching[-1]` for `PENDING` and `is_actionable`, then rebuilt `case.approvals` replacing
+every element whose `approval_id` matched. One record checked, N rewritten, one version bump, one
+timeline entry naming an identifier that now described two records.
+
+**Only one duplicate shape is reachable, and knowing which one bounded the blast radius.** A second
+`PENDING` record for a digest requires the gate to return `REQUIRE_HUMAN`, which requires
+`args_approved: false` — so the pre-existing record is not `APPROVED`; and it cannot be `PENDING`,
+because the case would be `AWAITING_HUMAN` rather than `PLANNING`. It is therefore always
+`REJECTED`. **An `APPROVED` record could not be flipped to `REJECTED` by this path**, which is why
+the defect never made an executed action look refused.
+
+**Audit integrity, not authority, and the distinction was checked rather than assumed.**
+`approval_for` scans `reversed(case.approvals)` and returns the most recent record matching the
+*digest* — always the one the caregiver actually decided — so no authorisation path reads the
+rewritten record. Three small future edits would change that, and they are the reason this was worth
+closing rather than tolerating: an `approval_for` that returned "any `APPROVED` record for this
+digest"; a `_decide` that selected `matching[0]`; or a 64-bit truncation collision between two
+genuinely different actions, where flipping the wrong record **would** grant authority, since
+`approval_for` keys on the full digest.
+
+### Fail-first, recorded before implementing
+
+`tests/test_approval_identity.py` against the pristine tree: **8 failed, 14 passed.**
+
+```
+assert first.approval_id != second.approval_id
+E  AssertionError: assert 'apr-0996ea3e5c60393e' != 'apr-0996ea3e5c60393e'
+
+assert after.status is ApprovalStatus.REJECTED
+E  AssertionError: assert <ApprovalStatus.APPROVED> is <ApprovalStatus.REJECTED>
+```
+
+No red commit was created; the evidence lives here.
+
+### The fix
+
+`approval_id_for(seq)` returns `f"apr-{seq}"`, where `seq` is `case.next_seq()` at the moment the
+request is raised — which `append_event` then uses as the `seq` of the `APPROVAL_REQUESTED` entry
+recording it, so the identifier and its audit entry are the same number by construction.
+
+**Uniqueness within a case is structural, not probabilistic.** The timeline is append-only, so two
+requests cannot share a position. That is the whole argument, and it is why nothing is hashed,
+truncated, randomised or counted. No clock and no random source, so a replayed case mints the same
+identifiers and `evals/`, `bench/` and the resume demo stay reproducible.
+
+The digest fragment was dropped rather than shortened. An identifier carrying part of the digest
+*reads* as though it names the action, which is exactly the conflation being repaired; what the
+action is stays on the `Approval`, in full, as `args_digest`. The case id is absent too — an
+identifier is only ever resolved inside one case.
+
+`_decide` now collects matching **indexes**, refuses `AmbiguousApproval` if more than one is
+pending, `ApprovalAlreadyDecided` if none is, `NotAnApprovableAction` if the one pending record
+authorises no call, and replaces exactly that index. Every check precedes every mutation.
+
+**Positional replacement is kept even though identifiers are now unique, and that is the point.**
+Unique identifiers cannot help the duplicates already persisted; an id-keyed rebuild would rewrite
+them the first time one was decided.
+
+### Non-vacuity
+
+Mutants applied to the source in-session and restored exactly; no test mutates source at runtime.
+
+| Mutant | Result |
+|---|---|
+| **M1** — historical `f"apr-{digest[:16]}"`, index-based `_decide` kept | **4 failed.** Genuine collision (`apr-0996ea3e5c60393e` twice), not a crash. The audit-record and historical-duplicate tests **passed** — single-record mutation protects them alone. |
+| **M2** — id-keyed rebuild restored, unique ids kept | **3 failed**, all historical-duplicate or structural. Every new-request test **passed** — unique ids protect them alone. |
+| **M1 + M2** | **10 failed**, reproducing the shipped defect exactly, `test_the_earlier_rejection_survives_the_later_approval` included. |
+
+M1 and M2 failing on **disjoint** test sets is the evidence that neither half is decoration.
+
+### Historical duplicates — interpreted, never migrated
+
+| Shape | Behaviour | Why |
+|---|---|---|
+| decided + pending | decide the pending one; the decided record stays byte-for-byte | exactly one record is decidable, so the question has one answer; refusing would strand persisted cases forever |
+| pending + pending | `AmbiguousApproval` → 409, nothing moves | genuinely ambiguous. Reachable: the pre-repair handoff called every parking `apr-no-safe-action:c`, so a case that parked, reopened and re-parked holds two |
+| all decided | `ApprovalAlreadyDecided` → 409 | unchanged |
+
+No migration, no rewritten identifiers, no deleted records, no schema change, and `Approval` still
+grows no validator — one would make an old case unreadable rather than merely undecidable.
+
+### After
+
+```
+[0] id=apr-15  send_email  digest=0996ea3e5c60..  REJECTED  by=rosa.first
+[1] id=apr-21  send_email  digest=0996ea3e5c60..  APPROVED  by=rosa.second
+A byte-for-byte identical: True
+
+seq= 15 APPROVAL_REQUESTED  approval_id=apr-15
+seq= 17 APPROVAL_REJECTED   approval_id=apr-15  by rosa.first
+seq= 21 APPROVAL_REQUESTED  approval_id=apr-21
+seq= 23 APPROVAL_GRANTED    approval_id=apr-21  by rosa.second
+```
+
+The timeline needed no new field. `approval_id` was already in every relevant payload and already in
+`TIMELINE_PAYLOAD_FIELDS`; making the identifier unique is what turned those existing entries into a
+readable history.
+
+### Open decisions
+
+20. **Closed.** Superseded by this session.
+
+21. **`approval_for` and `is_approved` match on `args_digest` without requiring `tool_name`.** Found
+    during this session's lookup audit and deliberately left open, so that this change carries one
+    attributable property. `args_digest` is computed over *arguments alone* — not the tool name, not
+    the case id — so an approval granted for tool X would satisfy `is_approved` for tool Y invoked
+    with an identical argument set.
+
+    **Not reachable today**, and measured rather than assumed: no two tools in the registry share an
+    argument-name set.
+
+    ```
+    book_appointment     {provider_id, patient_id, slot_start, reason}
+    fetch_document       {document_id}
+    grant_portal_access  {grantee, role, portal_id}
+    send_email           {to, subject, body}
+    upload_document      {portal_id, document_id}
+    ```
+
+    Correctness therefore rests entirely on those sets happening to be disjoint, which is stated
+    nowhere and would be broken silently by adding one tool. Exposure is further bounded because
+    `allow-approved-outbound-email` is `tools: [send_email]`-scoped and `_approval_problem` only
+    ever *blocks*. The fix is small — match `(tool_name, args_digest)` in both helpers; the
+    `Approval` already carries `tool_name`.
+
+    **Until it lands, do not describe `(tool_name, args_digest)` as the enforced action identity.**
+    This session established request identity and nothing about authority binding.
+
+22. **CareLoop may repropose byte-identical arguments after an explicit human rejection.** The
+    planner is told the refused tool and the reason code, but never that *these exact arguments*
+    were already refused by a person. A product question rather than an integrity one, and
+    deliberately unchanged here: this patch exists to make the history of that reproposal correct,
+    not to decide whether the reproposal should happen. `prior_denials` reads `POLICY_DENY` entries
+    only, so a rejection is invisible to the planner — that is where it would be addressed.
 
 ## Standing risks
 

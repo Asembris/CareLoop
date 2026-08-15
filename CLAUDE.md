@@ -272,11 +272,33 @@ inert — they still deserialize, still render, still sit parked, and return `40
 version moves. No migration; `Approval` deliberately grew no validator, since one would make an old
 case *unreadable* rather than merely undecidable. `tests/test_approval_shape.py` sweeps for the one
 remaining production writer of `Approval(...)`, which is how the next notification gets stopped from
-being encoded as one. **Not yet true globally:** `approval_id_for` derives the id from the argument
-digest alone and `_decide` rewrites every record sharing an id, so a reject-then-repropose of
-identical arguments can rewrite a `REJECTED` record to `APPROVED` — open decision 20, audit
-integrity rather than authority. Until it lands, the identity claim holds for what `_decide`
-*accepts*, not for `case.approvals` as a whole.
+being encoded as one.
+
+**Two identities, and one name used to do both jobs.** `approval_id` says *which occurrence of
+asking a caregiver* a decision is about; `args_digest` says *which exact argument set* is involved.
+`approval_id_for` derived the first from the second — `f"apr-{digest[:16]}"` — so a proposal
+rejected and then reproposed unchanged came back under the first request's name, and `_decide`
+rebuilt `case.approvals` replacing **every** record whose id matched while checking `PENDING` and
+`is_actionable` on only one of them. One record inspected, N rewritten. Approving the second request
+turned the first caregiver's recorded *rejection* into the second caregiver's approval, name and
+timestamp included. Authority never moved — `is_approved` reads the most recent record matching the
+digest, which is the one actually decided — so this was audit integrity, in the one direction an
+append-only trail must not move. Open decision 20, now closed.
+
+So: **a request identity is `apr-{seq}`, and a decision replaces exactly one record by position.**
+`seq` is the timeline position of the `APPROVAL_REQUESTED` entry recording the request, so
+uniqueness within a case is structural rather than a collision argument, no clock or random source
+is involved, and a replayed case mints the same identifiers. Positional replacement is kept
+*because* unique ids cannot help the duplicates already persisted: an id naming one decided and one
+pending record decides the pending one and leaves the other byte-for-byte alone, and an id naming
+two pending records raises `AmbiguousApproval` and moves nothing. No migration and no rewritten
+history — persisted ids stay exactly as they are. The two halves are independently load-bearing and
+have separate mutants; `tests/test_approval_identity.py` holds both.
+
+**The identity claim is scoped to the request, not to authority.** `approval_for` and `is_approved`
+still match on `args_digest` alone and do **not** require `tool_name`; that is unchanged here and is
+the next approval-authority question, not a solved one. Do not describe `(tool_name, args_digest)`
+as the enforced action identity until it is.
 
 **`careloop/api/` decides nothing.** It projects stored cases and calls `open_case`, `reopen_case`,
 `approve`, `reject` and `run_case`. The one thing it originates is *when* a run happens, and

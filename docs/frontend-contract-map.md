@@ -468,8 +468,11 @@ nothing is verified, anyone reaching the port can claim any name, and a missing 
 
 ### 8. `decisionId` formats differ
 
-The mock mints `d-card-1`; the backend mints `apr-<args_digest[:16]>`. Opaque on both sides — pass it
-through, never parse it.
+The mock mints `d-card-1`; the backend mints `apr-<seq>`, where `seq` is the timeline position of
+the `APPROVAL_REQUESTED` entry. Opaque on both sides — pass it through, never parse it. It was
+`apr-<args_digest[:16]>` until session K, which is exactly why the rule is "never parse it": an
+identifier that looked like it named the *action* was being used to name the *request*, and two
+requests for one action collided. Nothing in the frontend changed when the format did.
 
 ### 9. No CORS anywhere in `careloop/`
 

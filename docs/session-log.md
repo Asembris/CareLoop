@@ -4607,6 +4607,221 @@ pre-existing behaviour for the other four fields and was not touched here. Nor w
 as a slot mismatch does, and the asserted invariant is "no `VERIFICATION_PASSED`, never `DONE`", not
 "immediately `FAILED`".
 
+## Session P — 2026-08-15
+
+### Position
+
+**Open decision 24, closed. `PolicyEngine.evaluate` only issues verdicts for complete tool calls.**
+
+`evaluate` refused arguments the registry does not declare, in a dedicated branch before trust
+resolution. It had no symmetric branch for arguments the tool *does* declare and the call omits. So
+the authority layer issued verdicts about objects that are not tool calls.
+
+**Audited: 5 tools, 13 declared arguments**, each omitted one at a time, with and without an exact
+approval, from that tool's own permitted state, on a maximally favourable case (all three
+`TRUSTED_CONFIG` facts, `patient_id`/`slot_start`/`document_id` at `CONTROLLED`, plus a synthetic
+`TRUSTED` `role` so the grant path was reachable at all). Ten omissions were denied — but by accident,
+not by design: each of those ten is named by some rule, so the absence surfaced as `UNTRUSTED` through
+`trust.get(arg, UNTRUSTED)` and the rule refused it. The three named by no rule went the other way:
+
+```
+book_appointment  minus reason    ALLOW          allow-booking-on-validated-slot     (no approval)
+send_email        minus body      REQUIRE_HUMAN  require-human-for-outbound-email
+send_email        minus body      ALLOW          allow-approved-outbound-email       (exact approval)
+send_email        minus subject   ALLOW          allow-approved-outbound-email       (exact approval)
+```
+
+Those three carry no `trust_key` and by design cannot — a rule requiring their trust fails at load —
+so no rule had any opinion about their absence. The booking one is autonomous, on the one tool whose
+effect is genuinely external. The email ones mean the policy layer **considered a malformed capability
+approved**: `approved()` digests whatever map it is handed and `Case.is_approved` matched
+`(tool_name, args_digest)` correctly, because neither has any notion of a declared argument set.
+
+The previous audit's candidate list was stale. `grant_portal_access.portal_id` is now covered by
+session N's `DENY` and its `ALLOW` clause, so omitting it is refused. Three arguments, not four.
+
+### What kind of defect this was, and what it was not
+
+**Policy-contract / malformed-capability validation defect. Not an authorisation bypass, and not
+production-reachable.** Three axes, kept apart:
+
+- *Structural severity, moderate.* The layer that decides authority answered questions about
+  non-calls, and the only thing between one of those `ALLOW`s and an effect was a Python `TypeError`.
+- *Production reachability, none.* `PlannerIntentBase._bind_arguments_to_the_chosen_tool` rebuilds a
+  proposal's arguments as exactly `spec.arg_names`, filling omissions with `NOT_SUPPLIED`, so a
+  validated intent cannot be incomplete; `PlanNode` is the only production writer of `PLAN_PROPOSED`;
+  `careloop/api/` writes none; `scripts/`, `bench/` and `demoworld/` never reach the engine.
+- *Effect consequence, none.* Measured on the real `ExecuteNode`, not reasoned:
+
+```
+gate verdict for the incomplete booking     ALLOW
+raised out of ExecuteNode                   TypeError: ToolSet.book_appointment() missing 1
+                                            required positional argument: 'reason'
+case state after                            EXECUTING   (FAILED after run_case._fail)
+ActionRecords recorded                      0
+executor ledger entries                     0
+```
+
+A crash after `ALLOW` is not an authorization contract — the timeline never says why, and `run_case`
+re-raises — but it is not an effect. Session N's shape: the safety came from a different layer
+(a schema validator and CPython argument binding) and was written down in no rule.
+
+### The repair
+
+One branch in `careloop/policy/engine.py`, after the undeclared branch and before `arg_classes` /
+`arg_trust` are computed:
+
+```
+registry lookup → undeclared → deny        (unchanged, still first)
+                  missing    → deny        NEW
+                  arg_classes / arg_trust
+                  DENY → REQUIRE_HUMAN → ALLOW → default deny
+```
+
+`DENY` / `NO_RULE_MATCH` / `matched_rule_id=None` / `arg_classes={}` / `arg_trust={}`. **No new
+`ReasonCode`** — the vocabulary is coarse on purpose so a planner cannot map the policy surface by
+probing it, and *"you omitted an argument"* is the hint that would help one construct a well-formed
+call. The empty `arg_classes`/`arg_trust` are the assertion that the branch ran before trust
+resolution, not a proxy for it. The diagnostic names the tool and the sorted missing arguments and
+never a value; it is timeline-only and the API withholds it wholesale.
+
+Undeclared stays first, so a map wrong in both directions reports the extra argument. The two
+diagnostics are deliberately distinguishable — `"undeclared argument(s)"` against `"without declared
+argument(s)"`, neither a substring of the other — because collapsing them into one set-mismatch check
+would lose a real distinction in the audit trail.
+
+**Key presence and nothing else.** No truthiness, no `canonical_value`, no overlap with
+`args_present`. `{"body": ""}` is a complete call.
+
+### The one diagnostic that moved, approved in advance
+
+`send_email` with no `to` was `DESTINATION_NOT_TRUSTED` / `deny-email-to-untrusted-recipient` and is
+now `NO_RULE_MATCH` as incomplete — earlier and stricter, but a different model-visible reason. A
+mapping with no recipient is not an email to an untrusted recipient; it is not an email. The resolver
+still defaults an absent lookup to `UNTRUSTED` and that is unchanged; what changed is that `evaluate`
+no longer reaches it for a declared argument. `Condition.arg_trust_below`'s docstring and
+`_condition_holds`'s comment asserted the old behaviour and were corrected — `schema.py` is a
+comment-only change. Destination trust stays non-vacuous through a new test with a *present* hostile
+recipient.
+
+### Evidence
+
+**Fail-first**, before any production edit: `tests/test_policy_completeness.py` → **38 failed, 57
+passed**. The 57 include all 26 empty-value rows, which pin today's behaviour and must pass on both
+sides of the patch.
+
+**Non-vacuity mutant.** Disable only the new branch (`if missing:` → `if False:`), leaving the
+undeclared branch, trust resolution, `_MATCH_ORDER`, `rules.yaml`, the loader, authority coverage,
+the approval subsystem, `args_digest` and `args_present` alone:
+
+```
+red    38 in tests/test_policy_completeness.py
+red    test_booking_authority.py::test_an_omitted_patient_is_refused_as_an_incomplete_call
+red    test_policy_engine.py::test_an_omitted_destination_is_refused_as_an_incomplete_call
+red    test_policy_engine.py::test_a_missing_required_argument_is_refused_as_an_incomplete_call
+       (41 failed)
+
+green  synthetic {a,b} → ALLOW floor and {a,b,c} → undeclared DENY
+green  all 13 empty-value rows and all 7 complete-call anchors
+green  destination trust with a present hostile recipient
+green  booking patient trust with patient_id=""
+green  typed trust, authority coverage, approval capability/identity/shape, decision surface,
+       booking read-back, eval replay                                          (2170 passed)
+```
+
+`engine.py` restored byte-for-byte, verified by SHA-256
+(`3f50a4ba8802795c274efce2f23c34de2fb1bbe477950e1bc2348dcb64df0ac5`). No source-mutating test ships.
+
+**Generic proof.** `tool_a(a, b)` behind an unconditional `ALLOW`, through the real engine:
+`{a,b}→ALLOW`, `{a}`/`{b}`/`{}`→completeness `DENY`, `{a,b,c}`→undeclared `DENY`. Both arguments
+`VALUE`-class deliberately, so `validate_authority_coverage` is satisfied and the loader invariant is
+not dragged into a test about something else.
+
+### Fixture repairs — measured, not guessed
+
+Instrumenting `evaluate` across the suite found **35 test items in 3 files** evaluating strict-subset
+maps. After the real patch, **26 failed** — exactly the pre-implementation simulation's count.
+Repaired by intent:
+
+- **24 accidentally incomplete fixtures** (`test_policy_engine.py` ×20, `test_reason_purity.py` ×4):
+  the test's real property is state ordering, destination trust, value trust, authority trust,
+  diagnostics or purity, and incompleteness was incidental. Completed. One of these matters more than
+  the rest: the `_hostile_calls` matrix in `test_reason_purity.py` was short a `body` *and* a
+  `reason`, and the booking yield is the only one carrying `INSUFFICIENT_FACT_TRUST` into the matrix —
+  written short, that code would have gone unchecked by every leak test in the file.
+- **2 intentional incompleteness tests**, reassigned: the omitted-destination test (above), and
+  `test_booking_authority.py`'s `[{}, {"patient_id": ""}]` parametrize, **split**. The empty half keeps
+  `INSUFFICIENT_FACT_TRUST` / `deny-booking-for-unverified-patient` verbatim; the omitted half asserts
+  completeness. Both were written when the engine could not tell absence from emptiness — it folded
+  both onto `UNTRUSTED` — so one assertion covered two things. **Session J is untouched:** all four
+  shapes it refuses (invented, borrowed from another fact key, unvalidated, misquoted) *supply* the
+  argument.
+- **1 renamed:** `test_a_missing_required_argument_fails_args_present` can no longer reach
+  `args_present` when the key is absent. Verdict identical either way, which is exactly why the cause
+  now has to be asserted. `args_present`'s live coverage is the empty-value and float-value tests.
+- The 9 non-failing sites were completed too, so they keep testing what their names say rather than
+  silently exercising the new branch.
+
+**`args_present` is untouched.** Its live scope narrows from "supplied and non-empty" to "non-empty
+and canonicalisable"; it is not redundant, and `rules.yaml` did not change.
+
+### Requiredness
+
+`ArgSpec` has no `required`/`optional`/`default`/nullable field, no registry defaults, and no shipped
+callable parameter carries a default (all 13 checked) — so `declared == required` and exact key
+equality is correct. `implements` checks parameter names and kinds and says nothing about defaults, so
+a future `reason: str = ""` would make one argument optional at the callable while the registry went
+on declaring it. A test-only sweep in `tests/test_tool_callables.py` now asserts no bound tool
+parameter has a default. Production `implements` unchanged: a future-drift guard, not a second
+enforcement mechanism.
+
+### Results
+
+**2211 passed, 37 skipped** — 2110 before. `ruff check` and `ruff format --check` clean.
+
+`evals.replay` **unchanged**, measured before and after: `0 of 320` shipped with 320/320 refused,
+`320 of 320` under the allow-all mutant with 320 effects. The mutant correctly keeps rejecting
+malformed calls, because completeness lives inside `PolicyEngine.evaluate` and that mutant removes
+authorisation *rules*, not malformed-call validation. The hostile corpus proposes complete argument
+maps for all four effectful tools, and `PlannerIntent`'s validator would complete them anyway.
+
+### Compatibility
+
+No DB migration, no persisted-model change, no API contract change, no frontend change, no new reason
+code, no `rules.yaml` change, no policy-loader change, no Demo World change, no planner-schema change.
+Every production-written `PLAN_PROPOSED` payload is complete against the registry as it stood when
+written, so no existing persisted case changes behaviour. The one theoretical future case: if a later
+version adds a declared argument to an existing tool, a proposal persisted before that would be denied
+on resume rather than possibly authorised. That is fail-closed, it is the same shape session O accepted
+for `AppointmentBooked.reason`, and no compatibility machinery was added for a state that does not
+exist.
+
+### Still open, deliberately
+
+Everything the patch was scoped away from. `book_appointment.reason` remains planner-authored free
+text with no trust key, no template, no length bound and no human review before an autonomous booking
+— and an **empty** reason still reaches `ALLOW`, because an empty value is a supplied value and the
+call is complete. Whether it should is open decision 28's content half, untouched. The `TypeError`
+lifecycle noted above is open decision 22's crash-reconciliation question: this patch removes one way
+of reaching that path, not the path.
+
+### Open decisions
+
+18. **Unchanged.**
+
+22. **Unchanged and still open** — crash / uncertain-effect reconciliation. Session P's measurement
+    of the `TypeError` path is evidence for it, not a repair of it.
+
+24. **Closed.** `PolicyEngine.evaluate` refuses any argument map whose keys are not exactly the
+    registry's declared set, before trust resolution, approval handling or rule matching.
+
+25. **Unchanged.**
+
+26. **Unchanged.** Frontend `latestProposal` resolution, deferred.
+
+28. **Content half unchanged and still open** — `reason` provenance, templating and length. The
+    verification half was closed in session O and is not reopened here.
+
 ## Standing risks
 
 - **The resume is a `CaseStore` reconstruction across a process boundary, not a Strands session

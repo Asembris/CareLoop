@@ -32,14 +32,41 @@ working around it.
    trusted config or a human decision — validation cannot manufacture it. Promotion is **not**
    idempotent. Every stored fact carries `{source_doc, page, trust_level}`.
 
-   **Lowest-wins has one standing consequence, and it has now bitten three times:** trust resolves
-   to the *lowest* level among every fact whose value matches, so **any path that can add a second
-   fact at an existing `(key, value)` can silently downgrade trust.** Nothing raises, the timeline
-   looks correct, and every action depending on that value is denied for a reason no diagnostic
-   explains. Lowest-wins itself is not negotiable — it is what stops a poisoned duplicate being
-   laundered by a legitimate twin. So the rule is about writers: a promotion **replaces** its
-   original rather than appending beside it, a model never emits a fact, and `record_fact` refuses
-   a value the case already holds. Any new writer of `case.facts` has to answer this question
+   **Trust is bound to `(fact key, canonical value)`, never to a literal on its own.** An argument
+   draws trust only from facts recorded under the fact key it declares in the tool registry
+   (`ArgSpec.trust_key`); an argument declaring no key resolves `UNTRUSTED` outright, and a rule
+   requiring trust of one fails at load. There is **no value-only fallback anywhere**, and adding
+   one would reopen the whole hole. Session I found what the missing half cost: with matching by
+   value alone, a validated `patient_id` satisfied `upload_document.document_id`, a `document_id`
+   satisfied `book_appointment.slot_start` and reached the clinic over HTTP, and — the serious one
+   — the configured `portal_id`, named as a *role*, resolved `TRUSTED` and defeated
+   `deny-authority-grant-below-trusted`, the system's only `AUTHORITY` guard, on a case carrying
+   nothing but trusted configuration. No promotion was involved in any of them, which is why the
+   "AUTHORITY is not promotable" argument did not cover it. The planner's own prompt renders every
+   fact's key *and value*, so it is handed the configured literals and can put any of them in any
+   argument.
+
+   **Lowest-wins is scoped to one key, and that scoping is the invariant.** Trust resolves to the
+   *lowest* level among every fact sharing the argument's fact key **and** canonical value, so
+   **any path that can add a second fact at an existing `(key, value)` can silently downgrade
+   trust.** Nothing raises, the timeline looks correct, and every action depending on that value is
+   denied for a reason no diagnostic explains. Lowest-wins itself is not negotiable — it is what
+   stops a poisoned duplicate being laundered by a legitimate twin:
+
+   ```
+   provider_id = X TRUSTED  +  provider_id = X UNTRUSTED   →  UNTRUSTED   (a duplicate; caught)
+   provider_id = X TRUSTED  +  patient_id  = X UNTRUSTED   →  TRUSTED     (not a duplicate at all)
+   ```
+
+   Cross-key contamination was never protective — it was an accident that also made every
+   configured literal a false-denial hazard if a document happened to repeat it. Do **not** rely on
+   literals being globally unique as a security property; keeping trusted values distinct from
+   document values remains sensible as defence in depth and nothing depends on it.
+
+   So the writer rule stands, scoped the same way: a promotion **replaces** its original rather
+   than appending beside it, a model never emits a fact, and `record_fact` refuses a `(key, value)`
+   the case already holds. `promote_fact`'s shadowing check must stay exactly as wide as
+   `resolve_trust` — no wider and no narrower. Any new writer of `case.facts` has to answer this
    before it ships, and the answer belongs in a test that asserts through `resolve_trust` — "a
    `CONTROLLED` fact exists on the case" passes in both worlds and distinguishes neither.
 4. **`Case` is frozen.** `transition()` is the only writer of `Case.state`. `DONE` is reachable only

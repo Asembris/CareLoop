@@ -185,9 +185,12 @@ Same name, different shape.
 | `after` | — | **absent**, pure copy |
 | `approveLabel` / `rejectLabel` | — | **absent**, pure copy |
 
-`args` is the load-bearing one: an `Approval` stores only the digest, so
-`graph.context.proposal_for` walks back to the `PLAN_PROPOSED` entry that digest came from. The card
-therefore names exactly the call that will be made. Do not lose that in the mapping.
+`args` is the load-bearing one: an `Approval` stores `(tool_name, args_digest)` rather than the
+arguments themselves, so `graph.context.proposal_for(case, tool_name, digest)` walks back to the
+`PLAN_PROPOSED` entry that pair came from — **both halves matched**, so a proposal belonging to a
+different tool cannot supply them however its arguments hash. The card therefore names exactly the
+call that will be made. When no such entry exists, `args` is `{}` and the card is still rendered.
+Do not lose either half in the mapping, and do not reconstruct the proposal on the client.
 
 ### 3.3 `TimelineEvent`
 

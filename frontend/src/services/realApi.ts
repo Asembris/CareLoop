@@ -396,10 +396,12 @@ export function timelineFor(timeline: readonly TimelineEventView[]): TimelineEve
 
 /** The backend's pending decision as the card renders it.
  *
- *  `args` is what makes the card mean anything: an `Approval` stores only a digest, so the
- *  backend walks back to the `PLAN_PROPOSED` entry that digest came from and the card therefore
- *  names exactly the call that will be made. `approval_id` is opaque on both sides — pass it
- *  through, never parse it. */
+ *  `args` is what makes the card mean anything: an `Approval` stores `(tool_name, args_digest)`
+ *  rather than the arguments, so the backend walks back to the `PLAN_PROPOSED` entry that *pair*
+ *  came from — both halves, so another tool's identically-hashed proposal cannot supply them — and
+ *  the card therefore names exactly the call that will be made. `args` is `{}` when no such entry
+ *  exists, and the card is still shown. Nothing is reconstructed here: `approval_id` is opaque on
+ *  both sides, and no client computes which proposal a decision covers. */
 export function decisionFor(decision: DecisionView | null): UiDecisionView | null {
   if (!decision) return null;
   const copy = decisionCopy(decision.reason_code, decision.tool_name, decision.args);

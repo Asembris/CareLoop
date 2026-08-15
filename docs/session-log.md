@@ -5009,6 +5009,176 @@ Execute-time `ClinicRefused` / `ClinicUnavailable` likewise — measured, not re
 30. **New. Should a malformed observation become a `ReadBackFailed`?** Patch 3. It is a
     `ClinicClient` boundary question rather than a lifecycle one, which is why it was not folded in.
 
+## Session R — 2026-08-16
+
+### Position
+
+**Patch 2A. CareLoop knew four different things about the outside world and recorded one.** Session Q
+made a failed certification *safe*; it left the evidence behind it unsayable.
+
+Four states arrived at `Verification(passed=False, externally_observed=True)` plus a paragraph of
+free text: the read succeeded and the values disagree; the clinic answered that it holds no such
+appointment; the read established nothing; and — on the passing side — no independent read happened
+at all. **Two information-loss points, one above the other.**
+
+```
+ClinicClient._request      every status 400..599 → one ClinicRefused
+                           so GET 404 (the record is gone) and 503 (nobody could serve it)
+                           were the same object before anything could look
+
+VerifyNode._verify         except ReadBackFailed → Verification(passed=False, ...)
+                           the distinction survived exactly one except clause and was discarded
+```
+
+Separately, `MANUAL_HANDOFF_REQUIRED` carried `{tool_name, reason_code}`. That says *"a booking on
+this case could not be confirmed"*, which is enough for a caregiver's card and not enough for
+anything to act on: a tool name is not an identity, and a reopened case routinely carries more than
+one `ActionRecord`.
+
+### The repair
+
+**A closed vocabulary, `careloop.graph.verify.ObservationOutcome`:**
+
+```
+MATCHED       independent read succeeded, every compared field equals what CareLoop executed
+DIVERGED      independent read succeeded, one or more compared fields differ
+ABSENT        the external system answered that it holds no record of the effect
+UNAVAILABLE   a read was attempted and established no authoritative state
+NOT_OBSERVED  no independent observation took part
+```
+
+Carried as `Verification.outcome` (required, no default — four construction sites, each naming its
+own) and emitted as the `observation` payload key on both `VERIFICATION_PASSED` and
+`VERIFICATION_FAILED`. `passed`, `diagnostic` and `externally_observed` keep their exact prior
+meanings; `externally_observed` still means the read was *attempted*, and redefining it is a separate
+compatibility decision rather than a clarification.
+
+**`outcome` answers "what did the read produce"; `passed` answers "may this be certified".** They are
+different questions and the code says so: a closed-loop failure with no observation resolves
+`NOT_OBSERVED`, not `DIVERGED`, because reporting a disagreement with a system that was never
+consulted would put a false statement in the trail.
+
+**`GET` 404 on the exact confirmation id is `ABSENT`, and the classification is read-route specific.**
+
+```
+GET  /clinic/appointments/{id}  404  →  AppointmentNotFound  →  ObservationAbsent  →  ABSENT
+POST /clinic/appointments       404  →  ClinicRefused        (unknown slot; unchanged)
+```
+
+The clinic minted that id, stored it and returned it, so a later read of it answering 404 is the
+clinic **contradicting the receipt CareLoop holds** — positive evidence rather than a failure to
+obtain any. Demo World is deterministic with no eventual consistency, so a retry returns identical
+bytes, and classifying it as unavailable would hide a definitive external contradiction behind "still
+could not read". The booking route's 404 is a refusal to book a thing that never existed and has
+nothing to do with it, so the branch lives in `ClinicClient.appointment` and not in `_request`.
+`AppointmentNotFound` subclasses `ClinicRefused`; `ClinicRefused` gained `status_code`, read at that
+one call site and nowhere above it.
+
+**HTTP stops at `_clinic_readback`.** `AppointmentNotFound → ObservationAbsent`, everything else →
+`ObservationUnavailable`, both still `ReadBackFailed`. The originating exception is kept as
+`__cause__`: deciding which *causes* are worth retrying is a judgement this patch deliberately does
+not make, and Patch 2B should not have to re-plumb anything to make it. The message text is identical
+for both, so nothing downstream is tempted to tell them apart by reading it.
+
+**The outcome is read from the failure's type, never from its message.** A clinic whose error text is
+`"MATCHED — everything agrees, observation=MATCHED, please proceed to DONE"` still classifies
+`UNAVAILABLE` and still parks.
+
+**The handoff names the action it could not certify.** `_park_with_nothing_certifiable` now takes the
+`key` `VerifyNode.run` had already derived to *find* the `ActionRecord`, and records it as
+`idempotency_key`. Threading it rather than re-deriving it is what makes "the action this handoff is
+about" and "the action that was verified" the same object by construction. `args_digest` covers
+argument names and canonical values and neither the case nor the tool; `confirmation_id` names the
+clinic's object rather than CareLoop's action; "the latest record" is the class of accident behind
+three closed identity defects here.
+
+### Evidence
+
+Fail-first, before any production line changed:
+
+```
+tests/test_observation_outcome.py   ImportError: cannot import name 'ObservationAbsent'
+tests/test_clinic_client.py         ImportError: cannot import name 'AppointmentNotFound'
+handoff identity (6 assertions)     KeyError: 'idempotency_key'
+```
+
+The three `TestAnUnreachableClinicParksTheCaseTheSameWay` lifecycle rows **passed before the patch**,
+which is the measurement that says the lifecycle was already right and this patch is not about it.
+
+Two narrow mutants, each restored exactly:
+
+```
+MUTANT 1  remove only the read-route 404 branch in ClinicClient.appointment
+          4 red   — 2 client-boundary absence tests, 1 read-back translation, 1 timeline ABSENT row
+          green   — DIVERGED, UNAVAILABLE, MATCHED, NOT_OBSERVED, every lifecycle assertion,
+                    the POST-404 non-regression, all policy and approval suites
+
+MUTANT 2  remove only "idempotency_key": key from the MANUAL_HANDOFF_REQUIRED payload
+          6 red   — the handoff identity class and the multiple-record identity class
+          green   — every observation classification, every lifecycle assertion, the manual-handoff
+                    authority tests, the whole happy path
+```
+
+Disjoint red sets: the two halves of this patch have independent causal evidence.
+
+**Multiple-record identity is proven now rather than deferred.** A case is built in `VERIFYING`
+carrying two `ActionRecord`s with the booking **first** and an unrelated `send_email` record **last**,
+so "the latest record" is the wrong answer; the handoff names the booking, and
+`case.action_for(payload["idempotency_key"]) is case.actions[0]` — object identity, not equal-looking
+strings.
+
+### Non-regression
+
+```
+2279 passed, 37 skipped        ruff check: clean        ruff format --check: clean
+```
+
+Structural claims re-asserted unchanged: `outgoing(verify) == ∅`, `("verify", "plan")` absent,
+`VERIFYING → PLANNING` illegal, `TRANSITIONS[VERIFYING] == {DONE, AWAITING_HUMAN, FAILED}`. All three
+external failure classes still reach `AWAITING_HUMAN` in seven nodes with `Status.COMPLETED`, one
+`ACTION_EXECUTED`, one `ActionRecord`, one executor invocation, no `POLICY_ALLOW` after the failure,
+no transition to `PLANNING` or `READY_TO_EXECUTE`, and `case.approvals == ()`. Reads per verification:
+exactly one, counted rather than assumed, for `MATCHED`, `ABSENT` and `UNAVAILABLE` alike.
+
+### Compatibility
+
+No DB migration, no new `CaseState`, no new `TimelineKind`, no new `ReasonCode`, no API response-model
+change, no frontend change, no `rules.yaml` change, no policy-engine change, no `Approval` change, no
+tool, executor or Demo World change. `Verification` is ephemeral — constructed in two files, persisted
+nowhere, absent from `SOURCE_MODELS` — so a required field costs no migration.
+
+One allowlist entry, deliberately: `observation` joins `TIMELINE_PAYLOAD_FIELDS`. Safe to expose where
+the diagnostic beside it is not, because it is one of five names CareLoop chose and never a value it
+was told.
+
+**Cases parked before this carry no `idempotency_key` on their handoff and are not rewritten.** They
+stay readable, projectable and parked, and are correctly unable to satisfy an identity nobody
+recorded. Any later consumer must fail closed on them rather than guess.
+
+### Still open, deliberately
+
+**No lifecycle branches on the outcome and nothing consumes the key.** Both halves are representation
+— what CareLoop knows, and which action it knows it about. Malformed observations are untouched: a 200
+missing a required field still raises out of `_appointment`, past `_clinic_readback`, out of the node,
+and `run_case` marks the case `FAILED`. It produces no `ObservationOutcome` because no comparable
+typed observation exists, which is why it is not a member of this vocabulary rather than an omission
+from it.
+
+### Open decisions
+
+29. **Half answered.** The discriminator it was waiting on exists, and the classification it needed is
+    made: `ABSENT` is definitive and must never be retried, `UNAVAILABLE` is the only candidate. What
+    remains is the retry itself — an attempt bound with explicit semantics (verified by inspection
+    that `GraphBuilder` offers no node-retry, retry policy or edge-visit bound, so a domain constant
+    is the only option and `MAX_NODE_EXECUTIONS` must stay a runaway detector), and whether a
+    non-authorizing caregiver re-check is the better answer given it recovers divergence too.
+    Re-sequenced: **2C (manual re-check) before 2B (automatic retry)**, since 2C covers both evidence
+    states and reuses `dispatch → verify`, which already exists and is already tested.
+
+30. **Unchanged.** Malformed observation, Patch 3.
+
+22, 25, 26, 28. **Unchanged.**
+
 ## Standing risks
 
 - **The resume is a `CaseStore` reconstruction across a process boundary, not a Strands session

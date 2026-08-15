@@ -437,16 +437,81 @@ CareLoop already knew it could not certify the first. Against a diverging clinic
 left CareLoop and only Demo World's own slot-collision rule refused it, which is an external service's
 consistency check standing where an authority decision should have been.
 
-**Verified divergence and unavailable read-back share this lifecycle, deliberately.** `Verification`
-collapses "the independent read succeeded and the values disagree" with "the read established
-nothing", and `VerifyNode._verify` says so. Their *remediation* may differ — a bounded
-observation-only retry is defensible for the second and never for the first, since Demo World is
-deterministic with no eventual-consistency model — but retrying the *effect* is wrong for both, and
-stopping is the only lifecycle correct for both today. Splitting them needs a discriminator
-`Verification` does not carry and is deliberately deferred. **A malformed observation does not use
-this path yet**: a 200 whose body omits a required field raises out of the node, `run_case` marks the
-case `FAILED` and re-raises. That already fails closed, never replans and issues no second effect;
-routing it here is a separate patch.
+**Every way of failing to certify shares this lifecycle, deliberately, and they are no longer
+indistinguishable while doing so.** Retrying the *effect* is wrong for all of them and stopping is
+the only lifecycle correct for all of them today, so the case does the same thing whichever occurred
+— but what the trail *says* is now specific; see the observation vocabulary below. **A malformed
+observation does not use this path yet**: a 200 whose body omits a required field raises out of the
+node, `run_case` marks the case `FAILED` and re-raises. That already fails closed, never replans and
+issues no second effect; routing it here is a separate patch.
+
+**CareLoop knew four things about the outside world and recorded one.** A read that succeeded and
+disagreed, a read the clinic answered by saying it holds no such appointment, a read that could not
+be completed, and a verification where no independent read happened all arrived at
+`Verification(passed=False, externally_observed=True)` plus free text. The distinction between the
+middle two survived exactly as long as one `except` clause in `VerifyNode._verify`; the distinction
+between the first two never existed, because `ClinicClient._request` raised one `ClinicRefused` for
+every status from 400 to 599, so a `404` on the exact confirmation id and a `503` were the same
+object by the time anything could look.
+
+So `Verification` carries **`outcome: ObservationOutcome`** — `MATCHED` / `DIVERGED` / `ABSENT` /
+`UNAVAILABLE` / `NOT_OBSERVED` — recorded on both verification timeline entries as the `observation`
+payload key. `passed`, `diagnostic` and `externally_observed` keep their exact prior meanings;
+`externally_observed` still means the read was *attempted*, and redefining it would be a separate
+compatibility decision rather than a clarification. **`outcome` answers "what did the read produce";
+`passed` answers "may this be certified".** They are not the same question: a closed-loop failure
+with no observation is `NOT_OBSERVED` and not `DIVERGED`, because reporting a disagreement with a
+system that was never consulted would put a false statement in the trail.
+
+**`NOT_OBSERVED` is not `UNAVAILABLE`.** The first says no independent observer took part, which is
+what a simulated effect means and is a fact about CareLoop's wiring. The second claims an external
+system was consulted and did not answer — a claim about the world, made by a run that never touched
+one.
+
+**A `GET` 404 on the exact confirmation id is `ABSENT`, not `UNAVAILABLE`, and the classification is
+read-route specific.** The clinic minted that id, stored it and returned it, so a later read of it
+answering 404 is the clinic *contradicting* the receipt CareLoop holds — positive evidence, not a
+failure to obtain any. Demo World is deterministic with no eventual consistency, so a retry returns
+identical bytes; classifying it as unavailable would hide a definitive external contradiction behind
+"still could not read". But `POST /clinic/appointments` also answers 404, for a slot the clinic does
+not offer, and that is a refusal to book a thing that never existed. Classifying by status in
+`_request` would fold the two together, so `AppointmentNotFound` is raised by `ClinicClient.
+appointment` alone and `tests/test_clinic_client.py::TestOnlyTheReadRouteMeansTheAppointmentIsAbsent`
+is what fails if it is ever generalised. It subclasses `ClinicRefused`, so everything already
+catching the broad type is untouched.
+
+**HTTP stops at `_clinic_readback`.** `AppointmentNotFound → ObservationAbsent`, everything else →
+`ObservationUnavailable`, both still `ReadBackFailed`; the originating exception is kept as
+`__cause__` rather than discarded, because deciding which *causes* are worth retrying is a judgement
+this patch deliberately does not make. **The outcome is read from the failure's type and never from
+its message** — a clinic whose error text claims the observation matched changes nothing, which
+`tests/test_observation_outcome.py::TestTheOutcomeIsNotReadOutOfText` proves with a payload that
+says exactly that. `observation` is safe to expose where the diagnostic beside it is not: it is one
+of five names CareLoop chose, never a value it was told.
+
+**No new `ReasonCode`, and that is a decision.** `EXTERNAL_STATE_NOT_CONFIRMED` still covers all
+three failing outcomes, because an outcome says what the read produced and a reason code says why
+CareLoop stopped and asked a person — and the answer to the second is identical in every case. A
+second code would offer a caregiver a distinction the lifecycle does not make.
+
+**The handoff now names the action it could not certify.** `MANUAL_HANDOFF_REQUIRED` carried
+`{tool_name, reason_code}`, which says only *"a booking on this case could not be confirmed"* — a
+tool name is not an identity, and a reopened case routinely carries more than one `ActionRecord`. It
+now also carries the **`idempotency_key`** of the exact record that failed, threaded through from
+the value `VerifyNode.run` already derived to *find* that record, so "the action this handoff is
+about" and "the action that was verified" are the same object by construction rather than by a
+second derivation that could drift. `args_digest` covers argument names and canonical values and
+neither the case nor the tool; `confirmation_id` names the clinic's object rather than CareLoop's
+action; "the latest record" is the class of accident that produced three identity defects here. A
+mutant deleting only `"idempotency_key": key` turns six assertions red while every observation
+classification, every lifecycle assertion and the whole happy path stay green; a mutant deleting
+only the read-route 404 branch turns four red and moves nothing else.
+
+Nothing consumes the key, and no lifecycle branches on the outcome. **Both halves are
+representation** — what CareLoop knows, and which action it knows it about — written down so that
+deciding what may be done about either is a separate patch with its own evidence. Cases parked
+before this carry neither and stay exactly as they are: readable, projectable, and correctly unable
+to satisfy an identity nobody recorded.
 
 `EXTERNAL_STATE_NOT_CONFIRMED` is the eighth `ReasonCode` and the second that parks a *case* rather
 than refusing a call, so no rule carries it and the engine never emits it. It is named for what

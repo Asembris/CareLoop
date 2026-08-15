@@ -67,6 +67,25 @@ class ApprovalAlreadyDecided(Exception):
     """Raised when a decision is recorded against an approval that is no longer pending."""
 
 
+class NotAnApprovableAction(Exception):
+    """Raised when a decision names a record that authorises no call.
+
+    A caregiver decision releases **one exact call**, matched on the digest of its arguments. A
+    record naming no tool and covering no arguments is not a request for authority, so there is
+    nothing a decision about it could mean — and acting on one is not a no-op: :func:`_decide`
+    transitions the case, and ``READY_TO_EXECUTE`` puts whatever the planner last proposed back in
+    front of the executor. Before this guard existed, approving one released a case whose last
+    proposal had been *denied*, which the tool boundary then refused a second time and recorded as
+    a disagreement between CareLoop's two enforcement points. They had not disagreed; nothing had
+    ever allowed the call.
+
+    Manual handoffs are no longer written as approvals — see
+    :func:`careloop.graph.nodes._park_with_nothing_safe_to_do` — so the only records that can reach
+    this are ones persisted before that change. They stay readable and stay parked; what they
+    cannot do is move.
+    """
+
+
 def _utcnow() -> datetime:
     return datetime.now(UTC)
 
@@ -351,6 +370,13 @@ def _decide(
         raise ApprovalAlreadyDecided(
             f"approval {approval_id!r} is already {approval.status}; a decision is made once"
         )
+    # Before any mutation, so a refusal cannot mean "half recorded". The store is untouched, the
+    # version does not move, and the caller's request is all-or-nothing.
+    if not approval.is_actionable:
+        raise NotAnApprovableAction(
+            f"approval {approval_id!r} names no tool and covers no arguments, so there is nothing "
+            f"for a decision to authorise; the case stays where it is"
+        )
 
     decided = approval.model_copy(
         update={"status": status, "decided_at": at, "decided_by": decided_by}
@@ -388,6 +414,7 @@ __all__ = [
     "ApprovalAlreadyDecided",
     "CaseNotReopenable",
     "NoSuchApproval",
+    "NotAnApprovableAction",
     "RunResult",
     "approve",
     "context_for",

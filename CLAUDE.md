@@ -303,6 +303,69 @@ Authority` is unchanged and still passing. The tests above synthesise a trusted 
 ask the only question that matters here: *if the role barrier were satisfied, would portal
 destination safety still hold?*
 
+**A policy verdict is only meaningful for a complete tool call, and half of that was unenforced.**
+`PolicyEngine.evaluate` refuses an argument map whose keys are not exactly the ones the registry
+declares — **both** directions, before trust is resolved, before an approval is consulted and before
+any rule is matched. Undeclared arguments were always refused that way; arguments the tool declares
+and the call omits were not. Session P: ten of the thirteen declared arguments were denied when
+omitted, but only because a rule happened to name each of them and read the absence as `UNTRUSTED`
+through `trust.get(arg, UNTRUSTED)`. The three that no rule names — `send_email.subject`,
+`send_email.body` and `book_appointment.reason`, which carry no `trust_key` and by design cannot,
+since a rule requiring their trust fails at load — went the other way. A booking missing its `reason`
+reached `ALLOW` under `allow-booking-on-validated-slot` **autonomously**, on the one tool whose effect
+is genuinely external; an email missing its `subject` or `body` reached `REQUIRE_HUMAN`, and reached
+`ALLOW` under `allow-approved-outbound-email` once a caregiver's approval covered the incomplete map.
+The policy layer considered a malformed capability approved.
+
+This is a **policy-contract defect, not an authorisation bypass**, and the distinction is the honest
+one rather than a softening. Nothing incomplete could be proposed — `PlannerIntentBase._bind_
+arguments_to_the_chosen_tool` rebuilds a proposal's arguments as exactly `spec.arg_names`, filling
+omissions with `NOT_SUPPLIED`, and `PlanNode` is the only production writer of `PLAN_PROPOSED`. And
+nothing incomplete could execute: `ToolSet.<tool>(**args)` raises `TypeError` before the executor is
+reached, measured end to end at zero ledger entries. What was wrong is that the authority layer
+issued verdicts about objects that are not tool calls, with an argument-binding accident in another
+layer as the only thing between one of those verdicts and an effect — session N's shape, where the
+safety came from somewhere else and was written down in no rule.
+
+**Key presence, and nothing else.** `{"body": ""}` is a *complete* `send_email` call: the model named
+the argument and put nothing in it, which is a statement about the **value**, and the trust rules and
+`args_present` already answer those. Completeness reads no truthiness, consults no canonical form,
+and does not overlap `args_present` — whose live scope narrows from "supplied and non-empty" to
+"non-empty and canonicalisable" and which is not touched. So `patient_id=""` is still a booking that
+names a patient badly and is still refused by `deny-booking-for-unverified-patient`; a booking with
+no `patient_id` key is not a complete call for any rule to have an opinion about. Session J's
+authority requirement is untouched: all four shapes it refuses — invented, borrowed from another fact
+key, unvalidated, misquoted — supply the argument. **Whether an empty `reason` should book is the
+open content question and is deliberately still open**; an empty reason still reaches `ALLOW`.
+
+The refusal is deliberately indistinguishable from the other structural ones — `DENY` /
+`NO_RULE_MATCH` / no matched rule, with `arg_classes` and `arg_trust` left empty, which is the
+assertion that the branch ran before trust resolution rather than a proxy for it. **No new
+`ReasonCode`**: the vocabulary is coarse on purpose so a planner cannot map the policy surface by
+probing it, and *"you omitted an argument"* is precisely the hint that would help one construct a
+well-formed call. The undeclared branch stays first, so a map wrong in both directions reports the
+extra argument; collapsing the two into one set-mismatch check would lose a real distinction in the
+audit trail.
+
+**One diagnostic moved, deliberately.** `send_email` with no `to` was refused
+`DESTINATION_NOT_TRUSTED` by `deny-email-to-untrusted-recipient` and is now refused `NO_RULE_MATCH`
+as incomplete — earlier and stricter, but a different model-visible reason. A mapping with no
+recipient is not an email to an untrusted recipient. `Condition.arg_trust_below`'s docstring and
+`_condition_holds`'s comment used to assert the old behaviour and now say what is actually true: the
+resolver still defaults an absent lookup to `UNTRUSTED` as defence in depth, and `evaluate` no longer
+reaches it for a declared argument. Destination trust stays non-vacuous through a *present* hostile
+recipient.
+
+`tests/test_policy_completeness.py` owns the property, over the shipped registry and over a synthetic
+`tool_a(a, b)` behind an unconditional `ALLOW` so it reads as an invariant rather than a spelling of
+`rules.yaml` — `VALUE`-class arguments there on purpose, so the authority-coverage loader is not
+dragged into a test about something else. A mutant disabling **only** the new branch turns 41
+assertions red — 38 in that file plus the three retargeted tests — while the synthetic `{a,b} → ALLOW`
+floor, the `{a,b,c}` undeclared row, all thirteen empty-value rows, every complete-call anchor and the
+other 2170 tests stay green. The eval headline does not move: 0 of 320 shipped, 320 of 320 allow-all,
+before and after. That mutant removes authorisation *rules*; it does not remove malformed-call
+validation, and it should not.
+
 **The read-back compares every booking argument the clinic exposes, and `reason` was the one it did
 not.** `book_appointment` independently re-reads the clinic's appointment by its exact confirmation
 id and compares provider, patient, slot **and reason** against the exact value CareLoop executed

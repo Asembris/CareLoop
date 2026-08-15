@@ -4416,6 +4416,197 @@ through the normal loader.
 28. **Unchanged and still open** — `book_appointment.reason` is transmitted, externally observable
     and never verified. Patch 2, untouched.
 
+## Session O — 2026-08-15
+
+### Position
+
+**Open decision 28, closed for verification only. The read-back now compares every booking argument
+the clinic exposes.**
+
+`book_appointment` sends four arguments. Demo World persists all four, returns all four on the
+independent `GET /clinic/appointments/{confirmation_id}`, and compares all four in its own
+idempotent-replay equality. CareLoop carried three. `AppointmentBooked` had no `reason` field,
+`ClinicClient._appointment` never read `body["reason"]` from a response that contained it, and
+`_verify_booking`'s comparison map named the other three — so the field was sent, persisted in a
+third party's authoritative record, and then never looked at again.
+
+The measured fail-first state, one full run against Demo World on a real loopback socket, with a
+`ChangesTheReason` clinic that books normally and then amends nothing but the reason:
+
+```
+executed reason            'cardiology review'
+clinic holds reason        'ATTACKER SUPPLIED REASON'
+confirmation / provider / patient / slot   all identical
+
+VERIFICATION_PASSED        present
+read_back payload          "true"
+case state                 DONE
+stored ActionRecord        {"confirmation_id":"apt-7c948f29903c9570",
+                            "provider_id":"PROV-NORTHGATE-CARDIOLOGY",
+                            "patient_id":"PT-4417",
+                            "slot_start":"2026-09-03T09:30:00"}
+```
+
+The timeline claimed the external system had been read, and it had — the `GET` happened, over a
+socket, keyed on the exact confirmation id. It simply returned a field nothing was looking at.
+
+After the repair, the same run:
+
+```
+VERIFICATION_FAILED        present, read_back "true", diagnostic names reason
+VERIFICATION_PASSED        absent
+case state                 never DONE
+```
+
+### What kind of defect this was, and what it was not
+
+Not an authorisation bypass and not a trust-resolution defect. `reason` declares no `trust_key`, so
+no rule may require its trust and none does; a rule that tried would fail at load. The whole call
+passes policy, and this argument carries no trust predicate of its own by design.
+
+That is why the wording matters and is used consistently in the code and in `CLAUDE.md`: `reason` is
+compared against **the exact value CareLoop executed**, never "the value policy authorised."
+Completion-time fidelity to an external record and authorisation-time provenance are separate
+questions. Session J asked whether an argument's trust is *required*; session N asked whether an
+argument is *named by a rule at all*; this asked whether an argument CareLoop deliberately sends to a
+third party is ever *observed again*. Three different layers, three different repairs.
+
+The classification stands as **integrity-critical, not safety-critical**. Changing `reason` alone
+moves nobody, nowhere and no when: not the patient, not the provider, not the slot, not authority.
+What it does move is planner-authored content that CareLoop chose to send and that a clinic now holds
+as the recorded justification for a real appointment. The clinic exposes it on the authoritative
+read-back, which is what makes it verifiable at all — and once it is verifiable, leaving it unchecked
+means CareLoop reports "the external system agrees" while a field it wrote is different.
+
+### The repair, and why it is four one-liners rather than a framework
+
+```
+careloop/tools/results.py    AppointmentBooked gains  reason: str   (required)
+careloop/tools/clinic.py     _appointment maps        reason=body["reason"]
+careloop/tools/executor.py   _book_appointment echoes reason=args["reason"]
+careloop/graph/verify.py     _verify_booking map gains "reason": "reason"
+```
+
+No new verification mechanism, no normalisation, no special case, no change to `_mismatches`.
+`reason` is compared by the same exact-string path as the other three, against the same
+`canonical_args` output — and `canonical_value` is identity for `str`, so no trimming, no
+case-folding, no datetime handling enters.
+
+The executor change is **not** optional and is not an independence claim. A mock echoing its own
+input proves nothing about the world; what it does is keep the simulated path's shape consistent, so
+that `_verify_booking` — which runs whether or not a clinic was involved — does not compare every
+fully-mocked booking against an empty string.
+
+### The narrow boundary, restated more precisely than "four fields"
+
+`_appointment` used to be described as keeping four fields and dropping everything else, and the old
+test asserted that literal set. The rule is really narrower and better:
+
+```
+a field the service grew        (booked_at, queue_position)   -> drop
+a declared booking argument CareLoop itself sent              -> carry
+```
+
+The first is something CareLoop never sent and has nothing to compare against, so carrying it would
+put a clock on a result for no benefit — invariant 9's concern, unchanged and still enforced. The
+second is something CareLoop *can* check. `reason` was always the second and was treated as the
+first. `tests/test_clinic_client.py::TestTheBoundaryIsNarrow` now asserts both directions: the reason
+arrives, `booked_at` and `queue_position` do not.
+
+### Required, not defaulted, and what that costs
+
+`AppointmentBooked.reason` is required with no default and no factory, like every other result field
+— `tests/test_tool_callables.py::TestNoClockAndNoRandomness` sweeps for exactly that and needed no
+change. Here the usual argument is sharper than "a default is where a clock enters": a
+`body.get("reason", "")` would have CareLoop compare the value it executed against a string it
+invented, and since `NOT_SUPPLIED` makes an *empty* executed reason reachable, a clinic returning no
+reason at all would have verified clean. Absence of a declared field is a malformed observation.
+
+**Persistence compatibility, measured rather than asserted.** The accurate statement is not "existing
+cases are invalidated":
+
+```
+legacy DONE / FAILED / AWAITING_HUMAN case, loaded            OK
+  case_card projection                                        OK
+  case_detail projection                                      OK
+  ActionView.result (legacy JSON, verbatim)                   OK
+legacy record rehydrated                                      ValidationError, loc=('reason',)
+legacy case persisted in VERIFYING, run                       raises, case FAILED, never DONE
+legacy DONE case reopened, reproposes identical booking       DUPLICATE_SUPPRESSED then raises,
+                                                              case FAILED, never DONE
+new booking result, serialise -> rehydrate                    round-trips with reason
+```
+
+Reads and projections are untouched because `ActionRecord.result` is opaque text to everything except
+`careloop.graph.verify.rehydrate`, whose only production caller is the verify node. What breaks is
+exactly the two paths that re-verify a legacy record, and both fail **closed**.
+
+No migration, no legacy adapter, no optional field, no version-dependent verifier — and the reason is
+semantic rather than operational. A booking result written before the reason was ever observed cannot
+truthfully satisfy an invariant that says it was. Fabricating compatibility would mean a second,
+weaker class of `AppointmentBooked` whose verification claim is quieter than what the timeline and the
+API report about it, which is precisely the confusion `Verification.externally_observed` exists to
+prevent. A demo reset clears local legacy records before judging; that is operational mitigation and
+is deliberately not the justification.
+
+### Evidence
+
+Fail-first, before any production edit: **8 red** across three layers — the end-to-end reason drift
+(2), the direct verifier comparison (1), the typed mapper (3), the real booking result (1), the
+simulated executor (1). The two vacuity companions in the drift class were green from the start, which
+is what they are for: the closed-loop `verify_action` over the same record still passes with no
+observation, and the clinic really did hold the amended reason with every other field intact.
+
+**The non-vacuity mutant.** Delete only `"reason": "reason"` from `_verify_booking`, leaving the
+model, both producers and the mapper intact:
+
+```
+red    TestTheExecutedReasonIsCheckedOnTheWayOutToo::test_a_clinic_holding_a_different_reason...
+red    TestTheExecutedReasonIsCheckedOnTheWayOutToo::test_the_case_never_reaches_done
+red    TestVerifyingAgainstAnObservation::test_an_observation_whose_only_difference_is_the_reason...
+green  typed mapper, malformed observation, simulated executor, normal booking,
+       provider mismatch, patient mismatch, slot mismatch          (184 passed)
+```
+
+Carrying the field and comparing it are separate properties, and the mutant is what says so. It was
+restored exactly; no source-mutating test ships. A second mutant on the mapper was considered and
+rejected — with a required field, dropping it fails loudly everywhere and proves only that required
+means required. The cheaper and narrower guard is the malformed-observation test, which catches the
+mutant that actually matters: a silent `body.get("reason", "")`.
+
+**Final matrix.** provider mismatch → FAIL, patient mismatch → FAIL, slot mismatch → FAIL, reason
+mismatch → FAIL, all four equal → PASS.
+
+Full suite **2110 passed, 37 skipped**; `ruff check` and `ruff format --check` clean.
+
+### What did not change
+
+`canonical_args`, `args_digest`, `idempotency_key` and `Clinic._same` are untouched — `reason` already
+participated in all four, measured (`93c1267f…` vs `37ded429…` for the digest, `2bae6f2f…` vs
+`a0bf3957…` for the key), so this patch is observation coverage and not effect identity. No policy
+YAML, no policy loader, no `PolicyEngine`, no trust resolution, no approval identity or capability, no
+decision surface, no `Case`/`Approval`/`ActionRecord` schema, no API model, no frontend, and no Demo
+World change — the clinic already stored, returned and replay-compared the field.
+
+The expected-value binding is unchanged and was re-read rather than redesigned: the verify node takes
+the latest proposal, derives the idempotency key from it, finds the `ActionRecord` under that key, and
+`verify_action` re-checks the key and the digest against the record. A drifted proposal keys to a
+record that does not exist and fails; it cannot verify a different action.
+
+### Still open, deliberately
+
+`reason` remains planner-authored free text: no trust key, no template, no regex, no length bound, no
+human review before an autonomous booking, and influenceable by document evidence that reaches the
+planner prompt. This patch verifies external fidelity, not provenance or appropriateness, and open
+decision 28's content half stays open so the two properties keep independent causal evidence.
+
+The malformed-observation *lifecycle* is also unchanged and still adjacent: a response omitting a
+required field raises out of the verify node rather than becoming a `ReadBackFailed`, which is
+pre-existing behaviour for the other four fields and was not touched here. Nor was the
+`VERIFICATION_FAILED → PLANNING` replan cost (open decision 18) — a reason mismatch follows it exactly
+as a slot mismatch does, and the asserted invariant is "no `VERIFICATION_PASSED`, never `DONE`", not
+"immediately `FAILED`".
+
 ## Standing risks
 
 - **The resume is a `CaseStore` reconstruction across a process boundary, not a Strands session

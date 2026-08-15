@@ -4243,7 +4243,7 @@ A1, *a ruleset that permits everything is by construction not a valid ruleset*, 
 mutant cannot be built through a loader that enforces it. Resolving it means changing how
 `evals/replay.py` assembles its mutant and amending `docs/security-evaluation.md`, which claims the
 mutant goes "through the real loader". That is outside this patch's approved scope and was reported
-rather than taken.
+rather than taken. **Closed in session N1 below.**
 
 ### Non-vacuity
 
@@ -4306,6 +4306,115 @@ narrower, and only for grants naming a portal the case has not established.
     compares it — a clinic-side change to `reason` alone leaves verification `PASSED` and the case
     `DONE`. Integrity-relevant rather than authority-bearing: it cannot change who, where or when.
     This is Patch 2 and is deliberately untouched here.
+
+## Session N1 — 2026-08-15
+
+### Position
+
+**Open decision 27, closed. Authority coverage is now enforced by production policy loading.**
+
+Session N left the invariant written and tested but only *reported*: `uncovered_authority_arguments`
+returned the gap and nothing refused it, so a ruleset with an unguarded destination still loaded.
+The measured fail-first state, through the normal entry point:
+
+```
+load_rules_from_mapping(historical hole)   -> SUCCEEDED, 14 rules loaded
+   uncovered (diagnostic only)             -> [('allow-approved-portal-access-grant',
+                                                'grant_portal_access', 'portal_id')]
+load_rules_from_mapping(synthetic tool_a)  -> SUCCEEDED
+   uncovered (diagnostic only)             -> [('allow-a', 'tool_a', 'destination')]
+```
+
+Both are now `PolicyConfigError`, naming the rule, the tool, the argument, its class and the
+required threshold.
+
+### The architecture, and why the conflict dissolved rather than being traded away
+
+Loading is three named steps: `parse_rules` (schema), `validate_rules_resolve` (does each rule mean
+anything against the registry — tools, arguments, trust keys, argument classes), and
+`validate_authority_coverage` (does the ruleset leave an authority-bearing argument unguarded).
+`load_rules_from_mapping` composes all three, and `load_rules_from_text` and `load_rules` funnel into
+it, so there is one answer to "was this ruleset validated" and a test asserts all three entry points
+refuse.
+
+Session N reported the blocker as irreducible, and it is: after the invariant, *"the rules permit
+everything"* and *"the ruleset is invalid"* are the same statement, so the allow-all mutant cannot
+come through a loader that enforces it. What was wrong was treating that as a reason to weaken the
+loader. **The mutant not being loadable is the invariant agreeing with `evals/replay.py` about what
+removing the authority layer means**, and saying so is worth more than the property it would have
+cost.
+
+So `permissive_engine` composes the steps by hand and omits exactly one call. Deliberately **not** a
+parameter: there is no `skip_validation` anywhere, because a flag is something the next caller can
+pass and an omission is something a sweep can find. Two sweeps do —
+`TestOnlyTheEvaluationMutantSkipsCoverage` fails if any production module other than `loader.py` and
+`replay.py` composes validation by hand, or if the loaders grow a switch; and
+`TestTheBypassIsOnlyTheCoverageInvariant` proves the eval-only path still refuses an unknown tool, an
+undeclared argument, a trust predicate on an untyped argument, an argument class contradicting the
+registry, and a malformed condition key. The three steps are not re-exported from `careloop.policy`,
+so reaching one means importing the module by name — which is what makes the one caller visible.
+
+### `test_typed_trust`'s degenerate ruleset
+
+`allow-with-a-body` was an `ALLOW` over `send_email` naming only `args_present: [body]`, and A1
+refuses it for not requiring `to`. **Made valid rather than exempted**: the rule gained a `to` clause
+at `TRUSTED`. The property under test is untouched — `body` is still named only in `args_present`,
+still declares no `trust_key`, the rule still loads, and the assertion is unchanged. Exempting it
+would have made that test the one place a rule can authorise an email without naming its recipient.
+
+### Non-vacuity, and the distinction it protects
+
+Removing **only** the `validate_authority_coverage` call from `load_rules_from_mapping` — one line,
+nothing else — turns **8 tests** red:
+
+```
+test_policy_coverage  test_an_uncovered_destination_is_refused_at_load
+                      test_the_message_names_the_rule_the_tool_the_argument_and_the_threshold
+                      test_an_uncovered_authority_argument_is_refused_at_load
+                      test_a_permissive_allow_beside_a_strict_one_is_refused_at_load
+                      test_a_deny_rule_does_not_rescue_a_permissive_allow_at_load
+                      test_every_normal_entry_point_enforces_it
+test_grant_authority  test_the_historical_ruleset_cannot_be_loaded_normally
+test_evals_replay     test_the_permissive_ruleset_is_refused_by_normal_loading
+```
+
+and **every runtime portal outcome stays correct**, because `rules.yaml` is still fixed. That is the
+distinction worth keeping sharp: *the rules repair* and *the load-time coverage guarantee* are two
+properties with two mutants and two sets of evidence. Session N's mutant edits `rules.yaml` and
+leaves the loader alone; this one edits the loader and leaves `rules.yaml` alone. Neither implies the
+other. `loader.py` restored byte-for-byte afterwards, verified by SHA-256
+(`6c1dab09bc1a7ef845f551649ae8b0e42b2e2998b1f077ad8b2eb11d36cc9911`).
+
+### Results
+
+**2101 passed, 37 skipped** — 2080 before. `ruff check` and `ruff format --check` clean.
+`evals.replay` substantively unchanged: 0 confirmed attacker-derived effects and 320/320 clean under
+the shipped rules, 560 effects and 0/320 clean under the allow-all mutant. The falsifiability claim
+is not weakened but more precisely stated: the mutant is now documented as intentionally
+non-production-loadable, which is a stronger statement about the shipped system than "it goes through
+the same loader" was.
+
+### Compatibility
+
+No DB migration, no API contract change, no frontend change, no persisted-case invalidation, no Demo
+World change, and **`rules.yaml` was not touched again** — the behavioural repair from session N was
+already correct. Policy loader behaviour changed: invalid authority coverage is now rejected.
+Security-eval construction changed: the mutant is assembled from the loading steps rather than
+through the normal loader.
+
+### Open decisions
+
+24. **Unchanged and still open** — `PolicyEngine.evaluate` permits a call that omits a declared
+    argument. Patch 3, untouched.
+
+25. **Unchanged.**
+
+26. **Unchanged.** Frontend `latestProposal` resolution, deferred.
+
+27. **Closed.** Superseded by this session.
+
+28. **Unchanged and still open** — `book_appointment.reason` is transmitted, externally observable
+    and never verified. Patch 2, untouched.
 
 ## Standing risks
 

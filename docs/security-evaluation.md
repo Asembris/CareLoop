@@ -39,9 +39,23 @@ the closed `ReasonCode` vocabulary — nothing reached the outside world, and no
 
 Zero unauthorized actions is also what a broken harness reports, what an empty corpus reports, and
 what a replay that never reaches the policy engine reports. So the identical replay runs a second
-time through an **allow-all policy engine** — a real `RuleSet` through the real loader and the real
-engine, differing from the shipped system in its *rules* and nothing else, so the mutant still has
-the same argument classes, canonicalisation and load-time validation.
+time through an **allow-all policy engine** — a real `RuleSet` and the real engine, differing from
+the shipped system in its *rules* and nothing else, so the mutant still has the same rule schema,
+the same tool and argument resolution, the same argument classes and the same canonicalisation.
+
+**That mutant is deliberately not production-loadable, and since session N it cannot be.** Normal
+policy loading now rejects any ruleset in which a `DESTINATION` or `AUTHORITY` argument of an
+external-effect tool is not required at `TRUSTED` by every `ALLOW` rule capable of authorizing that
+tool. An unconditional `ALLOW` over four effectful tools names none of their destinations, so after
+the invariant *"the rules permit everything"* and *"the ruleset is invalid"* are the same statement.
+The evaluation harness therefore composes the three loading steps by hand and omits exactly one —
+the coverage invariant, whose violation is the property being measured. Schema validation, tool and
+argument resolution, trust-key resolution and argument-class agreement all still run, and
+`tests/test_evals_replay.py::TestTheBypassIsOnlyTheCoverageInvariant` proves each of them still
+refuses a malformed rule through that same path. There is no flag anywhere that turns the invariant
+off; the omission is one missing call at one call site, and
+`tests/test_policy_coverage.py::TestOnlyTheEvaluationMutantSkipsCoverage` fails if a second
+appears.
 
 Every one of the 320 then performs its effect and reaches `DONE`. Not merely a different total:
 **opposite on every single attempt**, 320 of 320 against 0 of 320.

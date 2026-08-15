@@ -269,16 +269,33 @@ where that call lands. The scope is deliberately narrow — `VALUE` is excluded,
 `slot_start` and `document_id` are required at `CONTROLLED` on purpose and `subject`, `body` and
 `reason` declare no `trust_key` at all, so requiring their trust fails at load.
 
-`uncovered_authority_arguments` in `careloop/policy/loader.py` is the check, and
-`tests/test_policy_coverage.py` exercises it against synthetic registries so it is generic rather
-than a spelling of this one tool. It is a **pure diagnostic today, in the shape
-`uncovered_external_tools` established, and not yet a load-time refusal** — making it one rejects
-the deliberately-degenerate rulesets that prove *other* guards non-vacuous, `evals/replay.py`'s
-allow-all mutant among them, and that trade has not been decided. `tests/test_grant_authority.py`
-carries the behavioural boundary, and a mutant restoring exactly the historical hole — the `DENY`
-rule dropped, the `portal_id` predicate removed, nothing else — turns seven of its assertions and
-two structural checks red while the grantee, role and `upload_document.portal_id` controls stay
-green.
+**The production policy loader rejects a ruleset that violates this coverage.** Loading is three
+named steps in `careloop/policy/loader.py` — `parse_rules` (schema), `validate_rules_resolve` (does
+each rule mean anything against the registry), `validate_authority_coverage` (does the ruleset leave
+an authority-bearing argument unguarded) — and `load_rules_from_mapping` composes all three, with
+every other loader funnelling into it. So an unguarded destination is an outage at startup rather
+than a gap somebody notices later. There is **no parameter anywhere that turns the third step off**;
+`uncovered_authority_arguments` remains available as the pure diagnostic behind it.
+
+**The allow-all security-evaluation mutant is intentionally not production-loadable.** After this
+invariant, "the rules permit everything" and "the ruleset is invalid" are the same statement, so
+`evals/replay.py::permissive_engine` composes the three steps by hand and omits exactly the third —
+its violation being the property that mutant exists to measure. Schema, tool and argument
+resolution, trust keys and argument classes all still apply to it. That omission is one missing call
+at one call site rather than a flag, because a flag is something the next caller can pass and an
+omission is something a sweep can find:
+`tests/test_policy_coverage.py::TestOnlyTheEvaluationMutantSkipsCoverage` fails if a second appears,
+and `tests/test_evals_replay.py::TestTheBypassIsOnlyTheCoverageInvariant` proves the eval path still
+refuses everything else. The three steps are deliberately not re-exported from `careloop.policy`, so
+reaching one means importing the module by name.
+
+`tests/test_grant_authority.py` carries the behavioural boundary and
+`tests/test_policy_coverage.py` the structural one, exercised against synthetic registries so the
+invariant is generic rather than a spelling of this one tool. **The rules repair and the loader
+invariant are separate properties with separate evidence**: a mutant restoring the historical hole
+in `rules.yaml` turns seven behavioural assertions red, and a mutant removing only the loader's
+coverage call turns eight loader-specific tests red while every runtime portal outcome stays
+correct.
 
 **The grant path is still unreachable in production and this changed nothing about that.** No
 producer emits a fact under the `role` key; `tests/test_typed_trust.py::TestTheGrantPathHasNoProduction

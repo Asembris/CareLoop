@@ -3972,6 +3972,191 @@ through `evaluate`, so binding the engine bound them.
     above is evidence about the state of the tree, not a design restriction; freezing it would be
     preserving the accident instead of the repair.
 
+## Session M — 2026-08-15
+
+### Position
+
+**Open decision 23, closed.** The caregiver decision surface now reconstructs the proposal it
+renders through the same `(tool_name, args_digest)` capability identity the pending `Approval`
+carries. `proposal_for(case, tool_name, digest)` matches both halves; a proposal belonging to
+another tool is invisible to that lookup however its arguments hash.
+
+**Two production lines changed**, in `careloop/graph/context.py` and `careloop/api/projections.py`.
+Executable authority did not move: `Case.approval_for`, `Case.is_approved`, `policy.engine.approved`,
+`args_approved`, `rules.yaml`, `ExecuteNode._approval_problem`, `approval_id_for`,
+`_request_approval`, `runner._decide`, the policy hook and the gated toolset are all untouched.
+
+**2048 passed, 37 skipped** — 2034 before, and the 14 new tests in `tests/test_decision_surface.py`
+are the whole difference. `ruff check` and `ruff format --check` clean. `evals.replay` unchanged at
+**0 / 320** shipped and **320 / 320** allow-all. Frontend: 102 tests green, `tsc --noEmit` clean, and
+the only frontend edits are two comments that stated the old contract. No migration, no API change,
+no `rules.yaml` change, no `DecisionView` schema change.
+
+### The defect, reproduced before anything was touched
+
+`decision_view` held `approval.tool_name` and passed only `approval.args_digest`:
+
+```python
+proposal = proposal_for(case, approval.args_digest)
+```
+
+So the card asked *"which proposal has arguments that hash like this?"* while the approval meant
+*"this exact call"* — the same missing half session L closed on the authority side, on the surface a
+person reads **before** granting that authority. Measured against the unmodified tree:
+
+```
+Proposal(tool_a, {"x": "same"}, "rationale A")   seq 0
+Proposal(tool_b, {"x": "same"}, "rationale B")   seq 1   ← newer
+Approval(tool_name="tool_a", args_digest=D, PENDING)
+
+proposal_for(case, D)  ->  tool_name: tool_b | rationale: rationale B
+```
+
+### What the audit expected, and the correction
+
+The decision was opened predicting that the card would display *tool B's arguments and rationale*.
+It cannot, and the reason is structural rather than incidental. `Proposal.args` is `dict[str, str]`,
+`canonical_value` returns a `str` **verbatim**, and `args_digest` is `sha256` over the sorted-key
+JSON of that map — so **an equal digest is an equal argument map**, short of a SHA-256 collision.
+`rationale` differs but is not projected: `DecisionView` carries `approval_id`, `tool_name`,
+`reason_code`, `reason_text`, `args`, `requested_at`, and `args` is its only proposal-derived field.
+
+The reachable observable defect is therefore **borrowing**, not substitution:
+
+```
+Proposal(tool_b, X, digest D)      — the only proposal carrying D
+Approval(tool_name=tool_a, args_digest=D, PENDING)
+
+OLD → DecisionView.args == X       (lifted from a record for a different tool)
+NEW → DecisionView.args == {}      (the documented no-match path)
+```
+
+The `{}` rendering is not new behaviour. `decision_view` has always shown a card with no arguments
+when the approval's proposal is absent — *"a card with nothing on it is a caregiver who can see
+there is nothing to approve"* — and this makes *"present only under another tool"* count as absent,
+which is what stops the fallback being reachable around instead of through.
+
+### Reachability, stated conservatively
+
+**Not reachable under the shipped workflow.** Three independent reasons, each sufficient:
+
+1. Only `send_email` and `grant_portal_access` can reach `REQUIRE_HUMAN`, and their declared
+   argument names are disjoint — so the only digest they can share is the empty map's, which a
+   `DENY` on the absent destination refuses before `REQUIRE_HUMAN` is considered.
+2. The approval is raised inside the same `GateNode` execution that read `latest_proposal`, so at
+   the moment a card exists the approval's proposal *is* the newest `PLAN_PROPOSED`.
+3. Nothing plans while a case is `AWAITING_HUMAN` — excluded from the permitted set of
+   `deny-external-effect-outside-execution-states`, no graph edge leaves the parked state, and
+   `reopen_case` raises `CaseNotReopenable` for anything that is not `DONE`.
+
+**Do not restate that as a defence**, for the reason session L gives about its own equivalent: all
+three are facts about registry argument shapes and the order two nodes happen to write the timeline
+in, written down in no rule, and open decision 24 — `evaluate` refuses only *undeclared* arguments —
+is what would make cross-tool digest collisions constructible from shared argument-name *subsets*
+the moment any two tools overlap.
+
+This was **presentation / human-consent integrity, not authorization**. `proposal_for` has no
+authority caller; the execute node and the engine were already tool-bound. It is not claimed to have
+been a currently exploitable shipped-workflow vulnerability, because it was not one.
+
+### The repair
+
+```python
+# careloop/graph/context.py
+def proposal_for(case: Case, tool_name: str, digest: str) -> Proposal | None:
+    for event in reversed(case.timeline):
+        if event.kind is not TimelineKind.PLAN_PROPOSED:
+            continue
+        if event.payload["tool_name"] != tool_name:  # ← the whole repair
+            continue
+        ...
+
+
+# careloop/api/projections.py
+proposal = proposal_for(case, approval.tool_name, approval.args_digest)
+```
+
+Both parameters positional and required, so no caller can fall back to a digest-only lookup by
+omission — `Case.approval_for`'s reason, applied to the presentation counterpart. **There is no
+digest-only variant anywhere and none was needed**: the consumer audit found exactly one production
+caller (`decision_view`), one re-export, and three test call sites, all same-tool. Creating a second
+helper for a use case nobody has would have reopened this under a different name.
+
+Latest-exact-match is unchanged. The gate raises the request from `latest_proposal`, so the newest
+proposal of one call *is* the record the caregiver was asked about; binding the tool narrows the
+candidate set and leaves the tie-break alone. No proposal id, no new persisted field, no change to
+`Approval`, no new exception, no new status code.
+
+Three `DERIVED` description strings in `projections.py` were corrected to stop claiming the walk-back
+is by digest alone. No table key moved; both import-time checks validate key coverage only.
+
+### Non-vacuity
+
+The four projection-level and persistence-level borrow tests failed on assertion against the
+unmodified tree — `assert {'to': 'carer@example', 'subject': ..., 'body': ...} == {}` — and the six
+helper-level tests failed on the absent signature. Nothing was committed red.
+
+The mutant keeps the new signature and deliberately ignores `tool_name`, changing nothing else:
+
+```
+cross-tool borrow (decision_view, both orderings)        FAIL
+cross-tool borrow (case_detail)                          FAIL
+cross-tool borrow (persisted round trip)                 FAIL
+helper selection (both orderings)                        FAIL
+helper: another tool's proposal alone is no match        FAIL
+                                                    → 7 failed, 7 passed
+
+same-tool exact match                                    PASS
+same-tool repetition (latest wins)                       PASS
+different digest under the same tool                     PASS
+no proposal at all                                       PASS
+same-tool persisted round trip                           PASS
+
+test_approval_capability / _identity / _shape,
+test_no_safe_action, test_api_projections,
+test_graph_wiring                        191 passed — did not move
+```
+
+That last line is the honest measure of what was covering this before: nothing was. Source restored
+byte-identically afterwards, verified by SHA-256 (`ca32d026…52e25`). No test mutates source at
+runtime.
+
+One test in the new file is explicitly **not** evidence and says so in its own docstring:
+`test_the_card_is_right_when_another_tools_identical_proposal_is_newer` is the scenario the audit
+predicted, and it passes before the repair, after it, and under the mutant — because equal digest
+means equal args. It is kept because reading the code suggests otherwise. Record identity is proven
+on `rationale`, which the digest does not cover, at helper level where it is visible.
+
+### What did not change
+
+`DecisionView` keeps all six fields and their types. No frontend behaviour: the client consumes the
+backend card and performs no digest-based reconstruction, so the only edits there are two comments
+that described the old contract. No migration and none possible to need — `Approval` already stored
+both halves and `PLAN_PROPOSED` already stored the tool name, so the stronger lookup is purely
+interpretive and a persisted record keeps its identifiers byte for byte. Both round-trip directions
+are pinned in `TestNothingOnDiskHadToChange`.
+
+### Open decisions
+
+23. **Closed.** Superseded by this session.
+
+24. **Unchanged and still open** — `PolicyEngine.evaluate` permits a call that omits a declared
+    argument. Deliberately not relied on here and deliberately not pinned: the cross-tool proofs
+    above use two tools with complete argument maps, so they hold whichever way it is later decided.
+    **Do not add a regression test requiring partial argument sets to keep being accepted.**
+
+25. **Unchanged.** No registry-shape prohibition was added and none should be. Two tools sharing an
+    argument schema is safe on the surface for the same reason it is safe in the authority path:
+    their capability identities differ by tool name.
+
+26. **`buildCase` resolves the outcome and read-back panels through `latestProposal(timeline)`.**
+    Adjacent finding, recorded rather than fixed, and deliberately kept out of this patch so the
+    decision-surface property has one attributable cause. On a `DONE` case the latest proposal is the
+    executed one under the shipped workflow, so nothing is currently wrong — but it is the same
+    resolve-by-convenience-rather-than-by-identity shape on the *output* surface, where the honest
+    key is the `ActionRecord` that was actually performed. `AUTHORIZED` in the read-back panel is
+    read from it, which is what makes it worth a decision rather than a note.
+
 ## Standing risks
 
 - **The resume is a `CaseStore` reconstruction across a process boundary, not a Strands session

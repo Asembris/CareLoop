@@ -3789,12 +3789,188 @@ readable history.
     **Until it lands, do not describe `(tool_name, args_digest)` as the enforced action identity.**
     This session established request identity and nothing about authority binding.
 
+    **Closed by session L**, which also corrected the reachability argument above: the disjoint-set
+    measurement was the wrong measurement, since `evaluate` refuses only *undeclared* arguments and
+    three shipped pairs do share a name. What actually made it unreachable is narrower and is
+    recorded there.
+
 22. **CareLoop may repropose byte-identical arguments after an explicit human rejection.** The
     planner is told the refused tool and the reason code, but never that *these exact arguments*
     were already refused by a person. A product question rather than an integrity one, and
     deliberately unchanged here: this patch exists to make the history of that reproposal correct,
     not to decide whether the reproposal should happen. `prior_denials` reads `POLICY_DENY` entries
     only, so a rejection is invisible to the planner — that is where it would be addressed.
+
+## Session L — 2026-08-15
+
+### Position
+
+**Open decision 21, closed.** A human approval is now a capability for one exact tool call:
+`approval_for` and `is_approved` match the stored `tool_name` **and** the exact canonical
+`args_digest`, and `approved` receives the tool the engine is currently evaluating. Request identity
+did not move — `approval_id`, `approval_id_for`, `_decide`, `AmbiguousApproval` and the positional
+replacement from session K are untouched, and no lookup consults an identifier.
+
+**2034 passed, 37 skipped** — 1998 before, and the 36 new tests are the whole difference.
+`ruff check` and `ruff format --check` clean. `evals.replay` unchanged at **0 / 320** shipped and
+**320 / 320** allow-all. All three `resume_demo` phases reach their intended resting states across
+three real processes. Frontend: 102 tests green, `tsc --noEmit` clean, and **no frontend file
+changed**. No migration, no API change, no `rules.yaml` change.
+
+### The defect, reproduced before anything was touched
+
+`args_digest` is `sha256` over `{argument name: canonical value}` and covers *nothing else* — not
+the tool, not the case. `Approval` stored `tool_name`, `_request_approval` wrote it, `_decide`
+audited it, `ApprovalView` and the decision card rendered it, and **no lookup ever compared it**.
+The signatures made supplying it impossible, which is the tell:
+
+```
+Case.is_approved(self, args_digest)
+careloop.graph.context.is_approved(case, digest)
+careloop.policy.engine.approved(args, case)
+```
+
+So the question being asked was *"did a human approve an argument map that looks like this?"* rather
+than *"did a human approve this call?"*, and an `APPROVED` record for one tool answered `True` for
+any other tool whose arguments canonicalised the same way.
+
+Worse in the other direction, and this was not noticed when the decision was first opened: the scan
+returns the *most recent* record for a digest whatever tool it names, so a rejection recorded for
+one call could revoke a standing approval for a different one. The same missing half, running
+backwards.
+
+### Reachability, measured — and the earlier measurement was the wrong one
+
+Open decision 21 justified "not reachable" with the tools' full argument-name sets being disjoint.
+That is not the operative property. `PolicyEngine.evaluate` refuses only *undeclared* arguments and
+says nothing about omitted declared ones, so a colliding digest is constructible from any shared
+*subset* — and three shipped pairs share a name (`fetch_document`/`upload_document` on
+`document_id`, `grant_portal_access`/`upload_document` on `portal_id`).
+
+What actually made it unreachable is narrower, and needed two independent facts:
+
+1. Only `require-human-for-outbound-email` and `require-human-for-authority-grant` can mint an
+   approval, and only `send_email` and `grant_portal_access` have rules reading `args_approved`. The
+   mint set and the spend set are the same two tools, and *their* argument names are disjoint — so
+   the only digest they could share is the empty one.
+2. The empty digest cannot be minted either. `send_email` with no arguments matches
+   `deny-email-to-untrusted-recipient`; `grant_portal_access` with none matches
+   `deny-portal-access-to-untrusted-grantee`. `DENY` precedes `REQUIRE_HUMAN`, so no approval is
+   ever raised. Planting the impossible record by hand confirms the ordering holds on its own:
+
+   ```
+   shipped rules + APPROVED(grant_portal_access, digest({}))  →  send_email {}
+       DENY  deny-email-to-untrusted-recipient
+   ```
+
+So: **latent, structurally real, not a live exploit.** Say it that way. What made it worth closing
+is that the safety was an accident of registry shape, recorded in no rule and checked by no test.
+
+### The fragility, through the real engine
+
+A synthetic registry whose two tools declare *complete and identical* schemas — no omitted arguments,
+so the proof does not lean on partial-argument behaviour — with the shipped human-in-the-loop rule
+pair transposed onto them. Production registry untouched.
+
+```
+digest(tool_a{x:same}) == digest(tool_b{x:same})
+
+tool_b, no approval on the case  →  REQUIRE_HUMAN
+caregiver approves tool_a{x:same}
+tool_a  →  ALLOW  allow-when-approved
+tool_b  →  ALLOW  allow-when-approved     ← laundered
+```
+
+After the repair `tool_b` returns to `REQUIRE_HUMAN`, and the assertion that matters is written as an
+equality rather than as a verdict: `tool_b` is decided *identically* with and without `tool_a`'s
+approval on the case.
+
+### The repair
+
+One implementation, four call sites, no new field.
+
+```
+Case.approval_for(tool_name, args_digest)   ← the canonical lookup; both required and positional
+Case.is_approved(tool_name, args_digest)
+graph.context.approval_for/is_approved      ← delegate; the second reversed scan is gone
+policy.engine.approved(tool_name, args, case)
+PolicyEngine.evaluate → _condition_holds(condition, tool_name, ...)
+ExecuteNode._approval_problem → approval_for(case, proposal.tool_name, proposal.digest)
+```
+
+Required and positional for the reason `resolve_trust` takes its fact key that way: an authority
+lookup that can be made tool-blind by omitting an argument is one that eventually will be. The tool
+name is threaded from `evaluate` rather than declared in YAML — the engine already knows which tool
+it is deciding, and naming it in a rule would make the rule a second source of truth that could
+contradict the registry. **`rules.yaml` did not change.** `args_approved` kept its syntax and gained
+the correct reading.
+
+The graph helpers now delegate rather than reimplement. Two independent copies of one matching rule
+is two places for it to drift, and the graph's copy was the one the execute node consulted.
+
+### Non-vacuity
+
+The mutant removes tool matching from `Case.approval_for` and **nothing else** — signatures, rules,
+request ids, statuses and every other line unchanged:
+
+```
+if approval.args_digest == args_digest:      # instead of tool_name and digest
+```
+
+| | mutant |
+| --- | --- |
+| cross-tool leak, all four layers (`Case`, graph, `approved`, engine) | **FAIL** |
+| cross-tool shadowing, both directions | **FAIL** |
+| persisted record authorises another tool | **FAIL** (memory and SQLite) |
+| same-tool positive, same-tool different digest, pending-is-not-approved | pass |
+| `APPROVED → REJECTED` denied, `REJECTED → APPROVED` approved, latest-not-any | pass |
+| the entire rest of the suite, 1997 tests | pass |
+
+Nine assertions red, every same-tool property green. That last row is the honest measure of what was
+covering this beforehand: **nothing**. Removing tool binding, and only tool binding, reintroduces
+cross-tool authority, and the 1998-test suite that shipped before this session could not tell.
+
+### What did not change
+
+Latest-match-wins is preserved *within* one exact call, both directions. Persisted approvals gain
+the stronger reading with no migration, because `Approval` already carried both fields — asserted
+through both stores, including that a legacy `tool_name=""` handoff record stays inert and keeps its
+`apr-no-safe-action:c` identifier byte for byte. The normal `REQUIRE_HUMAN` path is unchanged and was
+run across three processes: park (`apr-15`) → approve → resume → execute → verify → `DONE`, then a
+reopen whose autonomous upload is *not* blocked by the earlier email approval.
+
+`args_present` is still a presence check, `_approval_problem` still only refuses, and no third
+enforcement point was added. The hook and the gated backstop were not touched: they already route
+through `evaluate`, so binding the engine bound them.
+
+### Open decisions
+
+21. **Closed.** Superseded by this session.
+
+23. **`proposal_for` resolves the caregiver's decision card by `args_digest` alone.**
+    `decision_view` looks up the proposal an approval covers without naming its tool, so a proposal
+    for a different tool with a colliding digest could render its arguments under this approval's
+    tool name. It authorises nothing and no client computes approval validity, so this is the
+    decision *surface* rather than the authority path — and it was kept out of this patch on purpose,
+    so the authority property has one attributable cause. It is not nothing, though: a card is what a
+    person reads before granting authority. The fix is the same shape and one line each in
+    `careloop/graph/context.py` and `careloop/api/projections.py`.
+
+24. **`PolicyEngine.evaluate` permits a call that omits a declared argument.** Only *undeclared*
+    arguments are refused; an omitted one resolves `UNTRUSTED`, which fails closed for every trust
+    predicate but means the shape of a call is not itself checked. This is what makes cross-tool
+    digest collisions constructible from shared argument-name subsets, and it is recorded rather than
+    pinned — **do not add a regression test requiring partial argument sets to keep being accepted.**
+    Whether a call must supply every declared argument belongs to the verify-all-safety-relevant-
+    arguments work, which may well tighten it.
+
+    Deliberately not relied on here: the synthetic collision proof uses two tools with complete,
+    identical schemas, so it holds whichever way that question is later decided.
+
+25. **No registry-shape prohibition was added, and none should be.** Two tools sharing an argument
+    schema is now safe, because their capability identities differ by tool name. The collision matrix
+    above is evidence about the state of the tree, not a design restriction; freezing it would be
+    preserving the accident instead of the repair.
 
 ## Standing risks
 

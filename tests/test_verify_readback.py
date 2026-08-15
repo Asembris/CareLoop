@@ -194,6 +194,32 @@ class SwapsThePatient(ClinicClient):
         return booked
 
 
+class ChangesTheReason(ClinicClient):
+    """A clinic that keeps the appointment and rewrites why it was made.
+
+    The narrowest divergence this session can construct: the confirmation, the provider, the patient
+    and the slot are all exactly what CareLoop executed, and only the free-text ``reason`` moves. So
+    nothing about who is seen, where, or when has changed — which is why this is completion
+    *integrity* rather than an authority failure, and why it needs its own harness instead of being
+    folded into :class:`MovedByTheFrontDesk`.
+
+    CareLoop sends ``reason`` to the clinic, the clinic persists it and returns it on the read-back,
+    and until this session CareLoop dropped it on the way back in. The effect is a booking whose
+    externally recorded justification is not the one CareLoop executed, reported as verified.
+    """
+
+    OTHER_REASON = "ATTACKER SUPPLIED REASON"
+
+    def __init__(self, base_url: str, world: Clinic) -> None:
+        super().__init__(base_url)
+        self._world = world
+
+    def book(self, args, idempotency_key: str) -> AppointmentBooked:  # type: ignore[override]
+        booked = super().book(args, idempotency_key)
+        self._world.amend(booked.confirmation_id, reason=self.OTHER_REASON)
+        return booked
+
+
 class LosesTheRecord(ClinicClient):
     """A clinic that accepts a booking and then cannot show it."""
 
@@ -261,6 +287,7 @@ class TestVerifyingAgainstAnObservation:
             provider_id=PROVIDER,
             patient_id="PT-4417",
             slot_start=SLOT,
+            reason=BOOKING["reason"],
         )
         record = ActionRecord(
             idempotency_key=KEY,
@@ -297,6 +324,21 @@ class TestVerifyingAgainstAnObservation:
         assert verification.externally_observed
         assert "read back from the external system" in verification.diagnostic
 
+    def test_an_observation_whose_only_difference_is_the_reason_does_not(self) -> None:
+        """The verifier-level half of the reason contract, attributed causally.
+
+        Provider, patient, slot and confirmation are all exactly what was executed, so the only
+        thing that can make this fail is the comparison of ``reason`` itself. That is what the
+        mutant in the session log removes and what this assertion is here to catch.
+        """
+        _record, result = self._record()
+        verification = self._verify(result.model_copy(update={"reason": "a different reason"}))
+
+        assert verification.failed
+        assert verification.externally_observed
+        assert "read back from the external system" in verification.diagnostic
+        assert "reason" in verification.diagnostic
+
     def test_no_observation_verifies_the_old_way_and_says_so(self) -> None:
         verification = self._verify(None)
 
@@ -317,6 +359,7 @@ class TestABookingIsVerifiedAgainstTheClinic:
         assert result.case.state is CaseState.DONE
         assert len(clinic_state.appointments()) == 1
         assert clinic_state.appointments()[0].slot_start == SLOT
+        assert clinic_state.appointments()[0].reason == BOOKING["reason"]
 
     def test_the_timeline_records_that_the_external_system_was_read(
         self, clinic: ClinicClient
@@ -484,6 +527,77 @@ class TestTheAuthorisedPatientIsCheckedOnTheWayOutToo:
         assert world.appointments()[0].patient_id == SwapsThePatient.OTHER_PATIENT
 
 
+class TestTheExecutedReasonIsCheckedOnTheWayOutToo:
+    """The fourth booking argument, and the last one the read-back was not looking at.
+
+    ``reason`` is the odd one out of the four and the classification matters. It declares no
+    ``trust_key``, so no rule may require its trust and none does — the phrase for what it is
+    checked against is therefore *the exact value CareLoop executed*, never "the value policy
+    authorised". The whole call passes policy; this argument carries no trust predicate of its own,
+    and completion-time fidelity is a different question from authorisation-time provenance.
+
+    What makes it verifiable anyway is the clinic. CareLoop sends ``reason``, Demo World persists
+    it, and the independent read-back returns it — so there is an authoritative external record to
+    compare against, and comparing it costs one map entry. Before this session CareLoop dropped the
+    field in :func:`careloop.tools.clinic._appointment`, so a clinic-side rewrite of nothing but the
+    reason reached ``VERIFICATION_PASSED`` and ``DONE``.
+
+    Nothing here says the reason itself is trustworthy or appropriate. It is planner-authored free
+    text and remains so; this class asserts only that what the world holds is what CareLoop sent.
+    """
+
+    def test_a_clinic_holding_a_different_reason_fails_verification(
+        self, clinic_service: tuple[str, Clinic], clinic_state: Clinic
+    ) -> None:
+        result, _context = diverging_run(clinic_service, ChangesTheReason)
+
+        failed = entry(result.case, TimelineKind.VERIFICATION_FAILED)
+        assert failed is not None
+        assert failed.payload["read_back"] == "true"
+        assert "read back from the external system" in failed.diagnostic
+        assert "reason" in failed.diagnostic
+
+    def test_the_case_never_reaches_done(
+        self, clinic_service: tuple[str, Clinic], clinic_state: Clinic
+    ) -> None:
+        result, _context = diverging_run(clinic_service, ChangesTheReason)
+
+        assert result.case.state is not CaseState.DONE
+        assert TimelineKind.VERIFICATION_PASSED not in [e.kind for e in result.case.timeline]
+
+    def test_without_the_read_back_this_very_case_verifies_clean(
+        self, clinic_service: tuple[str, Clinic], clinic_state: Clinic
+    ) -> None:
+        """Non-vacuity. Every closed-loop check passes; only the observation disagrees."""
+        result, _context = diverging_run(clinic_service, ChangesTheReason)
+
+        record = result.case.action_for(KEY)
+        assert record is not None
+        closed_loop = verify_action(
+            case_id=CASE_ID,
+            action_type="book_appointment",
+            args=BOOKING,
+            record=record,
+            result=AppointmentBooked.model_validate_json(record.result),
+        )
+
+        assert closed_loop.passed
+        assert not closed_loop.externally_observed
+
+    def test_the_booking_happened_and_only_the_reason_moved(
+        self, clinic_service: tuple[str, Clinic], clinic_state: Clinic
+    ) -> None:
+        """And the run is not failing because something else diverged, or because nothing booked."""
+        _result, _context = diverging_run(clinic_service, ChangesTheReason)
+
+        held = clinic_state.appointments()
+        assert len(held) == 1
+        assert held[0].reason == ChangesTheReason.OTHER_REASON
+        assert held[0].provider_id == BOOKING["provider_id"]
+        assert held[0].patient_id == BOOKING["patient_id"]
+        assert held[0].slot_start == BOOKING["slot_start"]
+
+
 class TestTheCostOfAFailedReadBack:
     """What a mismatch costs, asserted rather than left to be discovered on camera.
 
@@ -544,6 +658,7 @@ class TestWhenTheClinicCannotBeRead:
                     provider_id=PROVIDER,
                     patient_id="PT-4417",
                     slot_start=SLOT,
+                    reason=BOOKING["reason"],
                 )
             )
 

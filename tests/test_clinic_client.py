@@ -12,6 +12,8 @@ put a clock on it.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import httpx
 import pytest
 
@@ -75,6 +77,7 @@ class TestABookingChangesTheOutsideWorld:
         booked = clinic.book(BOOKING, KEY)
         assert isinstance(booked, AppointmentBooked)
         assert booked.provider_id == BOOKING["provider_id"]
+        assert booked.reason == BOOKING["reason"]
         assert booked.confirmation_id
 
 
@@ -227,35 +230,74 @@ class TestTheBoundaryIsNarrow:
     """Invariant 9 survives contact with a service CareLoop does not control.
 
     Not because the service is well-behaved — it could grow a ``booked_at`` tomorrow — but because
-    the four fields are mapped by name and everything else is dropped at the boundary.
+    the boundary maps **declared booking arguments by name** and drops everything else.
+
+    That is the distinction, and it is sharper than "keep exactly N fields". A field the service
+    grows is one CareLoop never sent and cannot verify, so carrying it would put a clock or a queue
+    position on a result for nothing. ``reason`` is the opposite: CareLoop sends it, the clinic
+    persists it, and the read-back returns it, so it is a value CareLoop has something to compare
+    against. It was dropped anyway until this session, which is what let a reason-only divergence
+    reach ``DONE`` — see ``tests/test_verify_readback.py``.
     """
 
+    RESPONSE: ClassVar[dict[str, object]] = {
+        "confirmation_id": "apt-0000",
+        "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+        "patient_id": "PT-4417",
+        "slot_start": "2026-09-03T09:30:00",
+        "reason": "cardiology review",
+        "booked_at": "2026-08-12T10:00:00+00:00",
+        "queue_position": 4,
+    }
+
     def test_a_field_the_service_grows_never_reaches_the_result(self) -> None:
-        response = httpx.Response(
-            200,
-            json={
-                "confirmation_id": "apt-0000",
-                "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
-                "patient_id": "PT-4417",
-                "slot_start": "2026-09-03T09:30:00",
-                "reason": "cardiology review",
-                "booked_at": "2026-08-12T10:00:00+00:00",
-                "queue_position": 4,
-            },
-        )
-        result = _appointment(response)
+        result = _appointment(httpx.Response(200, json=self.RESPONSE))
 
         assert set(result.model_dump()) == {
             "confirmation_id",
             "provider_id",
             "patient_id",
             "slot_start",
+            "reason",
         }
         assert "booked_at" not in result.model_dump_json()
+        assert "queue_position" not in result.model_dump_json()
+
+    def test_the_declared_reason_does_reach_the_result(self) -> None:
+        """The half the field set alone does not say: it is carried, not merely named."""
+        result = _appointment(httpx.Response(200, json=self.RESPONSE))
+
+        assert result.reason == "cardiology review"
 
     def test_the_result_type_forbids_the_extra_field_outright(self) -> None:
         """Vacuity: the mapping is narrow *and* the model would refuse the field anyway."""
         assert "booked_at" not in AppointmentBooked.model_fields
+
+    def test_a_response_omitting_reason_is_a_malformed_observation(self) -> None:
+        """Absence is not a value to fill in.
+
+        A ``body.get("reason", "")`` would make CareLoop compare the value it executed against a
+        string it invented — and where the executed reason is itself empty, which
+        ``NOT_SUPPLIED`` makes reachable, a clinic returning no reason at all would verify clean.
+        So the mapper subscripts it exactly as it subscripts the other four required fields, and a
+        response missing one fails the same loud way.
+
+        What happens to that failure further up — it escapes the verify node rather than becoming a
+        ``ReadBackFailed`` — is pre-existing behaviour for every other required field and is not
+        changed here.
+        """
+        missing = {key: value for key, value in self.RESPONSE.items() if key != "reason"}
+
+        with pytest.raises(KeyError):
+            _appointment(httpx.Response(200, json=missing))
+
+    def test_the_same_is_true_of_a_field_that_was_always_required(self) -> None:
+        """Vacuity: the failure above is the boundary's standing contract, not a reason special
+        case."""
+        missing = {key: value for key, value in self.RESPONSE.items() if key != "patient_id"}
+
+        with pytest.raises(KeyError):
+            _appointment(httpx.Response(200, json=missing))
 
 
 class TestTheExecutorIsStillTheOnlyRouteOut:

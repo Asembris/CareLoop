@@ -129,10 +129,12 @@ export interface StatusInput {
 
 /** The three status strings for one case.
  *
- *  A mismatch outranks the state: verification failing routes the case back to `PLANNING` and it
- *  ends `FAILED` the long way (open decision 18), so a case can be mid-replan while the honest
- *  thing to say is that the clinic's record disagrees. `HANDOFF.md` §13 is explicit that a
- *  MISMATCH may not be presented as a completed case, and this is where that is enforced. */
+ *  A mismatch outranks the state, and it still needs to. Verification failing used to route the
+ *  case back to `PLANNING`, so it could be mid-replan while the honest thing to say was that the
+ *  clinic's record disagrees; it now parks in `AWAITING_HUMAN`, whose own copy is about a decision
+ *  being needed rather than about what went wrong. Either way the state alone does not say it.
+ *  `HANDOFF.md` §13 is explicit that a MISMATCH may not be presented as a completed case, and this
+ *  is where that is enforced. */
 export function statusCopy(input: StatusInput): StatusCopy {
   if (input.mismatch) {
     return {
@@ -410,7 +412,12 @@ const REFUSAL_PHRASES: Record<string, string> = {
   WRONG_CASE_STATE: "before this case was ready for it",
   REQUIRES_HUMAN_APPROVAL: "without a person's decision",
   NO_RULE_MATCH: "with no rule permitting it",
-  NO_SAFE_ACTION_AVAILABLE: "safely"
+  NO_SAFE_ACTION_AVAILABLE: "safely",
+  // Never reached in practice: this code is carried by a MANUAL_HANDOFF_REQUIRED entry and never by
+  // a POLICY_DENY, because nothing was refused — an action was carried out and could not be
+  // confirmed. Listed so the map stays total over the backend's vocabulary rather than falling
+  // through to a bare tool phrase if a future writer ever does deny with it.
+  EXTERNAL_STATE_NOT_CONFIRMED: "and could not be confirmed afterwards"
 };
 
 export function blockedFor(toolName: string, reasonCode: string): BlockedAction {
@@ -429,7 +436,13 @@ export function blockedFor(toolName: string, reasonCode: string): BlockedAction 
  *
  *  Only `REQUIRES_HUMAN_APPROVAL` may render Approve and Reject. Everything else — including a
  *  code this build has never heard of — maps to `NO_SAFE_ACTION_AVAILABLE`, which `DecisionCard`
- *  renders with no approval affordance at all. Defaulting closed is both correct and free. */
+ *  renders with no approval affordance at all. Defaulting closed is both correct and free.
+ *
+ *  `EXTERNAL_STATE_NOT_CONFIRMED` is the second backend reason that parks a case without raising
+ *  an approval, and it needed nothing here: the default already refuses it an approve button, and
+ *  a *kind* is about what the card may offer rather than about why it appeared. What it did need
+ *  is truthful copy, which is `decisionCopy`'s job — the two are deliberately separate, so a new
+ *  reason to stop can never accidentally arrive with authority attached. */
 export function decisionKindFor(reasonCode: string): DecisionKind {
   return reasonCode === "REQUIRES_HUMAN_APPROVAL" ? "REQUIRES_HUMAN_APPROVAL" : "NO_SAFE_ACTION_AVAILABLE";
 }
@@ -461,6 +474,25 @@ export function decisionCopy(
   const facts = orderedArgs(toolName, args)
     .filter(([, value]) => value !== "")
     .map(([name, value]) => ({ label: argLabel(toolName, name), value: argValue(name, value) }));
+
+  // Two reasons a case stops with nothing to approve, and they are close to opposites. The copy
+  // below says nothing was done; this one says something *was*, and using the wrong one would be
+  // the worse mistake in the safer direction — telling a caregiver no action was taken when a
+  // booking is sitting in a clinic nobody has checked. Both render the same non-approval card:
+  // `decisionKindFor` defaults closed, so neither offers an affordance it has no authority for.
+  if (reasonCode === "EXTERNAL_STATE_NOT_CONFIRMED") {
+    return {
+      title: "The result could not be confirmed",
+      body:
+        "CareLoop carried this out and then checked the other system's own record of it. The " +
+        "two do not agree, or the record could not be read at all — so CareLoop has stopped " +
+        "rather than assume, and will not act again on this case by itself.",
+      facts,
+      after: "Check the other system before taking another action. CareLoop will not retry.",
+      approveLabel: "Approve",
+      rejectLabel: "Reject"
+    };
+  }
 
   if (decisionKindFor(reasonCode) === "NO_SAFE_ACTION_AVAILABLE") {
     return {

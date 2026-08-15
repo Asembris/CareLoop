@@ -78,6 +78,40 @@ rules:
       grant_portal_access.grantee resolved below TRUSTED. Who receives access is DESTINATION-class
       and must come from trusted config or a human decision.
 
+  # The grant's *other* destination. `grantee` says who receives access; this says on which
+  # system, and it is DESTINATION-class for the same reason — a portal named by document content
+  # is not a legitimate target however well-formed the identifier looks.
+  #
+  # Session N: this rule did not exist, and allow-approved-portal-access-grant did not name
+  # portal_id either. So the engine resolved the argument's trust and no rule read it. With a
+  # trusted grantee, a trusted role and a caregiver's approval covering the exact call, a grant on
+  # PORTAL-ATTACKER-CONTROLLED reached ALLOW while that same Decision reported
+  # portal_id=UNTRUSTED. This is session J's shape one class further out: not "guarded by presence
+  # instead of by trust", but named by no rule at all.
+  #
+  # It was unreachable in the shipped configuration, and only because nothing anywhere emits a
+  # trusted role — a different rule, guarding a different argument. An accident is not a boundary,
+  # and the accident is one deliberate change away from being gone. Compare
+  # deny-upload-to-untrusted-portal, which has always guarded the same argument of the same class
+  # on the other tool that takes one; this rule is its mirror, clause for clause.
+  - id: deny-portal-access-to-untrusted-portal
+    effect: DENY
+    tools: [grant_portal_access]
+    when:
+      arg_trust_below:
+        - arg: portal_id
+          level: TRUSTED
+          arg_class: DESTINATION
+    reason_code: DESTINATION_NOT_TRUSTED
+    diagnostic: >-
+      grant_portal_access.portal_id resolved below TRUSTED. Which portal an access grant is made on
+      is DESTINATION-class and must come from trusted config or a human decision. A caregiver's
+      approval cannot substitute for it: DENY is evaluated first and unconditionally, so this
+      refuses the call before REQUIRE_HUMAN is considered and the question is never put to a person
+      at all. That ordering is the point — asking somebody to approve a grant on a portal nothing
+      established would be putting a decision to a caregiver that CareLoop should already have
+      refused.
+
   # The only rule keyed on the system's only AUTHORITY argument. It is the mirror of the
   # destination rules: a role lifted out of a document and then validated is still CONTROLLED, and
   # CONTROLLED is below TRUSTED, so the grant is denied. Validation cannot manufacture authority.
@@ -276,9 +310,19 @@ rules:
         - arg: role
           level: TRUSTED
           arg_class: AUTHORITY
+        - arg: portal_id
+          level: TRUSTED
+          arg_class: DESTINATION
     diagnostic: >-
-      Access grant to a grantee and with a role that both came from trusted config, approved by a
-      caregiver. Unreachable for anything a document named: role is AUTHORITY-class and absent from
+      Access grant to a grantee, with a role, and on a portal that all three came from trusted
+      config, approved by a caregiver. The portal_id clause was added in session N and is not
+      redundant beside deny-portal-access-to-untrusted-portal: the DENY states the refusal, and
+      this stops the positive path depending on the DENY being the thing that catches it. A rule
+      that authorises a tool without naming one of its destinations is a rule that would authorise
+      that destination the day the DENY is edited. Approved by a caregiver, but never *because*
+      approved by one — every clause here is deterministic and the approval is one clause among
+      them.
+      Unreachable for anything a document named: role is AUTHORITY-class and absent from
       PROMOTABLE_ARG_CLASSES, so a role lifted from evidence can never resolve TRUSTED and
       deny-authority-grant-below-trusted refuses it before this rule is considered.
       It is in fact unreachable full stop under the shipped configuration, because no producer

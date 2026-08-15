@@ -76,7 +76,7 @@ class ReasonCode(StrEnum):
     NO_SAFE_ACTION_AVAILABLE = "NO_SAFE_ACTION_AVAILABLE"
     """Every action the catalogue offers has been refused. The caregiver is asked what to do.
 
-    The seventh code, added in session B, and the only one that is **not** the reason a particular
+    The seventh code, added in session B, and the first that is **not** the reason a particular
     call was refused. It is the reason a *case* was parked: the planner has now proposed every tool
     there is and each was denied, so there is nothing left to replan toward.
 
@@ -89,6 +89,32 @@ class ReasonCode(StrEnum):
     the system working exactly as designed — on a poisoned case it is the best available outcome —
     and rendering it as ``FAILED`` would report a defence as a fault. ``FAILED`` keeps its meaning:
     something broke.
+    """
+
+    EXTERNAL_STATE_NOT_CONFIRMED = "EXTERNAL_STATE_NOT_CONFIRMED"
+    """An effect was carried out and its result could not be confirmed. A person must check.
+
+    The eighth code, and the second that parks a *case* rather than refusing a call — so like
+    ``NO_SAFE_ACTION_AVAILABLE`` no rule carries it and the engine never emits it. The graph writes
+    it onto the ``MANUAL_HANDOFF_REQUIRED`` entry
+    :func:`careloop.graph.nodes._park_with_nothing_certifiable` appends.
+
+    **Deliberately one code for two evidence states**, which is why it is named for what CareLoop
+    knows rather than for what happened. An independent read that *succeeded and disagreed* and one
+    that *could not establish anything* are different facts about the world, and
+    :class:`careloop.graph.verify.Verification` collapses them on purpose; what they share is that
+    CareLoop cannot certify the result, and that is exactly what this says. Naming it
+    ``EXTERNAL_STATE_DIVERGED`` would be false for the unreadable case and
+    ``EXTERNAL_SYSTEM_UNREACHABLE`` false for the divergent one. Splitting it is a Patch 2 question,
+    to be answered beside the ``Verification`` discriminator a split would need, not before it.
+
+    ``_NOT_CONFIRMED`` rather than ``_UNVERIFIED`` for the reason the two ``_NOT_TRUSTED`` codes are
+    spelled that way: it states what the evidence failed to establish, where "unverified" reads as
+    though nobody looked. Something did look, twice, and reported back.
+
+    Reusing ``NO_SAFE_ACTION_AVAILABLE`` was the alternative and it would have put a false statement
+    in an append-only trail: nothing was refused here, and the catalogue was never exhausted. An
+    action was *carried out*, which is close to the opposite.
     """
 
 
@@ -126,6 +152,15 @@ REASON_TEXT: Final[Mapping[ReasonCode, str]] = {
     # would read it.
     ReasonCode.NO_SAFE_ACTION_AVAILABLE: (
         "No action available here can be carried out safely. A caregiver has been asked to decide."
+    ),
+    # Truthful for both evidence states, which is the constraint that shaped every word of it. It
+    # says the result could not be confirmed, never that anything was reached or that anything
+    # changed — the first would be false when a read succeeded and disagreed, the second when no
+    # read succeeded at all. Like the code above it points at the caregiver rather than back at the
+    # planner, because an effect has already happened and there is nothing left to propose about it.
+    ReasonCode.EXTERNAL_STATE_NOT_CONFIRMED: (
+        "The result of an action already carried out could not be confirmed to match it. A "
+        "caregiver has been asked to check before anything further is done."
     ),
 }
 

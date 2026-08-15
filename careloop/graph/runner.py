@@ -67,6 +67,26 @@ class ApprovalAlreadyDecided(Exception):
     """Raised when a decision is recorded against an approval that is no longer pending."""
 
 
+class AmbiguousApproval(Exception):
+    """Raised when an identifier names more than one decidable request, so nothing can be decided.
+
+    An approval identifier answers *which occurrence of asking a caregiver is this decision about?*
+    If two records under one id are both ``PENDING``, that question has no answer, and there is no
+    safe way to guess: deciding "the last one" would silently leave a live request behind under an
+    id nothing can now reach.
+
+    Nothing writes this shape any more — :func:`careloop.graph.context.approval_id_for` derives an
+    identifier from the timeline position of the request rather than from the arguments, so two
+    requests on one case cannot collide. It exists for what is already on disk. The pre-repair
+    manual handoff called every parking ``apr-no-safe-action:c``, so a case that parked, was
+    reopened by a later event and parked again carries two identical identifiers, both pending.
+
+    Refusing rather than repairing is the point. Rewriting persisted records to make them unique
+    would be a migration that edits history to make history tidy, which is the opposite of what an
+    append-only audit trail is for.
+    """
+
+
 class NotAnApprovableAction(Exception):
     """Raised when a decision names a record that authorises no call.
 
@@ -357,21 +377,67 @@ def _decide(
     decided_by: str,
     now: datetime | None,
 ) -> Case:
+    """Record one caregiver decision against exactly one pending request.
+
+    **The target is found once and replaced by position.** That is the whole shape of this function
+    and it is worth saying plainly, because the version before it looked equivalent and was not: it
+    inspected ``matching[-1]`` and then rebuilt ``case.approvals`` replacing *every* record whose
+    ``approval_id`` matched. One record was checked and N were rewritten, so the guards and the
+    mutation had different scopes.
+
+    Session K measured what that cost. A caregiver rejected a proposal, the planner reproposed the
+    identical arguments, and because the identifier was derived from the arguments the second
+    request arrived under the first request's name. Approving the second rewrote the first: an
+    ``APPROVED`` status, a second caregiver's name and a fresh timestamp landed on a record whose
+    whole purpose was to say that somebody else had refused. Authority never moved — ``is_approved``
+    reads the most recent record matching the *digest*, which is the one that was actually decided —
+    so this was audit integrity rather than escalation, in a system whose central claim is that the
+    audit trail proves what happened.
+
+    :func:`careloop.graph.context.approval_id_for` now makes new identifiers unique, so on anything
+    written after this commit there is only ever one match. **Positional replacement is kept anyway,
+    and that is deliberate**: unique identifiers cannot help the duplicates already persisted, and a
+    rebuild keyed on the identifier would silently rewrite them the first time one is decided. The
+    two halves are independently load-bearing and each has its own mutant.
+
+    Everything is checked before anything moves, so a refusal cannot mean "half recorded" — no
+    approval mutated, no timeline entry, no transition, no version bump.
+
+    Raises:
+        NoSuchApproval: the case carries no record under this identifier.
+        AmbiguousApproval: more than one record under it is still pending, so which request is being
+            decided has no answer. Only reachable for identifiers persisted before this commit.
+        ApprovalAlreadyDecided: every record under it has been decided. A decision is made once.
+        NotAnApprovableAction: the pending record authorises no call — see :class:`Approval`.
+    """
     at = now or _utcnow()
     case = store.get(case_id)
     base = case.version
 
-    matching = [approval for approval in case.approvals if approval.approval_id == approval_id]
+    matching = [
+        index
+        for index, approval in enumerate(case.approvals)
+        if approval.approval_id == approval_id
+    ]
     if not matching:
         raise NoSuchApproval(f"case {case_id!r} carries no approval {approval_id!r}")
 
-    approval = matching[-1]
-    if approval.status is not ApprovalStatus.PENDING:
-        raise ApprovalAlreadyDecided(
-            f"approval {approval_id!r} is already {approval.status}; a decision is made once"
+    pending = [
+        index for index in matching if case.approvals[index].status is ApprovalStatus.PENDING
+    ]
+    if len(pending) > 1:
+        raise AmbiguousApproval(
+            f"approval {approval_id!r} names {len(pending)} requests that are still pending, so "
+            f"there is no answer to which one a decision is about; the case stays where it is"
         )
-    # Before any mutation, so a refusal cannot mean "half recorded". The store is untouched, the
-    # version does not move, and the caller's request is all-or-nothing.
+    if not pending:
+        raise ApprovalAlreadyDecided(
+            f"approval {approval_id!r} is already {case.approvals[matching[-1]].status}; a "
+            f"decision is made once"
+        )
+
+    decided_index = pending[0]
+    approval = case.approvals[decided_index]
     if not approval.is_actionable:
         raise NotAnApprovableAction(
             f"approval {approval_id!r} names no tool and covers no arguments, so there is nothing "
@@ -384,8 +450,8 @@ def _decide(
     case = case.model_copy(
         update={
             "approvals": tuple(
-                decided if existing.approval_id == approval_id else existing
-                for existing in case.approvals
+                decided if index == decided_index else existing
+                for index, existing in enumerate(case.approvals)
             )
         }
     )
@@ -411,6 +477,7 @@ def _decide(
 
 
 __all__ = [
+    "AmbiguousApproval",
     "ApprovalAlreadyDecided",
     "CaseNotReopenable",
     "NoSuchApproval",

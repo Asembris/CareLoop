@@ -22,22 +22,33 @@ runs exactly five nodes and reports ``FAILED``.
           ┌────────┐ ┌──────────┐ ┌──────┐        ┌─────────┐
           │ triage │ │ evidence │ │ plan │        │ execute │
           └───┬────┘ └────┬─────┘ └──┬───┘        └────┬────┘
-              └───────────┘          │                 │
-                                     ▼                 │
-                                 ┌──────┐              │
-                    ┌────────────┤ gate ├──────────────┘
-                    │  DENY      └──┬───┘  ALLOW
-                    │  (replan)     │
-                    │               │ REQUIRE_HUMAN → no edge holds; the run ends parked
-                    │               ▼
-                    │          ┌─────────┐      ┌────────┐
-                    │          │ execute ├─────▶│ verify │
-                    │          └─────────┘      └───┬────┘
-                    └──────────────────────────────-┘  verification failed → replan
-                                                       DONE → no edge holds; the run ends
+              └───────────┘       ▲  │                 │
+                        DENY      │  ▼                 │
+                     (replan)     │ ┌──────┐           │
+                                  └─┤ gate ├───────────┘
+                                    └──┬───┘  ALLOW
+                                       │
+                                       │ REQUIRE_HUMAN → no edge holds; the run ends parked
+                                       ▼
+                                  ┌─────────┐      ┌────────┐
+                                  │ execute ├─────▶│ verify │
+                                  └─────────┘      └────────┘
+                                                    nothing leaves verify:
+                                                    DONE           → the run ends
+                                                    AWAITING_HUMAN → the run ends parked
 
-``plan → gate → plan`` is the cycle the bound exists for. ``AWAITING_HUMAN`` and ``DONE`` end a run
-by having no satisfied outgoing edge, which is why neither needs a terminal node.
+``plan → gate → plan`` is the cycle the bound exists for, and it is now the only cycle in the graph.
+``AWAITING_HUMAN`` and ``DONE`` end a run by having no satisfied outgoing edge, which is why neither
+needs a terminal node.
+
+**There was a second cycle, ``verify → plan``, and it was a defect rather than a feature.** A failed
+verification returned the case to the planner. Every entry into ``VERIFYING`` is post-effect, so
+what that actually did was replan on top of an action already carried out: an identical reproposal
+was suppressed and re-verified into the same failure until this file's ``MAX_NODE_EXECUTIONS``
+stopped the run — making the bound the *domain* outcome rather than a runaway detector — and a
+reproposal differing in one free-text argument keyed differently, defeated duplicate suppression and
+executed a second real external effect. The node now parks the case for a person, and this file no
+longer offers a way back.
 """
 
 from __future__ import annotations
@@ -67,6 +78,12 @@ from careloop.state.case import CaseState
 #: eight replans before the bound fires. Generous rather than tight: the bound is a runaway
 #: detector, and a case that failed because a legitimate replan ran out of room would be a bug
 #: reported as a policy outcome.
+#:
+#: **It is a runaway detector again.** While ``verify -> plan`` existed it was also the thing that
+#: ended a failed verification: the case cycled plan/gate/execute/verify until this number ran out
+#: and ``run_case`` marked it ``FAILED``, so a domain outcome was being decided by a budget. Nothing
+#: reaches it on that path now — a verification failure parks the case in seven nodes — and the only
+#: cycle left is the gate's replan, which is what this was sized for.
 MAX_NODE_EXECUTIONS: Final[int] = 24
 
 #: Wall-clock ceiling for one run, in seconds. Offline on the mock this is milliseconds of work;
@@ -129,7 +146,12 @@ def build_graph(
     builder.add_edge(GATE, PLAN, when_case_is(context, CaseState.PLANNING))
 
     builder.add_edge(EXECUTE, VERIFY, when_case_is(context, CaseState.VERIFYING))
-    builder.add_edge(VERIFY, PLAN, when_case_is(context, CaseState.PLANNING))
+    # **Nothing leaves verify.** There was a verify -> plan edge here, and removing it is half of
+    # what stops a failed verification becoming a second external effect; the other half is
+    # TRANSITIONS refusing VERIFYING -> PLANNING, so a node that tried to route around this edge
+    # could not write the state the edge would have needed. Verification now ends a run whichever
+    # way it goes: DONE and AWAITING_HUMAN both have no satisfied outgoing edge, exactly as
+    # AWAITING_HUMAN already did at the gate.
 
     builder.set_entry_point(DISPATCH)
     builder.set_max_node_executions(max_node_executions)

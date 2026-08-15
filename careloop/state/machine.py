@@ -30,7 +30,11 @@ TRANSITIONS: Final[dict[CaseState, frozenset[CaseState]]] = {
             CaseState.FAILED,
         }
     ),
-    # PLANNING is the replan target: a rejected approval or a failed verification returns here.
+    # PLANNING is the replan target, and the sources are enumerated rather than assumed: the gate
+    # leaves a denied proposal here, and a caregiver's rejection returns the case here. Both are
+    # pre-effect — nothing has been carried out — which is what makes another attempt meaningful.
+    #
+    # A failed verification used to return here too and no longer may; see VERIFYING below.
     CaseState.AWAITING_HUMAN: frozenset(
         {CaseState.READY_TO_EXECUTE, CaseState.PLANNING, CaseState.FAILED}
     ),
@@ -38,7 +42,28 @@ TRANSITIONS: Final[dict[CaseState, frozenset[CaseState]]] = {
     CaseState.EXECUTING: frozenset(
         {CaseState.VERIFYING, CaseState.WAITING_EXTERNAL, CaseState.FAILED}
     ),
-    CaseState.VERIFYING: frozenset({CaseState.DONE, CaseState.PLANNING, CaseState.FAILED}),
+    # **VERIFYING cannot reach PLANNING, and that is the point rather than an omission.**
+    #
+    # Every entry into VERIFYING is post-effect. It is reachable only from EXECUTING and
+    # WAITING_EXTERNAL, careloop.graph.nodes.ExecuteNode transitions here after recording an action
+    # or suppressing a duplicate of one, and VerifyNode fails the case outright when no ActionRecord
+    # exists. There is no such thing as a verification failure before the effect, so "a proposal
+    # that did not verify deserves another attempt" was never a description of a reachable state.
+    #
+    # What it cost was measured rather than argued. With PLANNING legal, a failed verification sent
+    # the case back to the planner; an identical reproposal was suppressed and re-verified into the
+    # same failure until the SDK's node bound stopped the run, and a reproposal differing in one
+    # free-text argument keyed differently, defeated duplicate suppression at both layers, reached
+    # ALLOW and dispatched — two real bookings against a clinic that could not confirm the first.
+    #
+    # So the refusal lives here as well as in the graph, and the redundancy is deliberate. Deleting
+    # the verify -> plan edge alone would leave a future node free to write transition(PLANNING) and
+    # reopen the hazard with nothing raising; with PLANNING absent here, that line is an
+    # IllegalTransition on the first run rather than a defect somebody measures later.
+    #
+    # AWAITING_HUMAN is the target instead: careloop.graph.nodes._park_with_nothing_certifiable
+    # parks the case for a person, carrying no Approval and therefore no authority.
+    CaseState.VERIFYING: frozenset({CaseState.DONE, CaseState.AWAITING_HUMAN, CaseState.FAILED}),
     CaseState.WAITING_EXTERNAL: frozenset(
         {CaseState.PLANNING, CaseState.VERIFYING, CaseState.FAILED}
     ),

@@ -236,20 +236,52 @@ class TestTheGraphShape:
         assert ("plan", "gate") in edges
         assert ("gate", "plan") in edges
 
-    def test_verification_failure_routes_back_to_planning(self) -> None:
+    def test_verification_failure_cannot_route_back_to_planning(self) -> None:
+        """**Half of the post-effect safety property, and the structural half.**
+
+        There was a ``verify → plan`` edge here and this test asserted it. Every entry into
+        ``VERIFYING`` is post-effect, so that edge meant replanning on top of an action already
+        carried out: an identical reproposal was suppressed and re-verified into the same failure
+        until the node bound stopped the run, and a reproposal differing in one free-text argument
+        keyed differently, defeated duplicate suppression and executed a second real external
+        effect.
+
+        The other half is :data:`careloop.state.machine.TRANSITIONS` refusing ``VERIFYING →
+        PLANNING`` — see ``tests/test_state_machine.py``. Both are needed and neither is decoration:
+        without the edge a node could still write the state, and without the transition rule a
+        future edge could still route on it.
+        """
         graph = build_graph(context_for(opened_case()))
         edges = {(edge.from_node.node_id, edge.to_node.node_id) for edge in graph.edges}
 
-        assert ("verify", "plan") in edges
+        assert ("verify", "plan") not in edges
 
-    def test_nothing_leaves_verify_except_the_replan_edge(self) -> None:
-        """DONE ends a run by having no satisfied outgoing edge, not by a terminal node."""
+    def test_nothing_leaves_verify_at_all(self) -> None:
+        """Both of verify's outcomes end the run by having no satisfied outgoing edge.
+
+        ``DONE`` always did; ``AWAITING_HUMAN`` now does too, exactly as it already did at the gate.
+        Asserted as the empty set rather than as "not plan", so a future edge out of verify has to
+        be a deliberate change to this line.
+        """
         graph = build_graph(context_for(opened_case()))
         out_of_verify = {
             edge.to_node.node_id for edge in graph.edges if edge.from_node.node_id == "verify"
         }
 
-        assert out_of_verify == {"plan"}
+        assert out_of_verify == set()
+
+    def test_the_gates_replan_is_the_only_cycle_left(self) -> None:
+        """Vacuity for the two above: replanning was narrowed, not removed.
+
+        A denied proposal still returns to the planner, because nothing has been carried out and
+        another attempt is the point of the gate. Deleting that too would have been a much larger
+        change wearing this one's clothes.
+        """
+        graph = build_graph(context_for(opened_case()))
+        edges = {(edge.from_node.node_id, edge.to_node.node_id) for edge in graph.edges}
+
+        assert ("gate", "plan") in edges
+        assert {frm for frm, to in edges if to == "plan"} == {"dispatch", "evidence", "gate"}
 
     def test_the_gate_can_reach_execution_and_the_planner_and_nothing_else(self) -> None:
         graph = build_graph(context_for(opened_case()))

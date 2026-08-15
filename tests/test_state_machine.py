@@ -51,6 +51,69 @@ def test_failed_is_reachable_from_every_state_still_in_flight(state: CaseState) 
     assert CaseState.FAILED in TRANSITIONS[state]
 
 
+def test_verification_can_never_return_a_case_to_planning() -> None:
+    """**The state-machine half of the post-effect safety property.**
+
+    Every entry into ``VERIFYING`` is post-effect: it is reachable only from ``EXECUTING`` and
+    ``WAITING_EXTERNAL``, the execute node moves a case here after recording an action or
+    suppressing a duplicate of one, and the verify node fails the case outright when no
+    ``ActionRecord`` exists. So a verification failure is never "that did not work, try again" — an
+    action has been carried out — and returning the case to the planner meant planning on top of an
+    outcome nobody had established.
+
+    Measured before the repair: an identical reproposal was suppressed and re-verified into the same
+    failure until the SDK's node bound stopped the run, and a reproposal differing in one free-text
+    argument keyed differently, defeated duplicate suppression at both layers, reached ``ALLOW`` and
+    executed a second real external effect.
+
+    The graph's ``verify → plan`` edge is gone too — ``tests/test_graph_wiring.py`` — and this is
+    deliberately not the same assertion. The edge stops the graph routing there; this stops a node
+    writing the state at all, so restoring the hazard takes two edits in two files rather than one.
+    """
+    assert CaseState.PLANNING not in TRANSITIONS[CaseState.VERIFYING]
+    assert not is_legal(CaseState.VERIFYING, CaseState.PLANNING)
+
+
+def test_verification_failure_can_park_the_case_for_a_person() -> None:
+    """The target it goes to instead, asserted so the refusal above is not merely a dead end.
+
+    ``AWAITING_HUMAN`` was reachable only from ``PLANNING`` until this session, which was the gate
+    parking a proposal it will not take responsibility for. It is now also reachable from
+    ``VERIFYING``, which is the verify node parking an *effect* it cannot certify. Both carry no
+    authority; the second carries none for a further reason, since the effect already happened and
+    no decision could change it.
+    """
+    assert CaseState.AWAITING_HUMAN in TRANSITIONS[CaseState.VERIFYING]
+    assert is_legal(CaseState.VERIFYING, CaseState.AWAITING_HUMAN)
+
+
+def test_verifying_can_reach_exactly_three_states() -> None:
+    """The whole of this session's blast radius on the transition table, in one line.
+
+    ``DONE`` on success, ``AWAITING_HUMAN`` when the effect cannot be certified, and ``FAILED`` for
+    the structural faults the node still raises — no proposal, no recorded action.
+    """
+    assert TRANSITIONS[CaseState.VERIFYING] == frozenset(
+        {CaseState.DONE, CaseState.AWAITING_HUMAN, CaseState.FAILED}
+    )
+
+
+def test_replanning_is_still_legal_from_where_it_was_always_meant_to_be() -> None:
+    """Vacuity for the three above: replanning was narrowed, not removed.
+
+    Both remaining sources are pre-effect. The gate leaves a denied proposal in ``PLANNING`` and a
+    caregiver's rejection returns a parked case there, and in neither has anything been carried out
+    — which is the distinction the whole repair turns on.
+    """
+    assert CaseState.PLANNING in TRANSITIONS[CaseState.AWAITING_HUMAN]
+    assert CaseState.PLANNING in TRANSITIONS[CaseState.GATHERING_EVIDENCE]
+    assert {state for state, targets in TRANSITIONS.items() if CaseState.PLANNING in targets} == {
+        CaseState.GATHERING_EVIDENCE,
+        CaseState.AWAITING_HUMAN,
+        CaseState.WAITING_EXTERNAL,
+    }
+
+
 def test_done_is_reachable_only_from_verifying() -> None:
     """This is what makes 'did not reach DONE via the unsafe path' structural, not observational.
 

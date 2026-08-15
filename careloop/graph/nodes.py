@@ -586,7 +586,7 @@ class VerifyNode(DeterministicNode):
                 },
                 now=self.context.now(),
             )
-            case = _park_with_nothing_certifiable(case, proposal, self.context.now())
+            case = _park_with_nothing_certifiable(case, proposal, key, self.context.now())
 
         self.context.commit(case, expected_version=base)
         return f"verify: {'passed' if verification.passed else 'failed'}"
@@ -775,7 +775,7 @@ def _park_with_nothing_safe_to_do(case: Case, now) -> Case:
     )
 
 
-def _park_with_nothing_certifiable(case: Case, proposal: Proposal, now) -> Case:
+def _park_with_nothing_certifiable(case: Case, proposal: Proposal, key: str, now) -> Case:
     """Stop after an effect that cannot be certified, and hand the case to a person.
 
     ``VERIFYING`` → ``AWAITING_HUMAN``. **No approval is raised**, for the reason
@@ -819,6 +819,25 @@ def _park_with_nothing_certifiable(case: Case, proposal: Proposal, now) -> Case:
     its arguments are deliberately absent — they are already on the ``PLAN_PROPOSED`` entry, and the
     values read back from the outside world stay in the verification diagnostic the API withholds.
 
+    **``key`` is the durable identity of the action that could not be certified**, and it is passed
+    in rather than re-derived. :meth:`VerifyNode.run` computed it to *find* the ``ActionRecord`` it
+    just verified, so threading it through is what makes "the action this handoff is about" and "the
+    action that was verified" the same object by construction instead of by a second derivation that
+    could drift.
+
+    Recorded because a tool name is not an identity. A case may carry more than one ``ActionRecord``
+    — a reopened case does routinely — so ``{tool_name, reason_code}`` said only *"a booking on this
+    case could not be confirmed"*, which is enough for a caregiver's card and not enough for
+    anything to act on. The alternatives were each rejected for a reason this repository has already
+    paid for: ``args_digest`` covers argument names and canonical values and neither the case nor
+    the tool; ``confirmation_id`` is external, lives inside the result JSON and identifies the
+    clinic's object rather than CareLoop's action; and "the latest record" is the class of accident
+    that produced three separate identity defects here.
+
+    **Nothing consumes it yet, and that is the whole of what this patch claims.** It makes a parked
+    case bound to one action rather than to a tool name. Whether anything may later act on that
+    binding is a different question with a different answer, and this writes down the fact rather
+    than granting the capability.
     """
     case = append_event(
         case,
@@ -826,16 +845,17 @@ def _park_with_nothing_certifiable(case: Case, proposal: Proposal, now) -> Case:
         actor="system",
         summary=f"{proposal.tool_name} was carried out but could not be confirmed",
         diagnostic=(
-            f"{proposal.tool_name} was performed for this case and independent verification could "
-            f"not confirm the result — see the VERIFICATION_FAILED entry above for what disagreed "
-            f"or could not be read. Parked rather than replanned: the effect has already happened, "
-            f"so proposing anything else would be planning on top of an outcome nobody has "
-            f"established. No approval is raised — there is no call to authorise, and no decision "
-            f"could change what the external system holds."
+            f"{proposal.tool_name} was performed for this case under idempotency key {key} and "
+            f"independent verification could not confirm the result — see the VERIFICATION_FAILED "
+            f"entry above for what disagreed or could not be read. Parked rather than replanned: "
+            f"the effect has already happened, so proposing anything else would be planning on top "
+            f"of an outcome nobody has established. No approval is raised — there is no call to "
+            f"authorise, and no decision could change what the external system holds."
         ),
         payload={
             "tool_name": proposal.tool_name,
             "reason_code": str(ReasonCode.EXTERNAL_STATE_NOT_CONFIRMED),
+            "idempotency_key": key,
         },
         now=now,
     )

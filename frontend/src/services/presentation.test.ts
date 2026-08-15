@@ -207,6 +207,7 @@ describe("decisions", () => {
       "WRONG_CASE_STATE",
       "INSUFFICIENT_FACT_TRUST",
       "NO_RULE_MATCH",
+      "EXTERNAL_STATE_NOT_CONFIRMED",
       "A_CODE_THIS_BUILD_HAS_NEVER_HEARD_OF",
       ""
     ]) {
@@ -240,6 +241,25 @@ describe("decisions", () => {
     const copy = decisionCopy("NO_SAFE_ACTION_AVAILABLE", "", {});
     expect(copy.title).toBe("No safe action is available");
     expect(copy.after).toContain("Nothing was changed");
+  });
+
+  it("does not tell a caregiver nothing was done when something was", () => {
+    // The two non-approval reasons are close to opposites. `NO_SAFE_ACTION_AVAILABLE` means every
+    // action was refused and nothing happened; `EXTERNAL_STATE_NOT_CONFIRMED` means an action *was*
+    // carried out and its result could not be confirmed. Sharing the copy would have told somebody
+    // no booking was made while one sat unchecked in a clinic.
+    const copy = decisionCopy("EXTERNAL_STATE_NOT_CONFIRMED", "book_appointment", {});
+    expect(copy.title).toBe("The result could not be confirmed");
+    expect(copy.body).not.toContain("Nothing has been");
+    expect(copy.body).toContain("carried this out");
+    expect(copy.after).toContain("will not retry");
+    expect(decisionCopy("NO_SAFE_ACTION_AVAILABLE", "", {}).body).not.toBe(copy.body);
+  });
+
+  it("still offers no approval affordance for it", () => {
+    // The safety half, separate from the copy half: a new reason to stop must never arrive with
+    // authority attached, and `decisionKindFor` defaulting closed is what guarantees that.
+    expect(decisionKindFor("EXTERNAL_STATE_NOT_CONFIRMED")).toBe("NO_SAFE_ACTION_AVAILABLE");
   });
 });
 

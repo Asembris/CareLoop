@@ -74,7 +74,8 @@ export type ReasonCode =
   | "WRONG_CASE_STATE"
   | "INSUFFICIENT_FACT_TRUST"
   | "NO_RULE_MATCH"
-  | "NO_SAFE_ACTION_AVAILABLE";
+  | "NO_SAFE_ACTION_AVAILABLE"
+  | "EXTERNAL_STATE_NOT_CONFIRMED";
 
 /** `careloop.api.runs.RunState`. `SETTLED` means the graph stopped — read the case for what it
  *  stopped *at*: parked for a decision, done, or failed. */

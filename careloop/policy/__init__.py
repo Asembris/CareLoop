@@ -26,12 +26,14 @@ from careloop.policy.hook import (
     tool_use_id,
 )
 from careloop.policy.loader import (
+    REQUIRED_AUTHORITY_TRUST,
     RULES_PATH,
     PolicyConfigError,
     default_rules,
     load_rules,
     load_rules_from_mapping,
     load_rules_from_text,
+    uncovered_authority_arguments,
     uncovered_external_tools,
     unknown_rule_tools,
 )
@@ -41,6 +43,7 @@ from careloop.policy.verdicts import REASON_TEXT, Decision, ReasonCode, Verdict,
 __all__ = [
     "GATED_MARKER",
     "REASON_TEXT",
+    "REQUIRED_AUTHORITY_TRUST",
     "RULES_PATH",
     "ArgTrust",
     "Condition",
@@ -71,6 +74,7 @@ __all__ = [
     "reason_text",
     "resolve_trust",
     "tool_use_id",
+    "uncovered_authority_arguments",
     "uncovered_external_tools",
     "unknown_rule_tools",
 ]

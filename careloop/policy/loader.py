@@ -15,6 +15,7 @@ mistakes about authority, and both should be an outage rather than a surprise th
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Final
@@ -23,10 +24,31 @@ import yaml
 from pydantic import ValidationError
 
 from careloop.policy.schema import RuleSet
+from careloop.policy.verdicts import Verdict
+from careloop.provenance.trust import ArgClass, TrustLevel, at_least
 from careloop.tools.registry import REGISTRY, ToolRegistry
 
 #: The shipped rules file.
 RULES_PATH: Final[Path] = Path(__file__).with_name("rules.yaml")
+
+#: The trust an argument of each class must be required to reach before any rule may authorise a
+#: call carrying it.
+#:
+#: ``DESTINATION`` and ``AUTHORITY`` only, and ``TRUSTED`` for both. That is not a policy choice
+#: made here — it is :data:`careloop.provenance.trust.PROMOTABLE_ARG_CLASSES` read from the other
+#: end. Those two classes are precisely the ones validation may never raise, so ``TRUSTED`` is the
+#: only level they can legitimately reach, and a rule requiring anything less of one is requiring
+#: something no legitimate value could fail and no illegitimate value could not meet.
+#:
+#: ``VALUE`` is deliberately absent and must stay absent. ``patient_id``, ``slot_start`` and
+#: ``document_id`` are required at ``CONTROLLED`` on purpose — that is exactly what a passed
+#: validator earns — and ``subject``, ``body`` and ``reason`` declare no ``trust_key`` at all, so a
+#: rule requiring their trust would fail in :func:`_validate_against_registry` a few lines below.
+#: Widening this mapping to ``VALUE`` would not strengthen the trust model; it would delete it.
+REQUIRED_AUTHORITY_TRUST: Final[Mapping[ArgClass, TrustLevel]] = {
+    ArgClass.DESTINATION: TrustLevel.TRUSTED,
+    ArgClass.AUTHORITY: TrustLevel.TRUSTED,
+}
 
 
 class PolicyConfigError(Exception):
@@ -145,13 +167,68 @@ def unknown_rule_tools(registry: ToolRegistry, ruleset: RuleSet) -> frozenset[st
     return frozenset(ruleset.tools_named - registry.names)
 
 
+def uncovered_authority_arguments(
+    registry: ToolRegistry, ruleset: RuleSet
+) -> frozenset[tuple[str, str, str]]:
+    """``(rule id, tool, argument)`` for every authority-bearing argument an ``ALLOW`` rule ignores.
+
+    The coverage question one level finer than :func:`uncovered_external_tools`. That one asks
+    whether every externally effective *tool* is named by some rule; this asks whether every
+    ``DESTINATION`` and ``AUTHORITY`` *argument* of such a tool has its trust required by **every**
+    ``ALLOW`` rule that could authorise a call to it.
+
+    **Per rule, not per ruleset, and that is the whole strength of it.** A union-of-all-rules
+    reading would be satisfied by one strict rule sitting beside one permissive one, which is the
+    arrangement the check exists to catch: the permissive rule is the one that fires.
+
+    **A ``DENY`` rule elsewhere does not count**, deliberately. ``deny-upload-to-untrusted-portal``
+    and ``allow-upload-to-trusted-portal`` both name ``portal_id`` and neither is redundant — the
+    ``DENY`` states the refusal, and the ``ALLOW`` clause is what stops the positive path depending
+    on the ``DENY`` still being there tomorrow. Requiring both is defence in depth rather than
+    belt-and-braces, and session N is why: ``grant_portal_access.portal_id`` was missing from both
+    at once, and either one alone would have refused the call.
+
+    **``args_approved`` does not count either.** Human approval and deterministic trust are
+    different dimensions — an approval says a caregiver was asked about one exact call, and says
+    nothing about where that call lands. ``rules.yaml`` states the property plainly:
+    ``allow-approved-portal-access-grant`` is approved by a caregiver but never *because* approved
+    by one.
+
+    A predicate satisfies the requirement only at or above
+    :data:`REQUIRED_AUTHORITY_TRUST`, so naming an argument at ``UNTRUSTED`` — a clause that is
+    true of every value there is — does not buy coverage.
+
+    Empty means covered. A tool no ``ALLOW`` rule names is vacuously covered, because nothing can
+    authorise it; deny-by-default is what refuses it, and :func:`uncovered_external_tools` is what
+    notices that nobody wrote policy for it.
+    """
+    uncovered: set[tuple[str, str, str]] = set()
+    for rule in ruleset.by_effect(Verdict.ALLOW):
+        for tool_name in rule.tools:
+            spec = registry.get(tool_name)
+            if spec is None or not spec.external_effect:
+                continue
+            for arg in spec.args:
+                required = REQUIRED_AUTHORITY_TRUST.get(arg.arg_class)
+                if required is None:
+                    continue
+                if not any(
+                    predicate.arg == arg.name and at_least(predicate.level, required)
+                    for predicate in rule.when.arg_trust_at_least
+                ):
+                    uncovered.add((rule.id, tool_name, arg.name))
+    return frozenset(uncovered)
+
+
 __all__ = [
+    "REQUIRED_AUTHORITY_TRUST",
     "RULES_PATH",
     "PolicyConfigError",
     "default_rules",
     "load_rules",
     "load_rules_from_mapping",
     "load_rules_from_text",
+    "uncovered_authority_arguments",
     "uncovered_external_tools",
     "unknown_rule_tools",
 ]

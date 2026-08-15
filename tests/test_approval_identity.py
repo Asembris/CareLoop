@@ -11,7 +11,7 @@ record was inspected and N were rewritten. A caregiver approving the second requ
 converted the first caregiver's *rejection* into their own approval, with their name and their
 timestamp on it, in a store whose whole claim is that the audit trail proves what happened.
 
-Nothing about authority moved — ``is_approved`` reads the most recent record matching the digest,
+Nothing about authority moved — ``is_approved`` reads the most recent record matching the call,
 which is the one the caregiver actually decided — so this was an audit-integrity defect rather than
 an escalation. That is not a reason to leave it: a decision record a later decision can overwrite
 is exactly the thing this project says it does not have.
@@ -25,8 +25,11 @@ decoration:
   protects the duplicate ids already sitting in persisted cases, where uniqueness cannot help.
 
 **Deliberately out of scope.** This changes request identity only. Which call an approval authorises
-is still matched by ``args_digest`` alone, through ``approval_for`` and ``is_approved``, exactly as
-before — see :class:`TestTheAuthorisationPathIsUntouched`.
+is decided by ``approval_for`` and ``is_approved`` and is untouched here — see
+:class:`TestTheAuthorisationPathIsUntouched`. Those helpers matched on ``args_digest`` alone when
+this module was written and are now bound to ``(tool_name, args_digest)``; that is a separate
+repair with its own evidence in ``tests/test_approval_capability.py``, and the assertions below hold
+under either, which is the point of keeping them.
 """
 
 from __future__ import annotations
@@ -374,9 +377,14 @@ class TestTheAuthorisationPathIsUntouched:
     """What this patch deliberately does not change.
 
     Request identity moved; the binding between an approval and the call it releases did not.
-    ``is_approved`` still matches on ``args_digest`` alone, and this asserts that rather than
+    ``approval_id`` is not consulted by ``is_approved`` at all, and this asserts that rather than
     assuming it — a repair that quietly rerouted authorisation through ``approval_id`` would be a
     much larger change than the one being made, and it would pass every test above.
+
+    What the call is matched *by* has since been narrowed from ``args_digest`` alone to
+    ``(tool_name, args_digest)``. These assertions were written before that and pass unchanged
+    under both, which is what makes them a statement about ``approval_id`` rather than about the
+    digest.
     """
 
     def test_the_approved_arguments_are_authorised(self) -> None:
@@ -385,7 +393,7 @@ class TestTheAuthorisationPathIsUntouched:
 
         approve(store, CASE_ID, pending.approval_id, decided_by=SECOND_CARER, now=FIXED_NOW)
 
-        assert store.get(CASE_ID).is_approved(args_digest(EMAIL))
+        assert store.get(CASE_ID).is_approved("send_email", args_digest(EMAIL))
 
     def test_different_arguments_are_not(self) -> None:
         store = reproposal_store()
@@ -394,7 +402,7 @@ class TestTheAuthorisationPathIsUntouched:
         approve(store, CASE_ID, pending.approval_id, decided_by=SECOND_CARER, now=FIXED_NOW)
 
         other = {**EMAIL, "body": "something the caregiver never read"}
-        assert not store.get(CASE_ID).is_approved(args_digest(other))
+        assert not store.get(CASE_ID).is_approved("send_email", args_digest(other))
 
     def test_the_approved_action_runs_to_completion(self) -> None:
         """End to end, because "the ids changed" must not mean "the case stopped working"."""

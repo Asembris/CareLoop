@@ -128,8 +128,9 @@ class Approval(BaseModel):
     def is_actionable(self) -> bool:
         """Whether this record identifies a call a decision could release.
 
-        Both halves are required and neither is redundant: the digest is what
-        :func:`careloop.state.case.Case.is_approved` matches on, and the tool name is what the
+        Both halves are required and neither is redundant, because both are the identity:
+        :meth:`Case.is_approved` matches on ``(tool_name, args_digest)`` together, so a record
+        missing either half names no call and can release none. The tool name is also what the
         audit trail and the caregiver's card are written against.
 
         **Derived rather than stored, and checked rather than validated.** A stored ``actionable``
@@ -225,24 +226,49 @@ class Case(BaseModel):
                 return action
         return None
 
-    def approval_for(self, args_digest: str) -> Approval | None:
-        """Return the most recent approval covering exactly these arguments, if any."""
+    def approval_for(self, tool_name: str, args_digest: str) -> Approval | None:
+        """Return the most recent decision record covering exactly this call, if any.
+
+        **The canonical capability lookup.** ``(tool_name, args_digest)`` is the identity of the
+        thing a caregiver was asked about, and both halves must match: a record naming another tool
+        is a decision about another action, whatever its arguments hash to.
+
+        Both parameters are required and positional, so no caller can perform a digest-only lookup
+        by omitting one — the same reason
+        :func:`careloop.policy.engine.resolve_trust` takes its fact key that way.
+
+        The most recent match wins whatever its status, which is what lets a later refusal revoke an
+        earlier approval and a later approval supersede an earlier refusal. Scoped to one call
+        rather than to one digest: a record for a different tool no longer shadows this one either,
+        which is the same defect running the other way.
+        """
         for approval in reversed(self.approvals):
-            if approval.args_digest == args_digest:
+            if approval.tool_name == tool_name and approval.args_digest == args_digest:
                 return approval
         return None
 
-    def is_approved(self, args_digest: str) -> bool:
-        """Whether a caregiver granted an approval covering exactly these arguments.
+    def is_approved(self, tool_name: str, args_digest: str) -> bool:
+        """Whether a caregiver granted authority for exactly this tool with exactly these arguments.
 
-        Keyed on the *digest*, never on the tool name. A caregiver approves one specific action;
-        an approval recorded against a tool would let any later proposal for that tool execute
-        under a decision that was made about something else.
+        **Keyed on the pair, not on the digest alone.** ``args_digest`` covers argument names and
+        canonical values and nothing else — not the tool, not the case — so matching on it by itself
+        asked *"did a human approve an argument map that looks like this?"* rather than *"did a
+        human approve this call?"* An approval granted for one tool then answered ``True`` for any
+        other tool invoked with an argument map that canonicalised the same way, and
+        :attr:`Approval.tool_name` was stored, audited and rendered without ever being matched.
 
-        This is the durable answer to "did a human say yes", and the policy engine reads it
-        through the ``args_approved`` rule clause. It lives on ``Case`` rather than in the graph
-        because the engine may not import the graph, and because the approval is a business fact —
-        invariant 8 puts business facts here.
+        Not reachable under the shipped rules — the only tools that can raise a decision request are
+        the only tools that can spend one, and their argument names are disjoint — so this was a
+        latent authority defect rather than a live exploit. What made it worth closing is that the
+        safety rested entirely on registry argument shapes happening not to overlap, which is stated
+        in no rule and would have been broken silently by the next tool.
+        ``tests/test_approval_capability.py`` reproduces the laundering through the real engine over
+        a synthetic registry whose two tools share one complete schema.
+
+        This is the durable answer to "did a human say yes", and the policy engine reads it through
+        the ``args_approved`` rule clause. It lives on ``Case`` rather than in the graph because the
+        engine may not import the graph, and because the approval is a business fact — invariant 8
+        puts business facts here.
         """
-        approval = self.approval_for(args_digest)
+        approval = self.approval_for(tool_name, args_digest)
         return approval is not None and approval.status is ApprovalStatus.APPROVED

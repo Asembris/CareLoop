@@ -90,6 +90,7 @@ def resolve_trust(fact_key: str | None, value: object, case: Case) -> TrustLevel
 
 def _condition_holds(
     condition: Condition,
+    tool_name: str,
     args: Mapping[str, object],
     case: Case,
     trust: Mapping[str, TrustLevel],
@@ -115,11 +116,23 @@ def _condition_holds(
 
     if condition.args_approved is None:
         return True
-    return approved(args, case) is condition.args_approved
+    return approved(tool_name, args, case) is condition.args_approved
 
 
-def approved(args: Mapping[str, object], case: Case) -> bool:
-    """Whether ``case`` carries a granted approval covering exactly ``args``.
+def approved(tool_name: str, args: Mapping[str, object], case: Case) -> bool:
+    """Whether ``case`` carries a granted approval for exactly this call.
+
+    ``tool_name`` is the tool the engine is currently evaluating, and it is required and positional
+    for the reason ``fact_key`` is on :func:`resolve_trust`: an authority lookup that can be made
+    tool-blind by omitting an argument is an authority lookup that will be. It is threaded from
+    :meth:`PolicyEngine.evaluate` rather than declared in ``rules.yaml`` — the engine already knows
+    which tool it is deciding, and naming it in the rule file would make the tool a second source of
+    truth that a rule could contradict.
+
+    So ``args_approved: true`` reads *"a caregiver approved this exact tool with these exact
+    arguments"*. It used to read *"a caregiver approved these exact arguments"*, and the missing
+    half is what let an approval for one tool satisfy the clause for another whose argument map
+    canonicalised the same way. See :meth:`careloop.state.case.Case.is_approved`.
 
     Fails closed twice over. Arguments with no canonical form cannot be digested, so they cannot
     match an approval and are reported unapproved rather than raising — a call that cannot be
@@ -130,7 +143,7 @@ def approved(args: Mapping[str, object], case: Case) -> bool:
         digest = args_digest(args)
     except UncanonicalizableArgument:
         return False
-    return case.is_approved(digest)
+    return case.is_approved(tool_name, digest)
 
 
 #: The order in which effects are considered. Fixed here, never read from YAML.
@@ -196,7 +209,7 @@ class PolicyEngine:
             for rule in self._ruleset.by_effect(effect):
                 if tool_name not in rule.tools:
                     continue
-                if not _condition_holds(rule.when, supplied, case, arg_trust):
+                if not _condition_holds(rule.when, tool_name, supplied, case, arg_trust):
                     continue
                 return Decision(
                     verdict=rule.effect,

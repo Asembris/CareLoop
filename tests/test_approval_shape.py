@@ -164,9 +164,10 @@ class TestWhatMakesAnApprovalApprovable:
     ) -> None:
         """Both halves, and neither is redundant.
 
-        The digest is what ``Case.is_approved`` matches a call against; the tool name is what the
-        audit trail and the caregiver's card are written against. A record with one and not the
-        other could not release a call *or* explain itself.
+        Both halves are the capability's identity: ``Case.is_approved`` matches on the tool name
+        and the digest together, so a record carrying one and not the other names no call and could
+        not release one — nor explain itself, since the tool name is also what the audit trail and
+        the caregiver's card are written against.
         """
         approval = Approval(
             approval_id="apr-x",

@@ -34,7 +34,7 @@ from careloop.policy.gate import PolicyGate
 from careloop.policy.gated import GatedToolSet
 from careloop.policy.hook import PolicyHook, policy_registry
 from careloop.policy.verdicts import ReasonCode
-from careloop.state.case import Approval, ApprovalStatus, Case, CaseState, TimelineKind
+from careloop.state.case import Approval, Case, CaseState, TimelineKind
 from careloop.state.store import CaseStore
 from careloop.tools.callables import ToolSet
 from careloop.tools.clinic import ClinicClient, ClinicRefused, ClinicUnavailable, clinic_executor
@@ -228,18 +228,22 @@ def approval_id_for(seq: int) -> str:
     return f"apr-{seq}"
 
 
-def approval_for(case: Case, digest: str) -> Approval | None:
-    """The most recent approval covering ``digest``, whatever its status."""
-    for approval in reversed(case.approvals):
-        if approval.args_digest == digest:
-            return approval
-    return None
+def approval_for(case: Case, tool_name: str, digest: str) -> Approval | None:
+    """The most recent decision record covering exactly this call, whatever its status.
+
+    **Delegates rather than reimplements.** This and :func:`is_approved` each carried their own
+    ``reversed(case.approvals)`` scan until the lookup became tool-bound, which meant one matching
+    rule written down twice — and the graph's copy was the one the execute node consulted, so a
+    drift between them would have been a drift in what authority means. There is now exactly one
+    implementation, on :class:`~careloop.state.case.Case`, where invariant 8 puts business facts and
+    where the policy engine can reach it without importing the graph.
+    """
+    return case.approval_for(tool_name, digest)
 
 
-def is_approved(case: Case, digest: str) -> bool:
-    """Whether a caregiver granted an approval covering exactly these arguments."""
-    approval = approval_for(case, digest)
-    return approval is not None and approval.status is ApprovalStatus.APPROVED
+def is_approved(case: Case, tool_name: str, digest: str) -> bool:
+    """Whether a caregiver granted authority for exactly this tool with exactly these arguments."""
+    return case.is_approved(tool_name, digest)
 
 
 @dataclass

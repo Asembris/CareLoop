@@ -358,8 +358,11 @@ DERIVED: Final[Mapping[type[ResponseModel], Mapping[str, str]]] = MappingProxyTy
                 ),
                 "reason_text": "reason_text(the reason_code above)",
                 "args": (
-                    "the PLAN_PROPOSED entry whose arguments hash to Approval.args_digest, via "
-                    "graph.context.proposal_for; {} for a manual handoff, which covers no call"
+                    "the PLAN_PROPOSED entry naming Approval.tool_name whose arguments hash to "
+                    "Approval.args_digest, via graph.context.proposal_for; both halves are matched "
+                    "because that pair is the capability the approval identifies, so another "
+                    "tool's proposal cannot supply them. {} when no such entry exists, and {} for "
+                    "a manual handoff, which covers no call"
                 ),
                 "requested_at": (
                     "Approval.requested_at when one is pending; else TimelineEvent.at on the "
@@ -372,13 +375,19 @@ DERIVED: Final[Mapping[type[ResponseModel], Mapping[str, str]]] = MappingProxyTy
         CaseCard: MappingProxyType(
             {
                 "section": "section_for(Case.state)",
-                "decision": "Case.pending_approval() and the proposal its digest covers",
+                "decision": (
+                    "Case.pending_approval() and the proposal for its exact "
+                    "(tool_name, args_digest)"
+                ),
             }
         ),
         CaseDetail: MappingProxyType(
             {
                 "section": "section_for(Case.state)",
-                "decision": "Case.pending_approval() and the proposal its digest covers",
+                "decision": (
+                    "Case.pending_approval() and the proposal for its exact "
+                    "(tool_name, args_digest)"
+                ),
             }
         ),
         CaseSections: MappingProxyType(
@@ -618,12 +627,18 @@ def decision_view(case: Case) -> DecisionView | None:
     **Two different things reach this card, and only one of them can be approved.**
 
     A pending :class:`~careloop.state.case.Approval` is a request for authority over one exact call.
-    Its arguments come back through :func:`careloop.graph.context.proposal_for`, keyed on the digest
-    the approval records — an approval deliberately stores only that digest, since a decision made
-    about one action must not authorise another, so showing the caregiver what they are approving
-    means going back to the proposal the digest came from. An approval whose proposal is not on the
-    timeline renders with no arguments; unreachable in a real run, and left visible rather than
-    hidden because a card with nothing on it is a caregiver who can see there is nothing to approve.
+    Its arguments come back through :func:`careloop.graph.context.proposal_for`, keyed on
+    **``(tool_name, args_digest)``** — the same capability identity
+    :meth:`careloop.state.case.Case.approval_for` enforces, and for the same reason: an approval
+    identifies one call, so the record the card is built from has to be a proposal of *that* call
+    rather than of anything whose arguments happen to hash alike. Passing the digest alone was this
+    layer asking a different question than the approval answered, and it let a proposal belonging to
+    another tool supply the arguments rendered under this approval's name.
+
+    An approval whose proposal is not on the timeline renders with no arguments — and "not on the
+    timeline" includes *present only under another tool*, which is the whole point of the pair.
+    Unreachable in a real run either way, and left visible rather than hidden because a card with
+    nothing on it is a caregiver who can see there is nothing to approve.
 
     A manual handoff is not a request for anything. Every tool was proposed and refused, so there is
     no call, no approval and therefore **no ``approval_id`` to post a decision to** — the empty
@@ -638,7 +653,7 @@ def decision_view(case: Case) -> DecisionView | None:
     """
     approval = case.pending_approval()
     if approval is not None:
-        proposal = proposal_for(case, approval.args_digest)
+        proposal = proposal_for(case, approval.tool_name, approval.args_digest)
         return DecisionView(
             approval_id=approval.approval_id,
             tool_name=approval.tool_name,

@@ -333,7 +333,7 @@ class TestReadingTheCaseBack:
         args = {"to": "carer@example", "subject": "s", "body": "b"}
         case = _proposed(make_case(), "send_email", args)
 
-        found = proposal_for(case, args_digest(args))
+        found = proposal_for(case, "send_email", args_digest(args))
 
         assert found is not None
         assert found.args == args
@@ -341,7 +341,9 @@ class TestReadingTheCaseBack:
     def test_a_digest_no_proposal_covers_finds_nothing(self) -> None:
         case = _proposed(make_case(), "send_email", {"to": "carer@example"})
 
-        assert proposal_for(case, args_digest({"to": "attacker@evil.example"})) is None
+        assert (
+            proposal_for(case, "send_email", args_digest({"to": "attacker@evil.example"})) is None
+        )
 
     def test_the_digest_picks_the_matching_proposal_not_the_latest(self) -> None:
         """An approval covers specific arguments; the newest proposal need not be them."""
@@ -349,7 +351,7 @@ class TestReadingTheCaseBack:
         case = _proposed(make_case(), "send_email", approved)
         case = _proposed(case, "send_email", {"to": "carer@example", "subject": "s2", "body": "b"})
 
-        found = proposal_for(case, args_digest(approved))
+        found = proposal_for(case, "send_email", args_digest(approved))
 
         assert found is not None
         assert found.args == approved

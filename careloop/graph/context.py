@@ -80,20 +80,50 @@ def latest_proposal(case: Case) -> Proposal | None:
     return None
 
 
-def proposal_for(case: Case, digest: str) -> Proposal | None:
-    """The most recent proposal whose arguments hash to ``digest``, or ``None``.
+def proposal_for(case: Case, tool_name: str, digest: str) -> Proposal | None:
+    """The most recent proposal of exactly this call, or ``None``.
 
-    The counterpart of :func:`approval_for`, which finds an approval by the digest of the arguments
-    it covers. An approval records only the digest — deliberately, so that a decision made about
-    one action cannot authorise another — so anything wanting to *show* a caregiver what they are
-    approving has to come back through the timeline to the proposal that digest came from.
+    The presentation counterpart of :func:`approval_for`, and keyed the same way. An approval
+    records ``(tool_name, args_digest)`` because that pair is the identity of the thing a caregiver
+    was asked about; anything wanting to *show* them what they are approving has to come back
+    through the timeline to the proposal that pair came from, and it has to match both halves.
 
-    That lookup lives here rather than in the caller for the same reason :func:`latest_proposal`
-    does: the timeline is read in one layer, by named functions, and never rummaged in by whoever
+    **It matched only the digest until this commit.** ``args_digest`` covers argument names and
+    canonical values and nothing else — not the tool, not the case — so the card was asking *"which
+    proposal has arguments that hash like this?"* while the approval meant *"this exact call"*, and
+    a proposal belonging to a different tool could supply the arguments rendered under this
+    approval's name. Session L bound the authority lookup to the pair and deliberately left this
+    one alone so that property had a single attributable cause; this is the other half.
+
+    **Presentation, not authority, and the distinction is worth keeping sharp.** Nothing routed
+    through here authorises anything: :meth:`careloop.state.case.Case.is_approved` is what the
+    policy engine reads and :meth:`~careloop.state.case.Case.approval_for` is what the execute node
+    consults, and both were already tool-bound. What this decides is what a person is shown before
+    they grant authority, which is not the same thing and is not nothing either.
+
+    It was also unreachable under the shipped configuration, by accident rather than by design —
+    the only two tools that can reach ``REQUIRE_HUMAN`` declare disjoint argument names, the
+    approval is raised from the newest proposal in the same gate execution that read it, and
+    nothing plans while a case is ``AWAITING_HUMAN``. All three are facts about registry shape and
+    node write order, stated in no rule. That is what makes this worth closing rather than noting.
+
+    The latest exact match wins, unchanged: the gate reads :func:`latest_proposal` and raises the
+    request from it, so the newest proposal of one call *is* the record the caregiver was asked
+    about. Binding the tool narrows the candidates and leaves the tie-break alone.
+
+    Both parameters are required and positional, so no caller can fall back to a digest-only lookup
+    by omitting one — the same reason :meth:`careloop.state.case.Case.approval_for` takes them that
+    way. There is deliberately no digest-only variant anywhere; one would be the hole this closes,
+    reopened under a different name.
+
+    That the lookup lives here rather than in the caller is for the reason :func:`latest_proposal`
+    is: the timeline is read in one layer, by named functions, and never rummaged in by whoever
     happens to need something out of it.
     """
     for event in reversed(case.timeline):
         if event.kind is not TimelineKind.PLAN_PROPOSED:
+            continue
+        if event.payload["tool_name"] != tool_name:
             continue
         proposal = Proposal(
             tool_name=event.payload["tool_name"],

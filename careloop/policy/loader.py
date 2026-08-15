@@ -4,6 +4,13 @@ Validation happens at load, not at evaluation. A rule naming a tool that does no
 argument that tool does not declare, is a rule that silently never fires — the suite stays green
 and the guard is gone. Failing startup turns that from an invisible hole into an outage, which is
 the trade this project wants.
+
+A rule requiring *trust* of an argument that declares no
+:attr:`~careloop.tools.registry.ArgSpec.trust_key` is the same failure wearing a different hat, and
+is refused here for the same reason. Nothing can establish trust for such an argument, so the
+predicate resolves ``UNTRUSTED`` for ever: written as ``arg_trust_at_least`` it is a rule that can
+never fire, and written as ``arg_trust_below`` it is one that always does. Both are configuration
+mistakes about authority, and both should be an outage rather than a surprise three nodes later.
 """
 
 from __future__ import annotations
@@ -50,6 +57,16 @@ def _validate_against_registry(ruleset: RuleSet, registry: ToolRegistry) -> None
                     problems.append(
                         f"rule {rule.id!r} references argument {arg_name!r}, "
                         f"which tool {tool_name!r} does not declare"
+                    )
+
+            for predicate in (*rule.when.arg_trust_below, *rule.when.arg_trust_at_least):
+                if predicate.arg not in spec.arg_names:
+                    continue  # already reported as an undeclared argument above
+                if spec.trust_key(predicate.arg) is None:
+                    problems.append(
+                        f"rule {rule.id!r} requires trust of {tool_name}.{predicate.arg}, "
+                        f"which declares no trust_key; nothing can establish trust for it, so "
+                        f"the rule could only ever resolve UNTRUSTED and never match"
                     )
 
             for predicate in rule.when.arg_class_assertions:

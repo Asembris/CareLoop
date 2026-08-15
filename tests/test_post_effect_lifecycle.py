@@ -32,12 +32,12 @@ So the property this file owns is not "the loop is wasteful". It is:
 here could pass while a changed second proposal still executed; that class is what fails if one
 ever can again.
 
-**Both failure conditions are covered, deliberately.** ``Verification`` collapses "the read
-succeeded and the values disagree" and "the read could not establish anything" into one
-``passed=False``, and :meth:`careloop.graph.nodes.VerifyNode._verify` says so out loud. Their
-*remediation* may differ later — a bounded observation-only retry is defensible for the second and
-never for the first — but their immediate safety lifecycle is identical and is what is asserted
-here.
+**Every failure condition is covered, deliberately.** The read succeeded and the values disagree;
+the clinic answered that it holds no such booking; nothing answered at all. Since Patch 2A those
+are three distinguishable evidence states rather than one ``passed=False`` — see
+``tests/test_observation_outcome.py``, which owns what they are *called* — and their immediate
+safety lifecycle is identical, which is what is asserted here. Their *remediation* may differ
+later; that this file's assertions are indifferent to which one occurred is the point of it.
 
 The misbehaving clinics are imported from ``test_verify_readback`` rather than rebuilt. They are
 the same divergences; this file asserts what the case does about them, and a second copy would be a
@@ -55,6 +55,7 @@ from strands.multiagent.base import Status
 from test_verify_readback import (
     BOOKING,
     CASE_ID,
+    CannotBeReadBack,
     ChangesTheReason,
     LosesTheRecord,
     SwapsThePatient,
@@ -365,16 +366,63 @@ class TestAnUnavailableReadBackParksTheCase:
     def test_no_read_back_is_retried(
         self, clinic_service: tuple[str, Clinic], clinic_state: Clinic
     ) -> None:
-        """Patch 1 stops; it does not retry the observation. Pinned so Patch 2 is a decision.
+        """Patch 1 stops; it does not retry the observation. Patch 2A still does not.
 
-        One ``verify`` execution in the whole run. A bounded observation-only retry is defensible
-        for *this* condition and never for a successful read that disagrees, but it needs a
-        discriminator ``Verification`` does not carry, and adding one here would preempt that.
+        One ``verify`` execution in the whole run. The discriminator ``Verification`` was missing
+        now exists — this scenario records ``observation=ABSENT``, and the two that follow record
+        ``UNAVAILABLE`` — but classifying the evidence is not the same decision as retrying on it,
+        and Patch 2A deliberately made only the first. ``tests/test_observation_outcome.py`` counts
+        the reads themselves, which is the stronger form of this assertion.
         """
         base_url, world = clinic_service
         result, _context = run_against(LosesTheRecord(base_url, world))
 
         assert result.executed_nodes.count("verify") == 1
+
+
+class TestAnUnreachableClinicParksTheCaseTheSameWay:
+    """The third external evidence state: the booking landed and the read never completed.
+
+    Distinct from :class:`TestAnUnavailableReadBackParksTheCase` above, where the clinic *answered*
+    that it holds no such appointment. Here nothing answered at all. Patch 2A tells the two apart
+    in the audit trail — ``ABSENT`` against ``UNAVAILABLE`` — and deliberately gives them the same
+    lifecycle, which is what this class pins.
+    """
+
+    def test_the_case_parks_for_a_person_after_exactly_one_attempt(
+        self, clinic_service: tuple[str, Clinic], clinic_state: Clinic
+    ) -> None:
+        base_url, world = clinic_service
+        result, context = run_against(CannotBeReadBack(base_url, world))
+
+        assert_parked_after_one_attempt(result, context)
+
+    def test_the_booking_really_did_land_at_the_clinic(
+        self, clinic_service: tuple[str, Clinic], clinic_state: Clinic
+    ) -> None:
+        """Vacuity: the case is not parked because the effect never happened.
+
+        This is exactly the shape that makes replanning dangerous — the appointment is real and
+        CareLoop cannot see it — so the effect has to be shown to exist for the lifecycle assertion
+        above to mean anything.
+        """
+        base_url, world = clinic_service
+        run_against(CannotBeReadBack(base_url, world))
+
+        assert len(clinic_state.appointments()) == 1
+
+    def test_a_changed_second_booking_is_never_issued(
+        self, clinic_service: tuple[str, Clinic], clinic_state: Clinic
+    ) -> None:
+        """The load-bearing class's property, for the third evidence state."""
+        base_url, world = clinic_service
+        result, context = run_against(
+            CannotBeReadBack(base_url, world), proposals=(BOOKING, *(REBOOKING,) * 7)
+        )
+
+        assert_parked_after_one_attempt(result, context)
+        assert len(clinic_state.appointments()) == 1
+        assert context.executor.invocation_count == 1
 
 
 # -- the load-bearing one --------------------------------------------------------------------------

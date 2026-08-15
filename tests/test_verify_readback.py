@@ -30,7 +30,7 @@ from careloop.graph.verify import ReadBackFailed, verify_action
 from careloop.llm.mock import mock_model
 from careloop.state import Case, CaseState, InMemoryCaseStore, TimelineKind
 from careloop.state.case import ActionRecord
-from careloop.tools.clinic import ClinicClient
+from careloop.tools.clinic import ClinicClient, ClinicUnavailable
 from careloop.tools.executor import DEFAULT_HANDLERS, MockExternalExecutor
 from careloop.tools.idempotency import args_digest, idempotency_key
 from careloop.tools.results import AppointmentBooked
@@ -229,7 +229,13 @@ class ChangesTheReason(ClinicClient):
 
 
 class LosesTheRecord(ClinicClient):
-    """A clinic that accepts a booking and then cannot show it."""
+    """A clinic that accepts a booking and then cannot show it.
+
+    The booking lands, the clinic forgets it, and the read-back of that exact confirmation is
+    answered ``404``. That is the clinic giving a *definite* answer about the object CareLoop holds
+    a receipt for, which is why it classifies as an absence rather than as a read that failed —
+    see ``tests/test_observation_outcome.py``.
+    """
 
     def __init__(self, base_url: str, world: Clinic) -> None:
         super().__init__(base_url)
@@ -239,6 +245,26 @@ class LosesTheRecord(ClinicClient):
         booked = super().book(args, idempotency_key)
         self._world.reset()
         return booked
+
+
+class CannotBeReadBack(ClinicClient):
+    """A clinic that accepts the booking and is then unreachable for the read.
+
+    The third external evidence state, and the only one Demo World cannot produce on its own: it is
+    a healthy loopback service, so nothing it does will time out or refuse a connection. The
+    booking here is genuinely performed against the real clinic and only the *observation* fails,
+    which is what makes this "CareLoop could not establish the result" rather than "the clinic
+    disagreed" or "the clinic holds nothing".
+    """
+
+    def __init__(self, base_url: str, world: Clinic) -> None:
+        super().__init__(base_url)
+        self._world = world
+
+    def appointment(self, confirmation_id: str) -> AppointmentBooked:  # type: ignore[override]
+        raise ClinicUnavailable(
+            f"the clinic at {self.base_url} could not be reached: ConnectTimeout"
+        )
 
 
 # -- the context binds both halves or neither ----------------------------------------------------

@@ -41,6 +41,7 @@ case could reach ``DONE`` without anything having been checked, so it fails on i
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from enum import StrEnum
 from typing import Final
 
 from pydantic import BaseModel, ConfigDict
@@ -57,6 +58,70 @@ from careloop.tools.results import (
 )
 
 
+class ObservationOutcome(StrEnum):
+    """What the independent read of the external system established. A closed vocabulary.
+
+    **Five answers to one question**, and the question is deliberately narrow: *what did the
+    observation produce?* It is not *may this action be certified?* — that is
+    :attr:`Verification.passed`, which also weighs the closed-loop checks against what policy
+    authorised. Keeping them apart is what lets a timeline say "the clinic agrees with us and the
+    effect we recorded is still not the one that was decided", which is a real state and was
+    previously unsayable.
+
+    Before this vocabulary existed the graph could distinguish exactly two of these, and only for
+    the width of one ``except`` clause. ``ClinicClient._request`` raised one ``ClinicRefused`` for
+    every status from 400 to 599, so a ``404`` on the exact confirmation id and a ``503`` were the
+    same object; :meth:`careloop.graph.nodes.VerifyNode._verify` then folded whatever arrived into
+    ``passed=False`` beside a genuine disagreement. Four different facts about the world reached the
+    audit trail as one boolean and a paragraph of free text.
+
+    **Nothing here is a lifecycle instruction.** Every failing member parks the case identically,
+    exactly as before — see ``tests/test_post_effect_lifecycle.py``. What a member says is what
+    CareLoop *knows*, and deciding what to do about each kind of knowledge is a separate question
+    that this enum makes askable rather than answers.
+    """
+
+    MATCHED = "MATCHED"
+    """An independent read succeeded and every compared field equals what CareLoop executed."""
+
+    DIVERGED = "DIVERGED"
+    """An independent read succeeded and one or more compared fields differ.
+
+    **Positive evidence of disagreement.** The external system answered, the answer was a valid
+    typed observation, and it does not match. Retrying the read would ask a deterministic service
+    the same question twice.
+    """
+
+    ABSENT = "ABSENT"
+    """The external system answered that it holds no record of the effect.
+
+    Also positive evidence, and the member most easily confused with :attr:`UNAVAILABLE`. The
+    clinic minted the confirmation id, stored it and returned it; a later read of *that exact id*
+    answering ``404`` is the clinic contradicting the receipt CareLoop holds. Distinguished from a
+    disagreement about field values because it is a different fact — there is nothing to compare,
+    rather than something that compared badly.
+    """
+
+    UNAVAILABLE = "UNAVAILABLE"
+    """CareLoop attempted an independent read and could not establish authoritative state.
+
+    Absence of knowledge, not knowledge of absence. Nothing answered, or what answered could not
+    serve the read. **This member says nothing about whether a later attempt would fare better** —
+    that is a separate judgement about the *cause*, and Patch 2A does not make it. The underlying
+    exception is preserved so it can be made later without re-deriving anything.
+    """
+
+    NOT_OBSERVED = "NOT_OBSERVED"
+    """No independent observation took part in this verdict.
+
+    A statement about CareLoop's own wiring rather than about the world: the three simulated
+    effects have no external system to read, so verification means what it meant before the
+    read-back existed. **Must never be confused with** :attr:`UNAVAILABLE`, which claims an
+    external system was consulted and did not answer — a claim about the world made by a run that
+    never touched one.
+    """
+
+
 class Verification(BaseModel):
     """The outcome of verifying one action."""
 
@@ -70,6 +135,10 @@ class Verification(BaseModel):
     diagnostic is withheld wholesale by the API and is never rendered into a prompt, so text
     CareLoop does not control cannot become an instruction. See
     ``tests/test_verify_readback.py::TestTheReadBackIsNotAnInjectionChannel``.
+
+    **Nothing reads this to decide anything.** :attr:`outcome` is chosen by typed control flow, so
+    a clinic whose failure message claims the observation matched cannot make it so —
+    ``tests/test_observation_outcome.py::TestTheOutcomeIsNotReadOutOfText``.
     """
 
     externally_observed: bool
@@ -78,6 +147,19 @@ class Verification(BaseModel):
     Carried rather than inferred, because "verified" is a materially stronger claim when it is
     true and a timeline that cannot tell the two apart would let the weaker one be read as the
     stronger. It reaches the API as the ``read_back`` payload key.
+
+    **Attempted, not succeeded**, and that meaning is unchanged by this session: a read that was
+    made and failed still took part in the verdict. :attr:`outcome` is what says how it went, and
+    redefining this field to mean something narrower would be a compatibility decision of its own
+    rather than a clarification.
+    """
+
+    outcome: ObservationOutcome
+    """What the independent read established, as a closed vocabulary.
+
+    Required, with no default, for the reason every result field in
+    :mod:`careloop.tools.results` is: a default would let a construction site decline to decide and
+    have the model answer for it. There are four construction sites and each one names its outcome.
     """
 
     @property
@@ -100,7 +182,27 @@ class ReadBackFailed(Exception):
 
     Both are verification failures rather than crashes, and both fail closed: an effect the
     external system cannot show CareLoop is an effect CareLoop cannot claim happened.
+
+    **The two subclasses below are what a read-back must raise.** This base still resolves to an
+    outcome so that handling stays total, and it resolves to the *weaker* claim on purpose:
+    :attr:`ObservationOutcome.ABSENT` asserts the external system gave a definite answer, and a
+    failure nobody classified must not be able to make that assertion by omission.
     """
+
+    outcome: ObservationOutcome = ObservationOutcome.UNAVAILABLE
+    """The evidence class this failure means. Read from the *type*, never from the message."""
+
+
+class ObservationAbsent(ReadBackFailed):
+    """The external system answered that it holds no record of the effect."""
+
+    outcome = ObservationOutcome.ABSENT
+
+
+class ObservationUnavailable(ReadBackFailed):
+    """CareLoop could not obtain authoritative state from the external system."""
+
+    outcome = ObservationOutcome.UNAVAILABLE
 
 
 def _mismatches(
@@ -280,26 +382,37 @@ def verify_action(
         )
 
     verifier = VERIFIERS.get(action_type)
+    outcome = ObservationOutcome.NOT_OBSERVED
     if verifier is None:
-        # Unreachable while the import-time check holds. Fail closed rather than pass by omission.
+        # Unreachable while the import-time check holds. Fail closed rather than pass by omission,
+        # and claim no observation: nothing was compared, whatever was read.
         problems.append(f"no verifier for action type {action_type!r}")
     else:
         canonical = canonical_args(args)
         problems.extend(verifier(canonical, result))
         if observed is not None:
+            disagreements = verifier(canonical, observed)
             problems.extend(
-                f"read back from the external system: {problem}"
-                for problem in verifier(canonical, observed)
+                f"read back from the external system: {problem}" for problem in disagreements
             )
+            # **The outcome describes the observation, not the verdict.** A closed-loop problem —
+            # a key that does not re-derive, a digest that does not match — fails verification
+            # without the external record having disagreed about anything, and reporting that as
+            # DIVERGED would put a disagreement with the world into the trail that never happened.
+            outcome = ObservationOutcome.DIVERGED if disagreements else ObservationOutcome.MATCHED
 
     if problems:
         return Verification(
-            passed=False, diagnostic="; ".join(problems), externally_observed=observed is not None
+            passed=False,
+            diagnostic="; ".join(problems),
+            externally_observed=observed is not None,
+            outcome=outcome,
         )
     if observed is not None:
         return Verification(
             passed=True,
             externally_observed=True,
+            outcome=outcome,
             diagnostic=(
                 f"{action_type} verified against the external system: the recorded effect keys to "
                 f"the authorised arguments, and a separate read of the external system's own "
@@ -309,6 +422,7 @@ def verify_action(
     return Verification(
         passed=True,
         externally_observed=False,
+        outcome=ObservationOutcome.NOT_OBSERVED,
         diagnostic=(
             f"{action_type} verified: the recorded effect keys to the authorised arguments and "
             f"every field it echoes matches what policy allowed. No external system was read — "
@@ -321,6 +435,9 @@ def verify_action(
 __all__ = [
     "RESULT_TYPES",
     "VERIFIERS",
+    "ObservationAbsent",
+    "ObservationOutcome",
+    "ObservationUnavailable",
     "ReadBack",
     "ReadBackFailed",
     "UnverifiableAction",

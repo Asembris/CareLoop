@@ -149,9 +149,14 @@ class TestEvaluationLeaksNothing:
                 {"to": ATTACKER, "subject": INJECTION, "body": SECRET},
                 make_case(state=state, facts=poisoned),
             )
+            # Every argument supplied, deliberately. Session P made ``evaluate`` refuse an argument
+            # map that omits anything the tool declares, before any rule is considered — so a call
+            # written short here would exercise the completeness branch instead of the rule path
+            # this matrix exists to sweep, and would starve it of REQUIRE_HUMAN, ALLOW and two
+            # reason codes.
             yield (
                 "send_email",
-                {"to": ATTACKER, "subject": INJECTION},
+                {"to": ATTACKER, "subject": INJECTION, "body": SECRET},
                 make_case(state=state, facts=trusted),
             )
             yield (
@@ -167,9 +172,18 @@ class TestEvaluationLeaksNothing:
                 {"grantee": ATTACKER, "role": INJECTION, "portal_id": SECRET},
                 make_case(state=state, facts=trusted),
             )
+            # ``reason`` supplied for the same reason as ``body`` above, and this is the yield that
+            # carries INSUFFICIENT_FACT_TRUST into the matrix — written short, the completeness
+            # branch would refuse it NO_RULE_MATCH and that code would go unchecked by every leak
+            # test below.
             yield (
                 "book_appointment",
-                {"provider_id": ATTACKER, "patient_id": SECRET, "slot_start": INJECTION},
+                {
+                    "provider_id": ATTACKER,
+                    "patient_id": SECRET,
+                    "slot_start": INJECTION,
+                    "reason": INJECTION,
+                },
                 make_case(state=state, facts=poisoned),
             )
             yield (
@@ -270,7 +284,9 @@ class TestEvaluationLeaksNothing:
             state=CaseState.PLANNING,
             facts=(make_fact("caregiver_email", ATTACKER, TrustLevel.CONTROLLED),),
         )
-        decision = engine.evaluate("send_email", {"to": ATTACKER}, case)
+        decision = engine.evaluate(
+            "send_email", {"to": ATTACKER, "subject": INJECTION, "body": SECRET}, case
+        )
         assert decision.diagnostic.strip()
         assert leaked_tokens(decision.diagnostic, _forbidden()) != frozenset()
         assert decision.args["to"] == ATTACKER

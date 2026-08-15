@@ -177,27 +177,57 @@ class TestThePatientMustBeEstablishedByTheCase:
         assert decision.verdict is Verdict.DENY
         assert decision.matched_rule_id == DENY_RULE
 
-    @pytest.mark.parametrize("supplied", [{}, {"patient_id": ""}])
-    def test_an_absent_patient_is_denied_by_trust_rather_than_by_presence(
-        self, engine: PolicyEngine, supplied: dict[str, str]
+    def test_an_empty_patient_is_denied_by_trust_rather_than_by_presence(
+        self, engine: PolicyEngine
     ) -> None:
-        """Removing ``args_present`` did not stop the empty and omitted cases being refused.
+        """Removing ``args_present`` did not stop the empty case being refused.
 
-        ``_condition_holds`` resolves an argument the call omits to ``UNTRUSTED``, and no fact can
-        carry an empty value under ``patient_id`` because ``patient_id_format`` demands
-        ``PT-0000``. So the trust clause strictly dominates the presence clause, and it produces a
-        better code: ``INSUFFICIENT_FACT_TRUST`` rather than the ``NO_RULE_MATCH`` a fallthrough
-        gave.
+        No fact can carry an empty value under ``patient_id``, because ``patient_id_format`` demands
+        ``PT-0000``. So the trust clause strictly dominates the presence clause it replaced, and it
+        produces a better code: ``INSUFFICIENT_FACT_TRUST`` rather than the ``NO_RULE_MATCH`` a
+        fallthrough gave.
+
+        **An empty value is a supplied value**, so this is a complete ``book_appointment`` call and
+        session P's completeness branch has nothing to say about it. That is the whole distinction
+        the split below records, and it is why this half still reaches session J's rule.
         """
         args = booking()
-        args.pop("patient_id")
-        args.update(supplied)
+        args["patient_id"] = ""
 
         decision = engine.evaluate("book_appointment", args, _case(*_hero_evidence()))
 
         assert decision.verdict is Verdict.DENY
         assert decision.reason_code is ReasonCode.INSUFFICIENT_FACT_TRUST
         assert decision.matched_rule_id == DENY_RULE
+
+    def test_an_omitted_patient_is_refused_as_an_incomplete_call(
+        self, engine: PolicyEngine
+    ) -> None:
+        """The other half of what used to be one parametrized test, split in session P.
+
+        Both halves were written when the engine could not tell an omitted key from an empty value —
+        it folded both onto ``UNTRUSTED`` — so one assertion covered both. It can tell now, and the
+        two mean different things: ``patient_id=""`` is a booking that names a patient badly, and a
+        booking with no ``patient_id`` key at all is not a complete call for any rule to have an
+        opinion about.
+
+        **Session J's authority requirement is untouched.** The identifier still has to be
+        established by the case at ``CONTROLLED`` before CareLoop books, and every one of the four
+        shapes that repair refuses — invented, borrowed from another fact key, unvalidated, and
+        misquoted — supplies the argument and is still refused by ``deny-booking-for-unverified-
+        patient`` above. Completeness owns absence and nothing else.
+        """
+        args = booking()
+        args.pop("patient_id")
+
+        decision = engine.evaluate("book_appointment", args, _case(*_hero_evidence()))
+
+        assert decision.verdict is Verdict.DENY
+        assert decision.reason_code is ReasonCode.NO_RULE_MATCH
+        assert decision.matched_rule_id is None
+        assert decision.arg_trust == {}, "completeness must precede trust resolution"
+        assert "without declared argument" in decision.diagnostic
+        assert "patient_id" in decision.diagnostic
 
     def test_conflicting_patient_evidence_denies_the_booking(self, engine: PolicyEngine) -> None:
         """Lowest-wins, scoped to the key, reaching the booking rule.

@@ -69,6 +69,18 @@ both agents drive the model provider directly and neither holds a tool. The even
 registry and the `cancel_tool` contract are genuine SDK machinery, and the hook provider would plug
 unchanged into a `strands.Agent` the day one exists. What is CareLoop's is the *firing*.
 
+**Naming an argument in a rule is not the same as guarding it.** Every booking argument already
+declared the fact key its trust comes from, and resolution already returned the right answer for
+each — but the booking rule tested `patient_id` with `args_present`, which asks only that the value
+be non-empty. The trust was computed and nothing read it, so a booking with a provider from trusted
+configuration and a validated slot was allowed for an invented patient, one borrowed from an
+unrelated fact key, one that never validated, and the real one misquoted. The requirement is now the
+same as the slot's: **the exact patient identifier must be established by the case's own evidence at
+`CONTROLLED` or higher**, refused by `deny-booking-for-unverified-patient` otherwise. Legitimate
+bookings are unaffected — five of the six fixture documents print the identifier and the
+cross-document agreement check promotes it — so the autonomous path stays autonomous and no
+caregiver is asked anything new.
+
 Why there is no probabilistic guardrail in front of any of this:
 [ADR 0003](adr/0003-no-runtime-guardrail-layer.md).
 
@@ -85,6 +97,14 @@ against what policy authorised — never the booking's own response, which would
 CareLoop's receipt. Move the appointment behind CareLoop's back and every closed-loop check still
 passes while verification fails; `tests/test_verify_readback.py::TestTheIndependenceProof` is that
 sentence as a test.
+
+That read compares the provider, the patient and the slot, which closes the patient contract at both
+ends: the exact identifier must be `CONTROLLED` before the effect, and the clinic must still hold it
+afterwards. A front desk that files the booking against somebody else is caught by the second half —
+`TestTheAuthorisedPatientIsCheckedOnTheWayOutToo` — and by nothing else, because the booking response
+echoed the right patient and every closed-loop check still passes. The booking's `reason` is **not**
+compared: it is planner-authored free text that reaches the clinic and is recorded there, and whether
+it should be verified is an open decision rather than a claim being made here.
 
 **What it does not prove.** It checks the effect performed against the effect authorised. It does
 not prove the outside world did the right thing, that the appointment suits the patient, or that

@@ -221,6 +221,38 @@ policy module names the function. The agent can never leave `DONE`; the world ca
 one place to forget a `DESTINATION`. Rules may reference classes; they may never define them, and
 load-time validation fails startup if a rule names a tool or argument the registry does not have.
 
+**A rule that names an argument without requiring its trust is not guarding it.** Session J: every
+booking argument had a correct `trust_key`, `resolve_trust` returned the right answer for every one
+of them, and `allow-booking-on-validated-slot` guarded `patient_id` with `args_present` — which the
+engine implements as "not absent and not empty". So the engine *computed* the trust and no rule read
+it, and a booking with a configured provider and a validated slot reached `ALLOW` carrying an
+invented identifier, one borrowed from an unrelated fact key, one that never validated, or the real
+one misquoted. `book_appointment` is the one tool whose effect is genuinely external, so all four
+reached the clinic over HTTP and were recorded there as the person being seen; Demo World validates
+the slot and the idempotency key and never the patient. This was **independent of session I** —
+that repair decides how trust is computed, and this was whether it is required.
+
+So: **the exact patient identifier must be deterministically established by the current case at
+`CONTROLLED` or higher before CareLoop books, and the case cannot reach `DONE` if the clinic reports
+a different one.** `deny-booking-for-unverified-patient` is the first half and the read-back's
+existing `patient_id` comparison is the second; `tests/test_booking_authority.py` and
+`tests/test_verify_readback.py::TestTheAuthorisedPatientIsCheckedOnTheWayOutToo` pin them, and a
+targeted mutant that restores presence-only semantics — and changes nothing else — proves the first
+is what refuses those calls. `CONTROLLED`, not `TRUSTED`: nothing produces a trusted patient, so
+requiring it would make booking unreachable. The presence clause was removed rather than kept
+alongside, because the trust clause strictly dominates it and the weaker one is what let the
+identifier through. **`args_present` is a presence check and nothing more; any new rule about who or
+what an action affects belongs in `arg_trust_at_least`.**
+
+**One booking argument is still unguarded and that is a recorded decision, not an oversight.**
+`reason` is planner-authored free text, declares no `trust_key` (so no rule may even require trust
+of it), is sent verbatim to the clinic and persisted there, and is the one externally recorded field
+the read-back does not compare — `AppointmentBooked` has no such field and `ClinicClient._appointment`
+drops it. It is integrity-sensitive rather than authority-bearing: nothing it says can change who is
+booked, where, or when. Whether it should be verified, templated from controlled facts, or removed is
+open, and was deliberately kept out of the patient patch so the two properties have independent
+causal evidence.
+
 **`careloop/api/` decides nothing.** It projects stored cases and calls `open_case`, `reopen_case`,
 `approve`, `reject` and `run_case`. The one thing it originates is *when* a run happens, and
 scheduling is not deciding. An endpoint that appears to need logic which does not exist is a signal

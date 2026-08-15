@@ -3400,8 +3400,28 @@ Carry these forward. Nothing here is blocking the next commit except where it sa
 
     Whoever takes it should keep the two failure kinds apart: an ordinary verification mismatch
     still wants the replan.
-19. **Approving a `NO_SAFE_ACTION_AVAILABLE` parking releases the case to execution, and it should
-    not.** Session B parks a case whose every action was refused, raising an approval carrying that
+19. **Approving a `NO_SAFE_ACTION_AVAILABLE` parking releases the case to execution — CLOSED
+    2026-08-15.** Both candidate shapes below turned out to be needed, for different reasons, and
+    the choice between them was the wrong question. **The parking now raises no `Approval` at all**
+    (`careloop/graph/nodes.py::_park_with_nothing_safe_to_do` writes a
+    `TimelineKind.MANUAL_HANDOFF_REQUIRED` entry and nothing else), so nothing exists to post a
+    decision to and a fabricated id is a plain `404`. **And `_decide` refuses any approval that is
+    not `is_actionable`** — non-empty `tool_name` and non-empty `args_digest` — which is what makes
+    the cases *already on disk* inert: they still deserialize, still render as manual follow-up,
+    still sit in `AWAITING_HUMAN`, and return `409` before any state or version moves. No
+    migration, no reset, no schema change.
+
+    The two enforcement points are independently proven. Mutant M1 restores the empty approval and
+    fails nine tests including the one-writer sweep in `tests/test_approval_shape.py`; mutant M2
+    removes the `_decide` guard and fails eight, all of them about historical records; M1 + M2
+    together reproduce `AWAITING_HUMAN → READY_TO_EXECUTE` and the suite catches it. The card a
+    caregiver sees is unchanged — `DecisionView` is projected from the timeline entry instead of
+    from an approval, so the frontend needed nothing beyond naming the new timeline kind.
+
+    What follows is the finding as it stood, kept because the reasoning about *why* an approval is
+    the wrong carrier is what generalises.
+
+    Session B parks a case whose every action was refused, raising an approval carrying that
     reason code. But that approval is not an approval *of* anything — there is no proposal behind it
     — and `approve` unconditionally transitions to `READY_TO_EXECUTE`, where the execute node picks
     up the last refused proposal, is refused again, and the case ends `FAILED`.
@@ -3421,6 +3441,34 @@ Carry these forward. Nothing here is blocking the next commit except where it sa
 
     **Whoever builds the frontend needs an answer**, because the Needs You card renders an Approve
     button off `decision.reason_code` and this is the one value where pressing it is wrong.
+
+20. **`approval_id` is not unique, and a second decision on a duplicated id rewrites the first.**
+    Found while closing 19 and deliberately left open: it is a defect in the *legitimate* approval
+    path and repairing it under a handoff patch would have given one change two attributable
+    properties.
+
+    `approval_id_for(digest)` is `f"apr-{digest[:16]}"`, a pure function of the arguments. So a
+    caregiver who rejects a proposal and lets the planner repropose the **same** arguments gets a
+    second approval carrying the **same id** — and `_decide` rewrites *every* approval whose id
+    matches, not the one it looked up. Measured on the shipped code, through the ordinary
+    `send_email` path:
+
+    ```
+    before: [('apr-0996ea3e5c60393e', REJECTED, rosa),  ('apr-0996ea3e5c60393e', PENDING, None)]
+    after:  [('apr-0996ea3e5c60393e', APPROVED, rosa2), ('apr-0996ea3e5c60393e', APPROVED, rosa2)]
+    ```
+
+    A recorded refusal silently becomes an approval. Nothing executes that should not — the second
+    approval is genuine and covers the same digest — so this is an **audit-integrity** defect rather
+    than an authority one, which is why it is survivable as an open item. The fix is small and has
+    two halves that should land together: `_decide` must decide the one record it matched, and the
+    identifier must distinguish two requests for the same arguments. Until it lands, **the claim
+    "every approval identifies exactly one call" holds for what `_decide` will *accept*, and not for
+    the approval collection as a whole.**
+
+    Closing 19 removed one source of duplicates rather than the cause: the handoff seed
+    `f"no-safe-action:{case_id}:{len}"` truncated to sixteen characters as the constant
+    `apr-no-safe-action:c`, identical in every case, and no handoff writes an approval any more.
 
 ## Session I — 2026-08-15
 

@@ -99,14 +99,21 @@ class ReasonCode(StrEnum):
     it onto the ``MANUAL_HANDOFF_REQUIRED`` entry
     :func:`careloop.graph.nodes._park_with_nothing_certifiable` appends.
 
-    **Deliberately one code for two evidence states**, which is why it is named for what CareLoop
-    knows rather than for what happened. An independent read that *succeeded and disagreed* and one
-    that *could not establish anything* are different facts about the world, and
-    :class:`careloop.graph.verify.Verification` collapses them on purpose; what they share is that
-    CareLoop cannot certify the result, and that is exactly what this says. Naming it
+    **Deliberately one code for several evidence states**, which is why it is named for what
+    CareLoop knows rather than for what happened. An independent read that *succeeded and
+    disagreed*, one the external system answered by saying it holds *no such record*, and one that
+    *could not establish anything* are three different facts about the world; what they share is
+    that CareLoop cannot certify the result, and that is exactly what this says. Naming it
     ``EXTERNAL_STATE_DIVERGED`` would be false for the unreadable case and
-    ``EXTERNAL_SYSTEM_UNREACHABLE`` false for the divergent one. Splitting it is a Patch 2 question,
-    to be answered beside the ``Verification`` discriminator a split would need, not before it.
+    ``EXTERNAL_SYSTEM_UNREACHABLE`` false for the divergent one.
+
+    **The three are now told apart, and this code still does not split**, which is a decision rather
+    than an omission. :class:`careloop.graph.verify.ObservationOutcome` records which evidence state
+    occurred, on the ``VERIFICATION_FAILED`` entry, in a closed vocabulary. The two answer different
+    questions: an outcome says *what the read produced*, and a reason code says *why CareLoop
+    stopped and asked a person*. The answer to the second is identical in all three cases, so a
+    second code here would be a distinction the lifecycle does not make, offered to a caregiver as
+    though it did.
 
     ``_NOT_CONFIRMED`` rather than ``_UNVERIFIED`` for the reason the two ``_NOT_TRUSTED`` codes are
     spelled that way: it states what the evidence failed to establish, where "unverified" reads as

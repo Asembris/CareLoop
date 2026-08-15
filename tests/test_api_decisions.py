@@ -14,6 +14,7 @@ from api_helpers import CASE_ID, EMAIL, api_client, finished_store, intent, park
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from helpers import make_case
+from test_approval_identity import HISTORICAL_ID, historical, legacy_store
 from test_no_safe_action import CASE_ID as HANDOFF_CASE_ID
 from test_no_safe_action import handoff_store, historical_handoff_store
 
@@ -35,6 +36,11 @@ SEND_EMAIL = (intent("send_email", **EMAIL),)
 
 def pending_id(store) -> str:
     return store.get(CASE_ID).pending_approval().approval_id
+
+
+def ambiguous_store():
+    """A store holding a case persisted with two pending requests under one historical id."""
+    return legacy_store(historical("PENDING"), historical("PENDING"))
 
 
 def decide(client, verb: str, approval_id: str, *, headers=HEADERS, case_id=CASE_ID, wait=WAIT):
@@ -249,6 +255,40 @@ class TestDecisionsThatCannotBeMade:
 
         assert response.status_code == 409
         assert len(store.get(CASE_ID).actions) == 1
+
+
+class TestAnAmbiguousHistoricalIdentifierIsRefusedOverHttp:
+    """Two pending requests under one identifier: a 409, and nothing scheduled.
+
+    Only reachable for identifiers persisted before request identity stopped being derived from the
+    argument digest. The HTTP half matters on its own — the same all-or-nothing property the
+    handoff tests below pin — because ``decide`` records the decision and *then* schedules a run,
+    so a refusal that arrived late would leave a case released and a caller told it was refused.
+    """
+
+    def test_it_is_a_409(self) -> None:
+        store = ambiguous_store()
+
+        with api_client(store) as client:
+            response = decide(client, "approve", HISTORICAL_ID)
+
+        assert response.status_code == 409
+
+    def test_nothing_moves_and_no_run_is_scheduled(self) -> None:
+        store = ambiguous_store()
+        before = store.get(CASE_ID)
+
+        with api_client(store) as client:
+            response = decide(client, "approve", HISTORICAL_ID)
+            run = client.get(f"/api/runs/{response.json().get('run_id', 'none')}")
+
+        after = store.get(CASE_ID)
+        assert after.version == before.version
+        assert after.state is before.state
+        assert after.approvals == before.approvals
+        assert after.timeline == before.timeline
+        assert after.actions == ()
+        assert run.status_code == 404
 
 
 class TestAManualHandoffCannotBeApprovedThroughTheApi:

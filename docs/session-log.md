@@ -4822,6 +4822,193 @@ of reaching that path, not the path.
 28. **Content half unchanged and still open** — `reason` provenance, templating and length. The
     verification half was closed in session O and is not reopened here.
 
+## Session Q — 2026-08-15
+
+### Position
+
+**Open decision 18, closed. Once an external effect has been attempted, a failed verification cannot
+return the case to autonomous planning.**
+
+Decision 18 was written as a cost: *"loud, terminal, bounded, and it books nothing twice — but it
+burns the budget."* The audit reproduced it through the real graph on a loopback Demo World and found
+the last clause was true only because the reproposal was **identical**.
+
+Four divergence harnesses — reason drift, patient drift, slot drift, and a 404 read-back — produced a
+byte-identical lifecycle:
+
+```
+executed_nodes (24) dispatch triage evidence plan gate execute verify
+                                    [plan gate execute verify] × 4
+                                     plan                              ← budget exhausted
+5 × VERIFICATION_FAILED   6 planner calls   1 ActionRecord   1 effect
+Status.FAILED, hit_the_bound=True
+failure_reason: "the graph stopped after 24 node execution(s) without the case reaching a resting state"
+```
+
+**The terminal outcome was framework exhaustion, not a decision.** And the planner could not have
+decided otherwise: `planner_user_prompt` renders state, summary, facts and `POLICY_DENY`-derived
+denials, none of which move on a verification failure. All six prompts were **byte-identical**, 1837
+chars, `set(prompts) == 1`. The planner could not distinguish *"nothing has happened yet"* from *"an
+effect happened and the world disagrees"*, so `VERIFICATION_FAILED → PLANNING` was retry wearing
+remediation's clothes.
+
+**The severity was the changed reproposal.** `book_appointment.reason` is planner-authored free text
+carrying no `trust_key` and named by no rule, so changing only that moves `args_digest`, moves
+`idempotency_key`, and defeats duplicate suppression in CareLoop **and** in Demo World. Measured, with
+a deterministic planner proposing `BOOKING` then `BOOKING | {"reason": …}`:
+
+```
+LosesTheRecord (404 read-back)     2 ACTION_EXECUTED   2 ActionRecords
+                                   2 executor invocations   2 confirmation ids
+ChangesTheReason (divergence)      POLICY_ALLOW at seq 22, READY_TO_EXECUTE, EXECUTING,
+                                   second POST reaches the clinic, refused 409 SlotAlreadyTaken
+```
+
+A second autonomous external booking, issued after CareLoop already knew it could not certify the
+first. In the divergence case the refusal came from **Demo World's own slot-collision rule** — an
+external service's consistency check standing where an authority decision should have been. Session
+N's shape again: the safety came from somewhere else and was written down in no rule.
+
+The rationale for the edge does not survive inspection either. `VERIFYING` is reachable only from
+`EXECUTING` and `WAITING_EXTERNAL`, `ExecuteNode` transitions there after recording an action or
+suppressing a duplicate of one, and `VerifyNode` fails the case outright when no `ActionRecord`
+exists. **There is no pre-effect verification failure**, so *"a proposal that did not verify deserves
+another attempt"* was never a description of a reachable state.
+
+### The repair
+
+```
+OLD   VERIFICATION_FAILED → VERIFYING→PLANNING → plan → gate → execute → verify → …
+NEW   VERIFICATION_FAILED → MANUAL_HANDOFF_REQUIRED → VERIFYING→AWAITING_HUMAN
+```
+
+Three halves, in three files, and each is load-bearing:
+
+1. `VerifyNode`'s failure branch calls `_park_with_nothing_certifiable` — a **sibling** of
+   `_park_with_nothing_safe_to_do`, not a branch inside it. The two mean close to opposites: that one
+   says every action was refused and nothing was done, this one says something *was* done and cannot
+   be confirmed. Sharing a writer would buy a diagnostic that is false for whichever case it was not
+   written about. No `Approval` is created, for the closed reason plus one of its own — the effect
+   already happened, and no decision a caregiver posts changes what the clinic holds.
+2. The `verify → plan` graph edge is **deleted**. Nothing leaves `verify` now; both outcomes end the
+   run by having no satisfied outgoing edge, exactly as `AWAITING_HUMAN` already did at the gate.
+3. `TRANSITIONS[VERIFYING]` **drops `PLANNING`** and gains `AWAITING_HUMAN`. This corrects the plan
+   gate, which proposed keeping `PLANNING` legal and deleting only the edge — that would leave a
+   future node free to write `transition(PLANNING)` and reopen the hazard with nothing raising. With
+   it absent, that line is an `IllegalTransition` on the first run. `PLANNING` remains reachable from
+   `GATHERING_EVIDENCE`, `AWAITING_HUMAN` and `WAITING_EXTERNAL`, all pre-effect.
+
+**`EXTERNAL_STATE_NOT_CONFIRMED`, the eighth `ReasonCode`.** The second that parks a *case* rather
+than refusing a call, so no rule carries it and the engine never emits it. Named for what CareLoop
+knows rather than for what happened, because **one code covers two evidence states** on purpose:
+`EXTERNAL_STATE_DIVERGED` would be false for an unreadable clinic and `EXTERNAL_SYSTEM_UNREACHABLE`
+false for a divergent one. `_NOT_CONFIRMED` rather than `_UNVERIFIED` for the reason the two
+`_NOT_TRUSTED` codes are spelled that way — something did look, twice, and reported back. Reusing
+`NO_SAFE_ACTION_AVAILABLE` would have put a false statement in an append-only trail: nothing was
+refused, and the catalogue was never exhausted.
+
+**Both failure conditions land here, deliberately.** `Verification` collapses "the read succeeded and
+disagreed" with "the read established nothing", and `VerifyNode._verify` says so. Remediation may
+diverge later — retrying the *observation* is defensible for the second and never for the first,
+since Demo World is deterministic with no eventual-consistency model — but retrying the *effect* is
+wrong for both. `Verification` is unchanged; a discriminator is Patch 2's to add beside the retry it
+would be for.
+
+**The timeline keeps three facts separately** and that is the audit structure worth having:
+`ACTION_EXECUTED` (what happened), `VERIFICATION_FAILED` (why it could not be certified),
+`MANUAL_HANDOFF_REQUIRED` (what CareLoop decided). The handoff does not swallow the failure.
+
+### Evidence
+
+New file `tests/test_post_effect_lifecycle.py`, 17 tests, real graph and real loopback Demo World.
+Written first: **8 failed, 9 passed** against the unrepaired tree. After:
+
+```
+one PLAN_PROPOSED · one VERIFICATION_FAILED · one ACTION_EXECUTED · zero DUPLICATE_SUPPRESSED
+one ActionRecord · one executor invocation
+no POLICY_ALLOW and no READY_TO_EXECUTE after the failure
+AWAITING_HUMAN, no Approval, decision card with approval_id ""
+executed_nodes == 7, hit_the_bound == False, Status.COMPLETED
+```
+
+`TestNoSecondEffectFollowsAFailedCertification` is the load-bearing class, with a vacuity test
+proving `REBOOKING` really does key differently — otherwise idempotency would refuse it and the class
+would pass against the defect.
+
+**Mutant M1** restores exactly three things: the node's `transition(PLANNING)`, the `verify → plan`
+edge, and the `VERIFYING → PLANNING` legality. All three are needed — restoring fewer trips over one
+of the repair's own guards instead of recreating the bug, which is itself the argument for
+defence in depth. **17 red across four files**; `probe` under the mutant reproduces the 2 real
+bookings exactly. Green throughout: every `verify_action` comparison test, the happy path,
+`TestT3Idempotency`, `TestT4LoopBound`, all four approval suites, `test_decision_surface`,
+`test_booking_authority`, `test_typed_trust`, `test_policy_coverage`, `test_grant_authority`,
+`test_policy_completeness`. Restored byte-for-byte, verified by SHA-256.
+
+**2235 passed, 37 skipped** — 2211 before. `ruff check` and `ruff format --check` clean. Frontend
+**104 passed**, `tsc --noEmit` clean.
+
+### Frontend
+
+One copy branch, for truthfulness rather than safety. `decisionKindFor` defaults closed, so the new
+code already rendered the non-approval card with no Approve button — but it would have rendered
+`NO_SAFE_ACTION_AVAILABLE`'s body, *"Every action CareLoop could take here was refused… Nothing has
+been done"*, which is close to the opposite of what happened. `decisionCopy` now branches on the code.
+`statusCopy` was already correct: `mismatch` outranks the state, and it now says so about a case in
+`needs_you` rather than one filed under `completed`.
+
+### Compatibility
+
+No DB migration, no new `CaseState`, no new `TimelineKind`, no API contract change, no payload
+allowlist change, no `rules.yaml` change, no policy-engine change, no tool or executor change, no
+Demo World change, no `Verification` change, no `Approval` written.
+
+**Historical cases are not rewritten and not claimed to be.** A case already persisted in `PLANNING`
+because of a pre-patch verification failure stays there and resumes with historical semantics — the
+patch changes the *entry* into `PLANNING`, not `PLANNING` itself. What can no longer happen is a *new*
+verification failure entering it. A case persisted mid-`VERIFYING` resumes through `dispatch → verify`
+and acquires the new behaviour.
+
+### Still open, deliberately
+
+The lifecycle for a **malformed observation** is untouched: a 200 whose body omits a required field
+raises `KeyError` out of `_appointment`, past `_clinic_readback` (which catches only `ClinicRefused`
+and `ClinicUnavailable`), out of `VerifyNode`; `run_case` marks the case `FAILED` and re-raises. One
+verify execution, no `VERIFICATION_FAILED` entry, no loop, no second effect. Ugly and separable.
+Execute-time `ClinicRefused` / `ClinicUnavailable` likewise — measured, not repaired.
+
+### Open decisions
+
+18. **Closed.** A failed verification parks the case in `AWAITING_HUMAN` through a manual handoff
+    carrying no `Approval`; `verify → plan` is gone and `VERIFYING → PLANNING` is illegal. The
+    decision's own remedy — route to `FAILED` — was **not** taken: `FAILED` is strictly terminal and
+    un-reopenable, it means "something broke" where a read-back catching a divergence is the guard
+    working, and it files the case under `completed` rather than `needs_you`. Its distinction between
+    "an ordinary verification mismatch still wants the replan" and a read-back mismatch was also
+    wrong, and measurably so: there is no pre-effect verification failure for the replan to serve.
+
+22. **Unchanged and still open** — crash / uncertain-effect reconciliation.
+
+25. **Unchanged.**
+
+26. **Unchanged.** Frontend `latestProposal` resolution, deferred.
+
+28. **Content half unchanged and still open** — `reason` provenance, templating and length. Note the
+    interaction rather than a repair: it is `reason`'s freedom that made the second effect reachable,
+    and this patch closed the lifecycle rather than the argument.
+
+29. **New. Should an unavailable read-back retry the observation before parking?** Deferred as Patch
+    2, with its shape already known: it needs a discriminator on `Verification` — which today
+    deliberately collapses divergence and unavailability — a deterministic attempt count that is not
+    a hand-rolled loop counter (invariant 5), and a way to re-enter `verify` without passing through
+    plan or execute. `dispatch → verify` on `VERIFYING` already exists. The `GET` is pure — Demo
+    World's `appointment()` is a dict lookup, `ClinicClient` retries nothing and `httpx` defaults to
+    none — so it is safe to repeat. **A verified mismatch must never be retried this way**: Demo
+    World is deterministic with no eventual-consistency model, so a successful authoritative `GET`
+    that disagrees is definitive.
+
+30. **New. Should a malformed observation become a `ReadBackFailed`?** Patch 3. It is a
+    `ClinicClient` boundary question rather than a lifecycle one, which is why it was not folded in.
+
 ## Standing risks
 
 - **The resume is a `CaseStore` reconstruction across a process boundary, not a Strands session

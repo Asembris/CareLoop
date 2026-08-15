@@ -360,14 +360,32 @@ The backend emits this code in exactly one place: `_every_tool_has_been_refused(
 `careloop/graph/nodes.py`, when the planner has proposed every tool in the registry and been denied
 each time. It parks the case in `AWAITING_HUMAN` with an approval that authorises nothing.
 
-**A verification mismatch does something else entirely.** `VerifyNode` routes a failure to
-**`PLANNING`**. Open decision 18 records what follows: the execute node finds the effect already
-recorded and suppresses it, verification reads the same divergent state and fails again, and the cycle
-runs to `MAX_NODE_EXECUTIONS` — after which `run_case` marks the case **`FAILED`**.
+**A verification mismatch does something else entirely — and what it does changed when open
+decision 18 closed.** It used to route to **`PLANNING`**: the execute node found the effect already
+recorded and suppressed it, verification read the same divergent state and failed again, and the
+cycle ran to `MAX_NODE_EXECUTIONS`, after which `run_case` marked the case **`FAILED`**. `VerifyNode`
+now parks the case instead — a `MANUAL_HANDOFF_REQUIRED` entry carrying
+`EXTERNAL_STATE_NOT_CONFIRMED`, then `AWAITING_HUMAN`, with **no `Approval`**.
 
-So a real read-back mismatch today produces:
+So the two now share a shape and are told apart by their reason code, which is what the divergence
+below is really about:
 
-| | Backend, today | UI's scenario 03 |
+| | `NO_SAFE_ACTION_AVAILABLE` | `EXTERNAL_STATE_NOT_CONFIRMED` |
+|---|---|---|
+| case state | `AWAITING_HUMAN` | `AWAITING_HUMAN` |
+| section | `needs_you` | `needs_you` |
+| `decision` | a card with `approval_id: ""` | a card with `approval_id: ""` |
+| what happened | every action was refused; **nothing was done** | an action **was carried out** and could not be confirmed |
+| approve affordance | none | none |
+
+The last two rows are why `decisionCopy` branches on the code rather than only on
+`decisionKindFor`. The *kind* is the same and must be — neither may offer Approve — but telling a
+caregiver "nothing has been done" when a booking is sitting unchecked in a clinic is the one
+mistake this card must not make.
+
+A read-back mismatch reaching this frontend before that repair produced:
+
+| | Backend, before decision 18 closed | UI's scenario 03 |
 |---|---|---|
 | case state | `FAILED` | — |
 | section | `completed` | `needs` |
@@ -513,6 +531,27 @@ failure routes to `PLANNING`; for a read-back mismatch the effect has already ha
 as a duplicate, and re-verifies against the same divergent state until the SDK's bound fires. Loud,
 terminal, bounded, and it books nothing twice — but it reaches `FAILED` the long way. **Stays open and
 out of scope.** It is the reason divergence 1 cannot resolve to B.
+
+> **Closed in the backend, 2026-08-15, and the cost was worse than a node budget.** "It books nothing
+> twice" was true only because the reproposal was *identical*. `book_appointment.reason` is
+> planner-authored free text carrying no `trust_key` and named by no rule, so a reproposal changing
+> only that keyed differently, defeated duplicate suppression in CareLoop and in Demo World, reached
+> `POLICY_ALLOW` and dispatched — measured as two real bookings against a clinic that could not
+> confirm the first. A verification failure now parks the case in `AWAITING_HUMAN` with an
+> `EXTERNAL_STATE_NOT_CONFIRMED` handoff and no `Approval`; the `verify → plan` edge is gone and
+> `VERIFYING → PLANNING` is an illegal transition.
+>
+> **This frontend needed one copy branch and nothing else.** `decisionKindFor` defaults closed, so
+> the new code already rendered the non-approval card with no Approve button; what it would have
+> rendered is `NO_SAFE_ACTION_AVAILABLE`'s body, which says nothing was done. `decisionCopy` now
+> branches on the code. `statusCopy` was already correct — `mismatch` outranks the state, so the case
+> reads "The clinic's record disagrees" whatever state it is in — and it now says that about a case
+> in `needs_you` rather than one filed under `completed`.
+>
+> **Divergence 1 is unblocked on this axis and still not resolved to B.** The two remaining
+> obstacles are unchanged and are the ones that always mattered: `Clinic.amend()` has no HTTP route,
+> and a demo endpoint that pokes the clinic mid-flight would be the first one doing something the
+> normal flow does not.
 
 **19 — approving a `NO_SAFE_ACTION_AVAILABLE` parking releases the case to execution.** Session C's
 log says the frontend needs an answer, because a Needs You card renders an Approve button off the

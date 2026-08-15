@@ -171,6 +171,29 @@ class ChangesTheProviderToAnInstruction(ClinicClient):
         return booked
 
 
+class SwapsThePatient(ClinicClient):
+    """A clinic that files the booking against somebody else.
+
+    The other half of session J's contract. Policy now refuses to book a patient the case has not
+    established at ``CONTROLLED``; this is the same identifier checked on the way *out* — a booking
+    CareLoop was authorised to make for ``PT-4417`` that the clinic ends up holding for someone else
+    is not a booking CareLoop may call done. Nothing in CareLoop can cause this, which is exactly
+    why only a separate read finds it: the booking response echoed the right patient, so every
+    closed-loop check still passes.
+    """
+
+    OTHER_PATIENT = "PT-0001"
+
+    def __init__(self, base_url: str, world: Clinic) -> None:
+        super().__init__(base_url)
+        self._world = world
+
+    def book(self, args, idempotency_key: str) -> AppointmentBooked:  # type: ignore[override]
+        booked = super().book(args, idempotency_key)
+        self._world.amend(booked.confirmation_id, patient_id=self.OTHER_PATIENT)
+        return booked
+
+
 class LosesTheRecord(ClinicClient):
     """A clinic that accepts a booking and then cannot show it."""
 
@@ -393,6 +416,72 @@ class TestTheIndependenceProof:
         world = clinic_state
         assert len(world.appointments()) == 1
         assert world.appointments()[0].slot_start == OTHER_SLOT
+
+
+class TestTheAuthorisedPatientIsCheckedOnTheWayOutToo:
+    """The symmetric half of the patient contract, at the far end of the run.
+
+    ``deny-booking-for-unverified-patient`` decides *before* the effect that the exact identifier is
+    established by the case at ``CONTROLLED`` or higher. This decides *after* it that the clinic
+    still holds that identifier. Together:
+
+        before  the exact patient must be CONTROLLED
+        execute
+        after   the external system must still contain that exact patient
+
+    The read-back machinery this uses is unchanged — ``_verify_booking`` has always compared
+    ``patient_id`` against both the record and the observation. What was missing was the
+    authorisation, not the verification, and this class is here so that the second half is pinned
+    rather than assumed while the first half is being written.
+    """
+
+    def test_a_clinic_holding_a_different_patient_fails_verification(
+        self, clinic_service: tuple[str, Clinic], clinic_state: Clinic
+    ) -> None:
+        result, _context = diverging_run(clinic_service, SwapsThePatient)
+
+        failed = entry(result.case, TimelineKind.VERIFICATION_FAILED)
+        assert failed is not None
+        assert failed.payload["read_back"] == "true"
+        assert "read back from the external system" in failed.diagnostic
+        assert "patient_id" in failed.diagnostic
+
+    def test_the_case_never_reaches_done(
+        self, clinic_service: tuple[str, Clinic], clinic_state: Clinic
+    ) -> None:
+        result, _context = diverging_run(clinic_service, SwapsThePatient)
+
+        assert result.case.state is not CaseState.DONE
+        assert TimelineKind.VERIFICATION_PASSED not in [e.kind for e in result.case.timeline]
+
+    def test_without_the_read_back_this_very_case_verifies_clean(
+        self, clinic_service: tuple[str, Clinic], clinic_state: Clinic
+    ) -> None:
+        """Non-vacuity. The closed-loop checks all pass; only the observation disagrees."""
+        result, _context = diverging_run(clinic_service, SwapsThePatient)
+
+        record = result.case.action_for(KEY)
+        assert record is not None
+        closed_loop = verify_action(
+            case_id=CASE_ID,
+            action_type="book_appointment",
+            args=BOOKING,
+            record=record,
+            result=AppointmentBooked.model_validate_json(record.result),
+        )
+
+        assert closed_loop.passed
+        assert not closed_loop.externally_observed
+
+    def test_the_booking_really_did_happen_and_the_clinic_really_did_move_it(
+        self, clinic_service: tuple[str, Clinic], clinic_state: Clinic
+    ) -> None:
+        """And the run is not failing because nothing was booked."""
+        _result, _context = diverging_run(clinic_service, SwapsThePatient)
+
+        world = clinic_state
+        assert len(world.appointments()) == 1
+        assert world.appointments()[0].patient_id == SwapsThePatient.OTHER_PATIENT
 
 
 class TestTheCostOfAFailedReadBack:

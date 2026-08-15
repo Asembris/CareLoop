@@ -70,6 +70,36 @@ class ClinicRefused(Exception):
     booking. The message carries the clinic's own detail because it is a diagnostic and never
     reaches a model: a node raising is turned into a ``FAILED`` case carrying the exception's
     *type* name, and the text stops there.
+
+    ``status_code`` is carried so that a *caller* can tell what kind of refusal it received without
+    parsing the message. Nothing above :mod:`careloop.tools.clinic` reads it — the graph layer sees
+    observation vocabulary, not HTTP — and :meth:`ClinicClient.appointment` is the one place it is
+    consulted, to decide whether a refusal is the clinic saying it holds no such appointment.
+    """
+
+    def __init__(self, message: str, *, status_code: int) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class AppointmentNotFound(ClinicRefused):
+    """Raised when the clinic answered that it holds no such confirmation.
+
+    **A definite answer about an object the clinic itself created**, and that is why it is its own
+    type. The booking returned a ``confirmation_id`` the clinic minted and stored; a later read of
+    that exact id answering ``404`` is the clinic contradicting the receipt CareLoop holds, not a
+    failure to obtain an answer. The two are different facts about the world and
+    :mod:`careloop.graph.verify` records them differently.
+
+    **Scoped to the read route, deliberately.** ``POST /clinic/appointments`` also answers ``404``,
+    for a slot this clinic does not offer — a refusal to book a thing that never existed, which has
+    nothing to do with a booking that has vanished. Classifying by status alone in ``_request``
+    would fold the two together, so the decision lives in :meth:`ClinicClient.appointment` and
+    ``tests/test_clinic_client.py::TestOnlyTheReadRouteMeansTheAppointmentIsAbsent`` is what fails
+    if it is ever generalised.
+
+    A subclass rather than a sibling: it *is* the clinic refusing, so everything already catching
+    :class:`ClinicRefused` keeps working unchanged.
     """
 
 
@@ -122,11 +152,25 @@ class ClinicClient:
         re-reading what :meth:`book` returned, so what it compares against the authorised arguments
         is observed external state rather than CareLoop's own receipt.
 
+        A ``404`` here is turned into :class:`AppointmentNotFound` — the clinic answering that it
+        holds no such confirmation, which is evidence rather than an absence of it. That is a
+        statement this route can make and the booking route cannot, so the distinction is drawn
+        here and not in :meth:`_request`.
+
         Raises:
             ClinicUnavailable: if the clinic could not be reached.
-            ClinicRefused: if the clinic does not hold this confirmation.
+            AppointmentNotFound: if the clinic answered that it holds no such confirmation.
+            ClinicRefused: if the clinic answered and declined for any other reason.
         """
-        return _appointment(self._request("GET", f"/clinic/appointments/{confirmation_id}"))
+        try:
+            response = self._request("GET", f"/clinic/appointments/{confirmation_id}")
+        except ClinicRefused as refusal:
+            if refusal.status_code == httpx.codes.NOT_FOUND:
+                raise AppointmentNotFound(
+                    str(refusal), status_code=refusal.status_code
+                ) from refusal
+            raise
+        return _appointment(response)
 
     def reset(self) -> None:
         """Put the clinic back to its seeded world. Demo control only."""
@@ -147,7 +191,8 @@ class ClinicClient:
         if response.status_code >= 400:
             raise ClinicRefused(
                 f"the clinic refused {method} {path} with {response.status_code}: "
-                f"{_detail(response)}"
+                f"{_detail(response)}",
+                status_code=response.status_code,
             )
         return response
 
@@ -200,6 +245,7 @@ def clinic_executor(client: ClinicClient) -> MockExternalExecutor:
 __all__ = [
     "DEFAULT_TIMEOUT",
     "IDEMPOTENCY_HEADER",
+    "AppointmentNotFound",
     "ClinicClient",
     "ClinicRefused",
     "ClinicUnavailable",

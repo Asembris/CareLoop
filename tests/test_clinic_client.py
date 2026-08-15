@@ -19,6 +19,7 @@ import pytest
 
 from careloop.tools.callables import ToolSet
 from careloop.tools.clinic import (
+    AppointmentNotFound,
     ClinicClient,
     ClinicRefused,
     ClinicUnavailable,
@@ -224,6 +225,60 @@ class TestTheReadBackIsASeparateRequest:
     ) -> None:
         with pytest.raises(ClinicRefused):
             clinic.appointment("apt-nothing")
+
+
+class TestOnlyTheReadRouteMeansTheAppointmentIsAbsent:
+    """A 404 means two unrelated things to this integration, and the client keeps them apart.
+
+    ``GET /clinic/appointments/{id}`` answering 404 is the clinic saying it holds no such
+    appointment — a definite statement about an object CareLoop already has a receipt for, minted
+    and returned by the clinic itself. ``POST /clinic/appointments`` answering 404 is the clinic
+    refusing a booking for a slot it does not offer, which is about a thing that never existed.
+
+    Collapsing the two would make an unknown slot indistinguishable from a vanished appointment.
+    So the classification lives on :meth:`ClinicClient.appointment` rather than in ``_request``,
+    and this class is what fails if it is ever generalised to every status the transport sees.
+
+    :class:`AppointmentNotFound` subclasses :class:`ClinicRefused` deliberately: it *is* a refusal,
+    and everything already catching the broad type keeps working unchanged.
+    """
+
+    def test_reading_a_confirmation_the_clinic_does_not_hold_is_an_absence(
+        self, clinic: ClinicClient
+    ) -> None:
+        with pytest.raises(AppointmentNotFound):
+            clinic.appointment("apt-nothing")
+
+    def test_an_absence_is_still_a_refusal(self, clinic: ClinicClient) -> None:
+        """Vacuity for every existing handler: the vocabulary was narrowed, not replaced."""
+        with pytest.raises(ClinicRefused) as refusal:
+            clinic.appointment("apt-nothing")
+
+        assert isinstance(refusal.value, AppointmentNotFound)
+        assert refusal.value.status_code == 404
+
+    def test_booking_a_slot_the_clinic_does_not_offer_is_not_an_absence(
+        self, clinic: ClinicClient
+    ) -> None:
+        """**The non-regression that keeps the classification read-route specific.**"""
+        with pytest.raises(ClinicRefused) as refusal:
+            clinic.book({**BOOKING, "slot_start": "2031-01-01T08:00:00"}, KEY)
+
+        assert not isinstance(refusal.value, AppointmentNotFound)
+        assert refusal.value.status_code == 404
+        assert "404" in str(refusal.value)
+
+    def test_a_refusal_the_clinic_gives_for_another_reason_is_not_an_absence_either(
+        self, clinic: ClinicClient, clinic_state: Clinic
+    ) -> None:
+        """A 409 on the booking route stays exactly what it was."""
+        clinic.book(BOOKING, KEY)
+
+        with pytest.raises(ClinicRefused) as refusal:
+            clinic.book(BOOKING, "a-different-key-for-a-taken-slot")
+
+        assert not isinstance(refusal.value, AppointmentNotFound)
+        assert refusal.value.status_code == 409
 
 
 class TestTheBoundaryIsNarrow:

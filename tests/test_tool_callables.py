@@ -230,6 +230,36 @@ class TestBindings:
         parameters = {name for name in signature(method).parameters if name != "self"}
         assert parameters == REGISTRY.get(tool_name).arg_names
 
+    @pytest.mark.parametrize("tool_name", sorted(REGISTRY.names))
+    def test_no_declared_argument_has_a_default(self, tool_name: str) -> None:
+        """Every declared argument is genuinely mandatory, which is an assumption something relies
+        on.
+
+        :meth:`careloop.policy.engine.PolicyEngine.evaluate` refuses an argument map that omits any
+        argument the registry declares, on the strength of there being no optional/required
+        distinction to make: ``ArgSpec`` has no such field, and no body defaults one. ``implements``
+        checks parameter *names* and *kinds* and says nothing about defaults, so a ``reason: str =
+        ""`` added later would make one argument optional at the callable while the registry went on
+        declaring it — and completeness would then refuse a call the body could have served. Wrong
+        in the fail-closed direction, but wrong, and silently.
+
+        A future-drift guard, deliberately test-only. Production ``implements`` is not changed:
+        this asserts a property of the shipped bodies rather than adding a second enforcement
+        mechanism to a check that already has one job.
+        """
+        from inspect import Parameter, signature
+
+        method = getattr(ToolSet, callables_module._BINDINGS[tool_name])
+        defaulted = sorted(
+            name
+            for name, parameter in signature(method).parameters.items()
+            if name != "self" and parameter.default is not Parameter.empty
+        )
+        assert defaulted == [], (
+            f"{tool_name} declares default(s) for {defaulted}; a declared argument with a default "
+            f"is an optional argument the registry cannot express"
+        )
+
     def test_case_id_is_not_a_tool_argument(self) -> None:
         """The model must not be able to supply the value that scopes idempotency."""
         for tool_name in REGISTRY.names:

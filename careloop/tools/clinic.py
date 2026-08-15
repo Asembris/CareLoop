@@ -23,10 +23,11 @@ retry it did not know about — a connection that dropped after the booking land
 second appointment. The second layer is the one a real integration cannot do without.
 
 **No clock, no randomness, and nothing that could smuggle one in.** ``confirmation_id`` comes from
-Demo World, which derives it from the key; the four fields of :class:`AppointmentBooked` are
-mapped by name, so anything else the service might grow — a ``booked_at``, a queue position —
-never reaches a result. Invariant 9 survives contact with a real service because the boundary is
-narrow, not because the service is well-behaved.
+Demo World, which derives it from the key; the fields of :class:`AppointmentBooked` are mapped by
+name, so anything else the service might grow — a ``booked_at``, a queue position — never reaches a
+result. Invariant 9 survives contact with a real service because the boundary is narrow, not
+because the service is well-behaved. Narrow means *declared booking arguments only*: every argument
+CareLoop sends is carried back so verification can compare it, and nothing else is.
 
 **Transport is ``httpx``**, declared as a dependency rather than borrowed from
 ``strands-agents``'s own tree. Session 4's lesson was that an undeclared dependency you rely on is
@@ -163,8 +164,18 @@ def _detail(response: httpx.Response) -> str:
 def _appointment(response: httpx.Response) -> AppointmentBooked:
     """Map a clinic record onto the typed result, by name and by name only.
 
-    Fields the service might grow are dropped here rather than carried, which is what keeps
-    invariant 9's "no timestamp on a result" true against a system CareLoop does not control.
+    **Declared booking arguments are carried; fields the service grows are dropped.** That is the
+    distinction, and it is narrower than "keep exactly N fields". A ``booked_at`` or a queue
+    position is something CareLoop never sent and has nothing to compare against, so carrying it
+    would put a clock on a result for no benefit — which is what keeps invariant 9's "no timestamp
+    on a result" true against a system CareLoop does not control. ``reason`` is the opposite:
+    CareLoop sends it, the clinic persists it, and this same mapper is what the independent
+    read-back returns, so dropping it meant a reason-only divergence could reach ``DONE`` reported
+    as verified. It was dropped until this session; see
+    ``tests/test_verify_readback.py::TestTheExecutedReasonIsCheckedOnTheWayOutToo``.
+
+    Every field is subscripted rather than fetched with a default. A response missing one is a
+    malformed observation and fails loudly, exactly as it always has for the other four.
     """
     body = response.json()
     return AppointmentBooked(
@@ -172,6 +183,7 @@ def _appointment(response: httpx.Response) -> AppointmentBooked:
         provider_id=body["provider_id"],
         patient_id=body["patient_id"],
         slot_start=body["slot_start"],
+        reason=body["reason"],
     )
 
 

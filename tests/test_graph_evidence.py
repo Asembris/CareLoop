@@ -364,6 +364,7 @@ class TestVerificationComparesAgainstWhatWasAuthorised:
             provider_id=args["provider_id"],
             patient_id=args["patient_id"],
             slot_start=args["slot_start"],
+            reason=args["reason"],
         )
         record = ActionRecord(
             idempotency_key=key,

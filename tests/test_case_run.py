@@ -767,6 +767,7 @@ class TestVerificationCanFail:
             provider_id="PROV-SOMEWHERE-ELSE",  # not what was authorised
             patient_id=BOOKING["patient_id"],
             slot_start=BOOKING["slot_start"],
+            reason=BOOKING["reason"],
         )
         case = case.model_copy(
             update={

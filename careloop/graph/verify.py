@@ -128,12 +128,26 @@ def _verify_email(args: Mapping[str, str], result: ActionResult) -> list[str]:
 
 
 def _verify_booking(args: Mapping[str, str], result: ActionResult) -> list[str]:
+    """Every declared booking argument, compared the same way.
+
+    ``reason`` joined the other three this session. It carries no ``trust_key`` and no rule requires
+    its trust, so what it is compared against is *the exact value CareLoop executed* rather than
+    "the value policy authorised" — the whole call passed policy, and this argument has no trust
+    predicate of its own. That distinction is why it belongs here and not in ``rules.yaml``:
+    completion-time fidelity to an external record is a different question from authorisation-time
+    provenance, and this map answers only the first.
+    """
     if not isinstance(result, AppointmentBooked):
         return [f"expected AppointmentBooked, the action recorded a {type(result).__name__}"]
     return _mismatches(
         result,
         args,
-        {"provider_id": "provider_id", "patient_id": "patient_id", "slot_start": "slot_start"},
+        {
+            "provider_id": "provider_id",
+            "patient_id": "patient_id",
+            "slot_start": "slot_start",
+            "reason": "reason",
+        },
         "confirmation_id",
     )
 

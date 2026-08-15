@@ -63,13 +63,43 @@ class EmailSent(ActionResult):
 
 
 class AppointmentBooked(ActionResult):
-    """A slot was reserved with a provider."""
+    """A slot was reserved with a provider.
+
+    Every declared argument of ``book_appointment`` appears here, because every one of them is
+    persisted by the clinic and returned by the independent read-back — so every one of them can be
+    compared against the exact value CareLoop executed before the case may reach ``DONE``. Fields
+    the *service* might grow are a different matter and are still dropped at the boundary; see
+    :func:`careloop.tools.clinic._appointment`.
+    """
 
     confirmation_id: str
     provider_id: str
     patient_id: str
     slot_start: str
     """Canonical text form of the slot, never a ``datetime``, so the record is byte-stable."""
+
+    reason: str
+    """Why the booking was made, as CareLoop sent it.
+
+    **Required, with no default and no factory**, like every other result field — and here that is
+    load-bearing beyond invariant 9's usual argument. A default would let
+    :func:`careloop.tools.clinic._appointment` synthesise a value for a clinic response that
+    omitted the field, and verification would then compare what CareLoop executed against a string
+    CareLoop itself invented. Where the executed reason is empty — which
+    :data:`careloop.agents.schemas.NOT_SUPPLIED` makes reachable — a clinic returning no reason at
+    all would verify clean. Absence is a malformed observation, not a value to fill in.
+
+    A consequence worth stating plainly: a booking result recorded before this field existed cannot
+    be rehydrated. That is the honest outcome rather than a gap — such a record was never checked
+    against the clinic's reason and cannot truthfully satisfy an invariant that says it was. Reads
+    and API projections are unaffected, because
+    :attr:`careloop.state.case.ActionRecord.result` is opaque text to everything except
+    :func:`careloop.graph.verify.rehydrate`.
+
+    Note what this does *not* claim. ``reason`` is planner-authored free text; it declares no
+    ``trust_key``, no rule requires its trust, and nothing here says it is trustworthy or
+    appropriate. What is checked is fidelity between CareLoop and the world, not provenance.
+    """
 
 
 class DocumentUploaded(ActionResult):

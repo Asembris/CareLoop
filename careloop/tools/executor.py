@@ -127,11 +127,16 @@ def _send_email(args: Mapping[str, str], key: str) -> EmailSent:
 
 
 def _book_appointment(args: Mapping[str, str], key: str) -> AppointmentBooked:
+    # Every declared booking argument is echoed, including ``reason``. Not an independence claim —
+    # a mock echoing its own input says nothing about the world — but ``_verify_booking`` compares
+    # the result's fields against the canonical arguments whether or not a clinic was involved, so
+    # a simulated booking omitting one would fail every fully-mocked run against an empty string.
     return AppointmentBooked(
         confirmation_id=f"apt-{_suffix(key)}",
         provider_id=args["provider_id"],
         patient_id=args["patient_id"],
         slot_start=args["slot_start"],
+        reason=args["reason"],
     )
 
 

@@ -168,11 +168,12 @@ describe("evidence", () => {
 });
 
 describe("the timeline", () => {
-  it("maps all eighteen timeline kinds onto the five tones", () => {
+  it("maps all nineteen timeline kinds onto the five tones", () => {
     expect(toneFor("VERIFICATION_PASSED")).toBe("verified");
     expect(toneFor("VERIFICATION_FAILED")).toBe("denied");
     expect(toneFor("POLICY_DENY")).toBe("denied");
     expect(toneFor("APPROVAL_REQUESTED")).toBe("decision");
+    expect(toneFor("MANUAL_HANDOFF_REQUIRED")).toBe("decision");
     expect(toneFor("VALIDATION_REFUSED")).toBe("untrusted");
     expect(toneFor("EVIDENCE_RECORDED")).toBe("neutral");
     expect(toneFor("SOMETHING_NEW")).toBe("neutral");

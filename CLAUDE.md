@@ -303,14 +303,53 @@ Authority` is unchanged and still passing. The tests above synthesise a trusted 
 ask the only question that matters here: *if the role barrier were satisfied, would portal
 destination safety still hold?*
 
-**One booking argument is still unguarded and that is a recorded decision, not an oversight.**
-`reason` is planner-authored free text, declares no `trust_key` (so no rule may even require trust
-of it), is sent verbatim to the clinic and persisted there, and is the one externally recorded field
-the read-back does not compare — `AppointmentBooked` has no such field and `ClinicClient._appointment`
-drops it. It is integrity-sensitive rather than authority-bearing: nothing it says can change who is
-booked, where, or when. Whether it should be verified, templated from controlled facts, or removed is
-open, and was deliberately kept out of the patient patch so the two properties have independent
-causal evidence.
+**The read-back compares every booking argument the clinic exposes, and `reason` was the one it did
+not.** `book_appointment` independently re-reads the clinic's appointment by its exact confirmation
+id and compares provider, patient, slot **and reason** against the exact value CareLoop executed
+before the case may reach `DONE`. Until session O the fourth was missing at both ends:
+`AppointmentBooked` had no such field, `ClinicClient._appointment` dropped it from a response that
+carried it, and `_verify_booking` had nothing to compare — so a clinic that kept the appointment and
+rewrote only *why* it was made reached `VERIFICATION_PASSED` and `DONE`, with the timeline reporting
+`read_back: true`. Reproduced end to end against Demo World on a loopback socket before the repair.
+
+Note the phrasing: `reason` is checked against **the exact value CareLoop executed**, never "the
+value policy authorised." The whole call passes policy, but this argument carries no trust predicate
+of its own and by design cannot — it declares no `trust_key`, so a rule requiring its trust fails at
+load. Completion-time fidelity to an external record and authorisation-time provenance are different
+questions, and only the first is closed. Session J's shape was *whether trust is required*, session
+N's was *whether an argument is named by a rule at all*; this is neither. It is whether an argument
+CareLoop deliberately sends to a third party is ever looked at again.
+
+The scope is exactly the clinic's read-back. `reason` is carried because Demo World persists it and
+returns it on `GET /clinic/appointments/{confirmation_id}`, so there is an authoritative external
+record to compare against; a field the *service* grows — a `booked_at`, a queue position — is still
+dropped at the boundary, because CareLoop never sent it and has nothing to check it against. That is
+the distinction `_appointment` encodes, and it is narrower than "keep exactly four fields."
+`tests/test_verify_readback.py::TestTheExecutedReasonIsCheckedOnTheWayOutToo` holds the behavioural
+half and `tests/test_clinic_client.py::TestTheBoundaryIsNarrow` the mapping half; a mutant deleting
+only `"reason": "reason"` from `_verify_booking` — leaving the model, both producers and the mapper
+intact — turns three assertions red while the typed mapper, the simulated executor, the malformed
+observation and every provider, patient and slot mismatch stay green. Carrying the field is not the
+same property as comparing it, and each has its own evidence.
+
+**`AppointmentBooked.reason` is required, and a pre-patch booking result therefore cannot be
+rehydrated.** Absence is a malformed observation, not a value to default: `body.get("reason", "")`
+would have CareLoop compare what it executed against a string it invented, and since
+`NOT_SUPPLIED` makes an empty executed reason reachable, a clinic returning no reason at all would
+have verified clean. The compatibility boundary is narrow and measured rather than asserted:
+existing cases stay **loadable and projectable in every state** — `ActionRecord.result` is opaque
+text to everything except `careloop.graph.verify.rehydrate`, whose only production caller is the
+verify node — and what breaks is precisely the two paths that re-verify a legacy record, a case
+persisted mid-`VERIFYING` and a reopened `DONE` case reproposing the identical booking. Both fail
+closed. There is no migration and no legacy adapter, because a record written before the reason was
+ever observed cannot truthfully satisfy an invariant that says it was.
+
+**What this does not claim.** `reason` remains planner-authored free text with no trust key, no
+content constraint, no length bound and no human review before an autonomous booking, and it can be
+influenced by document evidence. This patch verifies external fidelity, not provenance or
+appropriateness; whether the reason should additionally be templated from controlled facts,
+constrained, or removed is still open and deliberately untouched, so the two properties keep
+independent causal evidence.
 
 **An `Approval` is a capability, and a manual handoff is not one.** An approval says a caregiver was
 asked about *one exact call*, identified by `(tool_name, args_digest)`; deciding it releases that
@@ -446,7 +485,8 @@ results, here so a response can only say what the projector gave it.
 **One tool is real, and the read-back is what makes that worth anything.** `book_appointment` routes
 over HTTP to `demoworld/`; the other three effects stay simulated, because one action made genuinely
 external is the proof and four is scope creep with a rationale. Verification then performs a
-*separate* `GET` and compares observed clinic state against the authorised arguments — never the
+*separate* `GET`, keyed on the confirmation id the effect returned, and compares observed clinic
+state against **every declared booking argument** — provider, patient, slot and reason — never the
 booking's own response, which would be re-reading CareLoop's receipt.
 `tests/test_verify_readback.py::TestTheIndependenceProof` is the vacuity proof for the whole
 arrangement: it moves the appointment behind CareLoop's back and requires verification to fail while

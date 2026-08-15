@@ -33,6 +33,7 @@ from careloop.events.inbound import InboundEvent
 from careloop.events.simulator import EventSimulator
 from careloop.graph.context import latest_delivery
 from careloop.graph.runner import (
+    AmbiguousApproval,
     ApprovalAlreadyDecided,
     CaseNotReopenable,
     NoSuchApproval,
@@ -367,11 +368,18 @@ async def decide(
         record(deps.store, case_id, approval_id, decided_by=who)
     except NoSuchApproval as missing:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(missing)) from None
-    except (ApprovalAlreadyDecided, NotAnApprovableAction, IllegalTransition) as refusal:
+    except (
+        ApprovalAlreadyDecided,
+        AmbiguousApproval,
+        NotAnApprovableAction,
+        IllegalTransition,
+    ) as refusal:
         # 409 rather than 400: the request is well formed and names a record the case really
-        # carries. What it conflicts with is the state of that record — already decided, or, for a
-        # manual handoff persisted before those stopped being written as approvals, a record that
-        # authorises no call at all. A 400 would blame the caller for the case's history.
+        # carries. What it conflicts with is the state of that record — already decided; or a
+        # manual handoff persisted before those stopped being written as approvals, which
+        # authorises no call at all; or an identifier persisted before request identity became
+        # unique, which names two records that are both still pending and so answers no question
+        # about which one is being decided. A 400 would blame the caller for the case's history.
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(refusal)) from None
 
     return await schedule(deps, case_id, inbound, wait=wait)

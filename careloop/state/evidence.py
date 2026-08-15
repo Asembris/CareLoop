@@ -7,9 +7,10 @@ of an existing one — deliberately, so a reference held elsewhere cannot be upg
 holder. A caller that appends that new fact to ``case.facts`` therefore leaves the ``UNTRUSTED``
 original sitting beside it with the same value.
 
-That is fatal, because trust resolution takes the **lowest** level among every fact whose value
-matches. Lowest-wins is what stops a poisoned duplicate being laundered by a legitimate twin, and
-it cannot be relaxed. So with both facts present the engine reads the original, the promotion has
+That is fatal, because trust resolution takes the **lowest** level among every fact sharing the
+promoted fact's key *and* value. Lowest-wins is what stops a poisoned duplicate being laundered by
+a legitimate twin, and it cannot be relaxed. So with both facts present the engine reads the
+original, the promotion has
 no effect whatsoever, and every action depending on that value is denied
 ``INSUFFICIENT_FACT_TRUST`` — while the timeline shows a ``FACT_PROMOTED`` entry and the case
 carries a visibly ``CONTROLLED`` fact. It reads as a policy bug and it is not one.
@@ -51,10 +52,16 @@ class FactNotOnCase(Exception):
 class PromotionIneffective(Exception):
     """Raised when a promotion would be invisible to trust resolution.
 
-    Lowest-wins means a promoted value is only as trusted as the *least* trusted fact carrying it.
-    If another fact on the case still holds the same value at a lower level, the promotion changes
-    nothing that the policy engine can see. Failing here is the whole point: the alternative is a
-    case that looks correct in the timeline and is denied for a reason no diagnostic explains.
+    Lowest-wins means a promoted value is only as trusted as the *least* trusted fact carrying the
+    same key and the same value. If another fact on the case still holds that pair at a lower
+    level, the promotion changes nothing that the policy engine can see. Failing here is the whole
+    point: the alternative is a case that looks correct in the timeline and is denied for a reason
+    no diagnostic explains.
+
+    Scoped to the key deliberately, and it must stay exactly as wide as
+    :func:`careloop.policy.engine.resolve_trust` — no wider and no narrower. Narrower would let a
+    genuinely invisible promotion through; wider would refuse an effective one because an unrelated
+    field was spelled the same. ``tests/test_evidence.py`` asserts both directions.
     """
 
 
@@ -191,18 +198,24 @@ def promote_fact(
 
     facts = (*case.facts[:index], promoted, *case.facts[index + 1 :])
 
+    # Scoped to the promoted fact's own key, because that is exactly what resolve_trust consults.
+    # A fact under an unrelated key carrying the same literal does not shadow this promotion and
+    # never did anything to it — under the old value-only resolver it *appeared* to, which made
+    # this check wider than the thing it models. Wider is not safer here: it would refuse a
+    # perfectly effective promotion because some other field happened to be spelled the same.
     shadowing = sorted(
-        other.key
+        f"{other.key}={other.trust_level}"
         for position, other in enumerate(facts)
         if position != index
+        and other.key == promoted.key
         and other.value == promoted.value
         and not at_least(other.trust_level, to)
     )
     if shadowing:
         raise PromotionIneffective(
             f"promoting {fact.key!r} to {to} would be invisible: fact(s) "
-            f"{', '.join(shadowing)} carry the same value below {to}, and trust resolution takes "
-            f"the lowest level among matching facts"
+            f"{', '.join(shadowing)} carry the same key and value below {to}, and trust "
+            f"resolution takes the lowest level among matching facts"
         )
 
     with_promotion = case.model_copy(update={"facts": facts})

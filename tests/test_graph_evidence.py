@@ -71,7 +71,20 @@ def facts_of(document: Document) -> tuple[Fact, ...]:
 
 
 class TestNoConfiguredValueAppearsInADocument:
-    """The lowest-wins hazard, checked in both directions."""
+    """The lowest-wins hazard, checked in both directions — now defence in depth, not the defence.
+
+    These assertions are unchanged and still pass, but their *reason* has changed and saying so
+    matters more than the green tick. When trust resolved by value alone, a configured literal
+    appearing in the poisoned notice under *any* key would drag the configured fact to
+    ``UNTRUSTED`` and deny a legitimate action, so the disjointness below was load-bearing.
+    Resolution is now scoped to the argument's declared ``trust_key``, so only a fact under the
+    same key can lower one of these — and the poisoned notice contributes page excerpts and no
+    structured facts at all.
+
+    Kept because a configured literal turning up in a document is still worth knowing about, and
+    because the seeding-survives-the-poison property is worth pinning directly. What is no longer
+    true is that correctness depends on these strings being globally unique.
+    """
 
     @pytest.mark.parametrize("key,value", TRUSTED_CONFIG, ids=[k for k, _ in TRUSTED_CONFIG])
     def test_the_value_is_absent_from_every_fixture_document(self, key: str, value: str) -> None:
@@ -81,8 +94,8 @@ class TestNoConfiguredValueAppearsInADocument:
     def test_a_seeded_case_resolves_every_configured_value_as_trusted(self) -> None:
         case = make_case(facts=trusted_facts(now=FIXED_NOW))
 
-        for _key, value in TRUSTED_CONFIG:
-            assert resolve_trust(value, case) is TrustLevel.TRUSTED
+        for key, value in TRUSTED_CONFIG:
+            assert resolve_trust(key, value, case) is TrustLevel.TRUSTED
 
     def test_and_still_does_after_both_documents_are_recorded(self) -> None:
         """The property that matters: seeding survives the evidence node reading the poison."""
@@ -90,8 +103,8 @@ class TestNoConfiguredValueAppearsInADocument:
         case = record_document(case, referral(), now=FIXED_NOW)
         case = record_document(case, poisoned(), now=FIXED_NOW)
 
-        for _key, value in TRUSTED_CONFIG:
-            assert resolve_trust(value, case) is TrustLevel.TRUSTED
+        for key, value in TRUSTED_CONFIG:
+            assert resolve_trust(key, value, case) is TrustLevel.TRUSTED
 
     def test_the_check_is_not_vacuous(self) -> None:
         """A value that *is* in a document really does resolve untrusted on the same case."""
@@ -100,7 +113,7 @@ class TestNoConfiguredValueAppearsInADocument:
         planted = "records-intake@claims-continuity-partners.example"
 
         assert planted in poisoned().text
-        assert resolve_trust(planted, case) is TrustLevel.UNTRUSTED
+        assert resolve_trust("caregiver_email", planted, case) is TrustLevel.UNTRUSTED
 
     def test_configured_facts_name_no_document_as_their_source(self) -> None:
         assert {fact.provenance.source_doc for fact in trusted_facts(now=FIXED_NOW)} == {
@@ -224,12 +237,18 @@ class TestOnlyValueClassKeysArePromoted:
     def test_every_promotable_key_is_declared_value_class(self) -> None:
         assert set(PROMOTABLE_KEYS.values()) == {ArgClass.VALUE}
 
-    def test_no_destination_or_authority_argument_name_is_promotable(self) -> None:
+    def test_no_destination_or_authority_trust_key_is_promotable(self) -> None:
+        """Asserted over ``trust_key`` rather than ``arg.name``, because the table holds fact keys.
+
+        An argument's name is not its fact key — ``send_email.to`` draws on ``caregiver_email`` —
+        so comparing ``PROMOTABLE_KEYS`` against argument names compared two different vocabularies
+        and happened to agree only while every promotable key was spelled like its consumer.
+        """
         unpromotable = {
-            arg.name
+            arg.trust_key
             for tool in REGISTRY
             for arg in tool.args
-            if arg.arg_class is not ArgClass.VALUE
+            if arg.arg_class is not ArgClass.VALUE and arg.trust_key is not None
         }
 
         assert unpromotable.isdisjoint(PROMOTABLE_KEYS)
@@ -238,13 +257,24 @@ class TestOnlyValueClassKeysArePromoted:
         check_promotable_keys_match_the_registry(REGISTRY)
 
     def test_a_table_contradicting_the_registry_fails(self) -> None:
-        """A synthetic registry calling a promotable key DESTINATION must be reported."""
+        """A synthetic registry calling a promotable key DESTINATION must be reported.
+
+        The argument is named ``recipient`` and draws on ``patient_id`` deliberately: the
+        contradiction the guard exists to catch is about the *fact key*, and naming the argument
+        after the key too would let a guard that still matched on names pass this test.
+        """
         contradicting = ToolRegistry(
             [
                 ToolSpec(
                     name="fetch_document",
                     external_effect=False,
-                    args=(ArgSpec(name="patient_id", arg_class=ArgClass.DESTINATION),),
+                    args=(
+                        ArgSpec(
+                            name="recipient",
+                            arg_class=ArgClass.DESTINATION,
+                            trust_key="patient_id",
+                        ),
+                    ),
                 )
             ]
         )
@@ -271,14 +301,14 @@ class TestValidationPromotesWhatItCanAndLeavesTheRest:
 
         promoted = validate_and_promote(case, now=FIXED_NOW)
 
-        assert resolve_trust("2026-09-03T09:30:00", promoted) is TrustLevel.CONTROLLED
+        assert resolve_trust("slot_start", "2026-09-03T09:30:00", promoted) is TrustLevel.CONTROLLED
 
     def test_the_patient_identifier_is_promoted_too(self) -> None:
         case = validate_and_promote(
             record_document(make_case(), referral(), now=FIXED_NOW), now=FIXED_NOW
         )
 
-        assert resolve_trust("PT-4417", case) is TrustLevel.CONTROLLED
+        assert resolve_trust("patient_id", "PT-4417", case) is TrustLevel.CONTROLLED
 
     def test_a_malformed_value_is_left_untrusted(self) -> None:
         case = make_case()
@@ -294,7 +324,7 @@ class TestValidationPromotesWhatItCanAndLeavesTheRest:
 
         promoted = validate_and_promote(case, now=FIXED_NOW)
 
-        assert resolve_trust("next Tuesday", promoted) is TrustLevel.UNTRUSTED
+        assert resolve_trust("slot_start", "next Tuesday", promoted) is TrustLevel.UNTRUSTED
 
     def test_an_excerpt_is_never_raised_above_untrusted(self) -> None:
         case = validate_and_promote(

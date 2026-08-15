@@ -278,7 +278,7 @@ class TestAFailedSchemaDiscardsStructuredValuesOnly:
             case = record_document(case, document, now=FIXED_NOW)
         case = validate_and_promote(case, now=FIXED_NOW)
 
-        assert resolve_trust("PT-4417", case) is TrustLevel.CONTROLLED
+        assert resolve_trust("patient_id", "PT-4417", case) is TrustLevel.CONTROLLED
 
 
 # =================================================================================================
@@ -322,8 +322,12 @@ class TestTheShippedDocumentsSatisfyEveryCheck:
             case = record_document(case, document, now=FIXED_NOW)
         case = validate_and_promote(case, now=FIXED_NOW)
 
-        for value in ("PT-4417", "2026-09-03T09:30:00", RECEIPT_DOCUMENT_ID):
-            assert resolve_trust(value, case) is TrustLevel.CONTROLLED, value
+        for key, value in (
+            ("patient_id", "PT-4417"),
+            ("slot_start", "2026-09-03T09:30:00"),
+            ("document_id", RECEIPT_DOCUMENT_ID),
+        ):
+            assert resolve_trust(key, value, case) is TrustLevel.CONTROLLED, value
 
 
 class TestPatientIdAgreesAcrossDocuments:
@@ -344,13 +348,13 @@ class TestPatientIdAgreesAcrossDocuments:
     def test_the_identifier_stays_untrusted(self) -> None:
         case = validate_and_promote(self._disagreeing(), now=FIXED_NOW)
 
-        assert resolve_trust("PT-4417", case) is TrustLevel.UNTRUSTED
+        assert resolve_trust("patient_id", "PT-4417", case) is TrustLevel.UNTRUSTED
 
     def test_but_the_appointment_time_is_untouched(self) -> None:
         """A check gates the keys it names and nothing else."""
         case = validate_and_promote(self._disagreeing(), now=FIXED_NOW)
 
-        assert resolve_trust("2026-09-03T09:30:00", case) is TrustLevel.CONTROLLED
+        assert resolve_trust("slot_start", "2026-09-03T09:30:00", case) is TrustLevel.CONTROLLED
 
     def test_the_withholding_is_on_the_timeline(self) -> None:
         case = validate_and_promote(self._disagreeing(), now=FIXED_NOW)
@@ -370,7 +374,7 @@ class TestPatientIdAgreesAcrossDocuments:
 
         assert cross_check_failures(case) == {}
         assert (
-            resolve_trust("PT-4417", validate_and_promote(case, now=FIXED_NOW))
+            resolve_trust("patient_id", "PT-4417", validate_and_promote(case, now=FIXED_NOW))
             is TrustLevel.CONTROLLED
         )
 
@@ -397,12 +401,12 @@ class TestTheRequiredDocumentMustBeOneCareLoopHolds:
         """A well-formed identifier that no document answers to must not be uploadable."""
         case = validate_and_promote(self._demanding("doc-9999-elsewhere"), now=FIXED_NOW)
 
-        assert resolve_trust("doc-9999-elsewhere", case) is TrustLevel.UNTRUSTED
+        assert resolve_trust("document_id", "doc-9999-elsewhere", case) is TrustLevel.UNTRUSTED
 
     def test_a_document_that_is_held_promotes(self) -> None:
         case = validate_and_promote(self._demanding(RECEIPT_DOCUMENT_ID), now=FIXED_NOW)
 
-        assert resolve_trust(RECEIPT_DOCUMENT_ID, case) is TrustLevel.CONTROLLED
+        assert resolve_trust("document_id", RECEIPT_DOCUMENT_ID, case) is TrustLevel.CONTROLLED
 
     def test_the_store_consulted_is_the_one_passed_in(self) -> None:
         """Injectable, so a test is not asserting against whatever the process happens to ship."""
@@ -460,4 +464,4 @@ class TestWithholdingLeavesARemediableDenial:
         """
         case = make_case(facts=(make_fact("document_id", "doc-9999-elsewhere"),))
 
-        assert resolve_trust("doc-9999-elsewhere", case) is TrustLevel.UNTRUSTED
+        assert resolve_trust("document_id", "doc-9999-elsewhere", case) is TrustLevel.UNTRUSTED

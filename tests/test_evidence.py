@@ -48,7 +48,7 @@ class TestPromotionIsVisibleToTheEngine:
             case, raw, arg_class=ArgClass.VALUE, validator="iso_datetime", now=FIXED_NOW
         )
 
-        assert resolve_trust(SLOT, promoted) is TrustLevel.CONTROLLED
+        assert resolve_trust("slot_start", SLOT, promoted) is TrustLevel.CONTROLLED
 
     def test_the_untrusted_original_is_gone_rather_than_shadowed(self) -> None:
         case, raw = case_with_raw_slot()
@@ -112,7 +112,7 @@ class TestTheAssertionThatWouldNotHaveCaught:
         case = self.appended_rather_than_replaced()
 
         # Lowest-wins: the untrusted original is still matching, so the promotion is invisible.
-        assert resolve_trust(SLOT, case) is TrustLevel.UNTRUSTED
+        assert resolve_trust("slot_start", SLOT, case) is TrustLevel.UNTRUSTED
 
 
 class TestPromotionRefusesWhatItCannotMakeTrue:
@@ -123,14 +123,50 @@ class TestPromotionRefusesWhatItCannotMakeTrue:
             promote_fact(make_case(), stray, arg_class=ArgClass.VALUE, validator="v", now=FIXED_NOW)
 
     def test_an_invisible_promotion_raises_rather_than_succeeding_quietly(self) -> None:
+        """A second ``UNTRUSTED`` fact under the *same* key and value really does hide it.
+
+        Built by rebuilding ``case.facts`` rather than through :func:`record_fact`, which refuses a
+        duplicate ``(key, value)`` outright. This guard exists for a fact that arrived by some
+        other route, and constructing one directly is the only way to produce that.
+
+        This test used to plant the twin under ``appointment_time`` — a *different* key — because
+        under value-only resolution any key would do. It no longer would, and a test that went on
+        passing for that reason would have been asserting the shadowing check was broader than the
+        resolver rather than equal to it. The inverted case is the next test.
+        """
         raw = make_fact("slot_start", SLOT)
-        duplicate = make_fact("appointment_time", SLOT, source_doc="continuity-notice.pdf")
-        case = record_fact(record_fact(make_case(), raw, now=FIXED_NOW), duplicate, now=FIXED_NOW)
+        case = record_fact(make_case(), raw, now=FIXED_NOW)
+        shadowed = case.model_copy(
+            update={
+                "facts": (
+                    *case.facts,
+                    make_fact("slot_start", SLOT, source_doc="continuity-notice.pdf"),
+                )
+            }
+        )
 
         with pytest.raises(PromotionIneffective) as raised:
-            promote_fact(case, raw, arg_class=ArgClass.VALUE, validator="v", now=FIXED_NOW)
+            promote_fact(shadowed, raw, arg_class=ArgClass.VALUE, validator="v", now=FIXED_NOW)
 
-        assert "appointment_time" in str(raised.value)
+        assert "slot_start" in str(raised.value)
+
+    def test_a_twin_under_another_key_does_not_block_the_promotion(self) -> None:
+        """The inverted expectation, and the reason it inverted.
+
+        ``appointment_time`` carrying the same literal is not a duplicate of ``slot_start``; it is
+        a different statement that happens to be spelled the same. Under value-only resolution it
+        genuinely did shadow the promotion, so refusing here was correct then and would be a false
+        failure now. The twin is left exactly where it was — untouched and still ``UNTRUSTED``,
+        which is the second assertion.
+        """
+        raw = make_fact("slot_start", SLOT)
+        twin = make_fact("appointment_time", SLOT, source_doc="continuity-notice.pdf")
+        case = record_fact(record_fact(make_case(), raw, now=FIXED_NOW), twin, now=FIXED_NOW)
+
+        promoted = promote_fact(case, raw, arg_class=ArgClass.VALUE, validator="v", now=FIXED_NOW)
+
+        assert resolve_trust("slot_start", SLOT, promoted) is TrustLevel.CONTROLLED
+        assert resolve_trust("appointment_time", SLOT, promoted) is TrustLevel.UNTRUSTED
 
     def test_a_duplicate_already_at_the_target_level_does_not_block(self) -> None:
         raw = make_fact("slot_start", SLOT)
@@ -141,7 +177,7 @@ class TestPromotionRefusesWhatItCannotMakeTrue:
 
         promoted = promote_fact(case, raw, arg_class=ArgClass.VALUE, validator="v", now=FIXED_NOW)
 
-        assert resolve_trust(SLOT, promoted) is TrustLevel.CONTROLLED
+        assert resolve_trust("slot_start", SLOT, promoted) is TrustLevel.CONTROLLED
 
     @pytest.mark.parametrize("arg_class", [ArgClass.DESTINATION, ArgClass.AUTHORITY])
     def test_unpromotable_argument_classes_are_refused(self, arg_class: ArgClass) -> None:
@@ -214,7 +250,7 @@ class TestARepeatedValueIsNotRecordedTwice:
 
         again = record_fact(case, make_fact("slot_start", SLOT), now=FIXED_NOW)
 
-        assert resolve_trust(SLOT, again) is TrustLevel.CONTROLLED
+        assert resolve_trust("slot_start", SLOT, again) is TrustLevel.CONTROLLED
 
     def test_recording_the_duplicate_without_the_guard_would_downgrade_it(self) -> None:
         """Vacuity: the same case built by appending the duplicate directly does read UNTRUSTED.
@@ -228,7 +264,7 @@ class TestARepeatedValueIsNotRecordedTwice:
         appended = case.model_copy(update={"facts": (*case.facts, make_fact("slot_start", SLOT))})
 
         assert any(fact.trust_level is TrustLevel.CONTROLLED for fact in appended.facts)
-        assert resolve_trust(SLOT, appended) is TrustLevel.UNTRUSTED
+        assert resolve_trust("slot_start", SLOT, appended) is TrustLevel.UNTRUSTED
 
     def test_the_skip_is_on_the_timeline_rather_than_silent(self) -> None:
         """An invisible trust-safety mechanism is the same hazard somewhere else."""

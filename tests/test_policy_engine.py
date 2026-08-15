@@ -68,8 +68,8 @@ class TestCanonicalValue:
 
     def test_a_slot_spelled_in_another_offset_fails_closed(self) -> None:
         elsewhere = datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone(timedelta(hours=2)))
-        case = _planning(make_fact("slot", SLOT, TrustLevel.CONTROLLED))
-        assert resolve_trust(elsewhere, case) is TrustLevel.UNTRUSTED
+        case = _planning(make_fact("slot_start", SLOT, TrustLevel.CONTROLLED))
+        assert resolve_trust("slot_start", elsewhere, case) is TrustLevel.UNTRUSTED
 
     def test_dates_render_as_iso_8601(self) -> None:
         assert canonical_value(SLOT_DT.date()) == "2026-09-01"
@@ -81,35 +81,35 @@ class TestCanonicalValue:
 
 class TestResolveTrust:
     def test_a_value_the_case_never_recorded_is_untrusted(self) -> None:
-        assert resolve_trust(ATTACKER, _planning()) is TrustLevel.UNTRUSTED
+        assert resolve_trust("caregiver_email", ATTACKER, _planning()) is TrustLevel.UNTRUSTED
 
     def test_a_recorded_value_carries_its_fact_trust(self) -> None:
-        case = _planning(trusted_fact("clinic_email", CLINIC))
-        assert resolve_trust(CLINIC, case) is TrustLevel.TRUSTED
+        case = _planning(trusted_fact("caregiver_email", CLINIC))
+        assert resolve_trust("caregiver_email", CLINIC, case) is TrustLevel.TRUSTED
 
     def test_the_lowest_matching_fact_wins(self) -> None:
         """A poisoned duplicate must not be laundered by a legitimate twin."""
         case = _planning(
-            trusted_fact("clinic_email", CLINIC),
-            make_fact("recipient", CLINIC, TrustLevel.UNTRUSTED),
+            trusted_fact("caregiver_email", CLINIC),
+            make_fact("caregiver_email", CLINIC, TrustLevel.UNTRUSTED),
         )
-        assert resolve_trust(CLINIC, case) is TrustLevel.UNTRUSTED
+        assert resolve_trust("caregiver_email", CLINIC, case) is TrustLevel.UNTRUSTED
 
     def test_the_lowest_wins_regardless_of_fact_order(self) -> None:
         case = _planning(
-            make_fact("recipient", CLINIC, TrustLevel.UNTRUSTED),
-            trusted_fact("clinic_email", CLINIC),
+            make_fact("caregiver_email", CLINIC, TrustLevel.UNTRUSTED),
+            trusted_fact("caregiver_email", CLINIC),
         )
-        assert resolve_trust(CLINIC, case) is TrustLevel.UNTRUSTED
+        assert resolve_trust("caregiver_email", CLINIC, case) is TrustLevel.UNTRUSTED
 
     def test_a_value_with_no_comparison_form_is_untrusted(self) -> None:
-        assert resolve_trust(1.5, _planning(make_fact("x", "1.5", TrustLevel.TRUSTED))) is (
-            TrustLevel.UNTRUSTED
-        )
+        assert resolve_trust(
+            "slot_start", 1.5, _planning(make_fact("slot_start", "1.5", TrustLevel.TRUSTED))
+        ) is (TrustLevel.UNTRUSTED)
 
     def test_a_typed_datetime_matches_the_fact_recorded_as_its_iso_form(self) -> None:
-        case = _planning(make_fact("slot", SLOT, TrustLevel.CONTROLLED))
-        assert resolve_trust(SLOT_DT, case) is TrustLevel.CONTROLLED
+        case = _planning(make_fact("slot_start", SLOT, TrustLevel.CONTROLLED))
+        assert resolve_trust("slot_start", SLOT_DT, case) is TrustLevel.CONTROLLED
 
 
 class TestNoNormalisation:
@@ -128,16 +128,16 @@ class TestNoNormalisation:
         ids=["case", "upper", "trailing-space", "leading-space", "trailing-dot", "homoglyph"],
     )
     def test_a_near_miss_of_a_trusted_destination_resolves_untrusted(self, variant: str) -> None:
-        case = _planning(trusted_fact("clinic_email", CLINIC))
-        assert resolve_trust(variant, case) is TrustLevel.UNTRUSTED
+        case = _planning(trusted_fact("caregiver_email", CLINIC))
+        assert resolve_trust("caregiver_email", variant, case) is TrustLevel.UNTRUSTED
 
     def test_the_verbatim_destination_resolves_trusted(self) -> None:
         """The other half: exactness must not be achieved by denying everything."""
-        case = _planning(trusted_fact("clinic_email", CLINIC))
-        assert resolve_trust(CLINIC, case) is TrustLevel.TRUSTED
+        case = _planning(trusted_fact("caregiver_email", CLINIC))
+        assert resolve_trust("caregiver_email", CLINIC, case) is TrustLevel.TRUSTED
 
     def test_a_near_miss_is_denied_end_to_end(self, engine: PolicyEngine) -> None:
-        case = _planning(trusted_fact("clinic_email", CLINIC))
+        case = _planning(trusted_fact("caregiver_email", CLINIC))
         decision = engine.evaluate(
             "send_email", {"to": CLINIC + " ", "subject": "s", "body": "b"}, case
         )
@@ -145,7 +145,7 @@ class TestNoNormalisation:
         assert decision.reason_code is ReasonCode.DESTINATION_NOT_TRUSTED
 
     def test_the_verbatim_destination_is_not_denied_end_to_end(self, engine: PolicyEngine) -> None:
-        case = _planning(trusted_fact("clinic_email", CLINIC))
+        case = _planning(trusted_fact("caregiver_email", CLINIC))
         decision = engine.evaluate("send_email", {"to": CLINIC, "subject": "s", "body": "b"}, case)
         assert decision.verdict is Verdict.REQUIRE_HUMAN
 
@@ -163,7 +163,7 @@ class TestUnknownToolAndArguments:
         decision = engine.evaluate(
             "send_email",
             {"to": CLINIC, "subject": "s", "body": "b", "bcc": ATTACKER},
-            _planning(trusted_fact("clinic_email", CLINIC)),
+            _planning(trusted_fact("caregiver_email", CLINIC)),
         )
         assert decision.verdict is Verdict.DENY
         assert decision.reason_code is ReasonCode.NO_RULE_MATCH
@@ -203,7 +203,7 @@ class TestCaseStateGate:
     def test_external_effect_outside_the_execution_states_is_denied(
         self, engine: PolicyEngine, state: CaseState
     ) -> None:
-        case = make_case(state=state, facts=(trusted_fact("clinic_email", CLINIC),))
+        case = make_case(state=state, facts=(trusted_fact("caregiver_email", CLINIC),))
         decision = engine.evaluate("send_email", {"to": CLINIC}, case)
         assert decision.verdict is Verdict.DENY
         assert decision.reason_code is ReasonCode.WRONG_CASE_STATE
@@ -225,7 +225,7 @@ class TestCaseStateGate:
 class TestDestinationTrust:
     def test_a_document_sourced_recipient_is_denied(self, engine: PolicyEngine) -> None:
         """The injection case: the planner may propose it, and it still does not happen."""
-        case = _planning(make_fact("recipient", ATTACKER, TrustLevel.UNTRUSTED))
+        case = _planning(make_fact("caregiver_email", ATTACKER, TrustLevel.UNTRUSTED))
         decision = engine.evaluate(
             "send_email", {"to": ATTACKER, "subject": "records", "body": "attached"}, case
         )
@@ -235,7 +235,7 @@ class TestDestinationTrust:
 
     def test_validation_cannot_launder_a_destination(self, engine: PolicyEngine) -> None:
         """CONTROLLED is what a validator can produce, and it is still not good enough."""
-        case = _planning(make_fact("recipient", ATTACKER, TrustLevel.CONTROLLED))
+        case = _planning(make_fact("caregiver_email", ATTACKER, TrustLevel.CONTROLLED))
         decision = engine.evaluate("send_email", {"to": ATTACKER}, case)
         assert decision.verdict is Verdict.DENY
         assert decision.reason_code is ReasonCode.DESTINATION_NOT_TRUSTED
@@ -248,14 +248,14 @@ class TestDestinationTrust:
         assert decision.reason_code is ReasonCode.DESTINATION_NOT_TRUSTED
 
     def test_a_trusted_recipient_reaches_the_human(self, engine: PolicyEngine) -> None:
-        case = _planning(trusted_fact("clinic_email", CLINIC))
+        case = _planning(trusted_fact("caregiver_email", CLINIC))
         decision = engine.evaluate("send_email", {"to": CLINIC, "subject": "s"}, case)
         assert decision.verdict is Verdict.REQUIRE_HUMAN
         assert decision.reason_code is ReasonCode.REQUIRES_HUMAN_APPROVAL
         assert decision.matched_rule_id == "require-human-for-outbound-email"
 
     def test_upload_to_a_document_named_portal_is_denied(self, engine: PolicyEngine) -> None:
-        case = _ready(make_fact("portal", "evil-portal", TrustLevel.CONTROLLED))
+        case = _ready(make_fact("portal_id", "evil-portal", TrustLevel.CONTROLLED))
         decision = engine.evaluate(
             "upload_document", {"portal_id": "evil-portal", "document_id": "doc-1"}, case
         )
@@ -269,8 +269,8 @@ class TestAuthorityTrust:
 
     def test_an_authority_argument_below_trusted_is_denied(self, engine: PolicyEngine) -> None:
         case = _ready(
-            trusted_fact("carer_email", "carer@family.example"),
-            trusted_fact("portal", "portal-1"),
+            trusted_fact("caregiver_email", "carer@family.example"),
+            trusted_fact("portal_id", "portal-1"),
             make_fact("role", "administrator", TrustLevel.UNTRUSTED),
         )
         decision = engine.evaluate(
@@ -285,8 +285,8 @@ class TestAuthorityTrust:
     def test_validation_cannot_launder_an_authority(self, engine: PolicyEngine) -> None:
         """The mirror of the destination-laundering test. CONTROLLED is still not TRUSTED."""
         case = _ready(
-            trusted_fact("carer_email", "carer@family.example"),
-            trusted_fact("portal", "portal-1"),
+            trusted_fact("caregiver_email", "carer@family.example"),
+            trusted_fact("portal_id", "portal-1"),
             make_fact("role", "administrator", TrustLevel.CONTROLLED),
         )
         decision = engine.evaluate(
@@ -312,8 +312,8 @@ class TestAuthorityTrust:
             "grant_portal_access",
             {"grantee": "carer@family.example", "role": "administrator", "portal_id": "portal-1"},
             _ready(
-                trusted_fact("carer_email", "carer@family.example"),
-                trusted_fact("portal", "portal-1"),
+                trusted_fact("caregiver_email", "carer@family.example"),
+                trusted_fact("portal_id", "portal-1"),
                 make_fact("role", "administrator", TrustLevel.CONTROLLED),
             ),
         )
@@ -321,8 +321,8 @@ class TestAuthorityTrust:
             "book_appointment",
             {"provider_id": "prov-1", "patient_id": "pat-1", "slot_start": SLOT},
             _ready(
-                trusted_fact("provider", "prov-1"),
-                make_fact("slot", SLOT, TrustLevel.UNTRUSTED),
+                trusted_fact("provider_id", "prov-1"),
+                make_fact("slot_start", SLOT, TrustLevel.UNTRUSTED),
             ),
         )
         assert authority.verdict is value.verdict is Verdict.DENY
@@ -338,8 +338,8 @@ class TestAuthorityTrust:
             "grant_portal_access",
             {"grantee": "carer@family.example", "role": "administrator", "portal_id": "portal-1"},
             _ready(
-                trusted_fact("carer_email", "carer@family.example"),
-                trusted_fact("portal", "portal-1"),
+                trusted_fact("caregiver_email", "carer@family.example"),
+                trusted_fact("portal_id", "portal-1"),
                 make_fact("role", "administrator", TrustLevel.CONTROLLED),
             ),
         )
@@ -352,8 +352,8 @@ class TestAuthorityTrust:
     ) -> None:
         """The other half: the authority rule must not be denying every grant unconditionally."""
         case = _ready(
-            trusted_fact("carer_email", "carer@family.example"),
-            trusted_fact("portal", "portal-1"),
+            trusted_fact("caregiver_email", "carer@family.example"),
+            trusted_fact("portal_id", "portal-1"),
             trusted_fact("role", "viewer"),
         )
         decision = engine.evaluate(
@@ -368,8 +368,8 @@ class TestAuthorityTrust:
 class TestValueTrustAndTheAutonomousPath:
     def test_booking_on_an_unvalidated_slot_is_denied(self, engine: PolicyEngine) -> None:
         case = _ready(
-            trusted_fact("provider", "prov-1"),
-            make_fact("slot", SLOT, TrustLevel.UNTRUSTED),
+            trusted_fact("provider_id", "prov-1"),
+            make_fact("slot_start", SLOT, TrustLevel.UNTRUSTED),
         )
         decision = engine.evaluate(
             "book_appointment",
@@ -382,8 +382,8 @@ class TestValueTrustAndTheAutonomousPath:
 
     def test_booking_on_a_validated_slot_is_allowed(self, engine: PolicyEngine) -> None:
         case = _ready(
-            trusted_fact("provider", "prov-1"),
-            make_fact("slot", SLOT, TrustLevel.CONTROLLED),
+            trusted_fact("provider_id", "prov-1"),
+            make_fact("slot_start", SLOT, TrustLevel.CONTROLLED),
         )
         decision = engine.evaluate(
             "book_appointment",
@@ -399,8 +399,8 @@ class TestValueTrustAndTheAutonomousPath:
     def test_a_datetime_valued_argument_is_allowed_end_to_end(self, engine: PolicyEngine) -> None:
         """Correction 1's canonical form, exercised through a real verdict rather than a unit."""
         case = _ready(
-            trusted_fact("provider", "prov-1"),
-            make_fact("slot", SLOT, TrustLevel.CONTROLLED),
+            trusted_fact("provider_id", "prov-1"),
+            make_fact("slot_start", SLOT, TrustLevel.CONTROLLED),
         )
         decision = engine.evaluate(
             "book_appointment",
@@ -413,8 +413,8 @@ class TestValueTrustAndTheAutonomousPath:
     def test_a_float_valued_argument_fails_closed(self, engine: PolicyEngine) -> None:
         """No comparison form means no match means UNTRUSTED — a false denial, not a false trust."""
         case = _ready(
-            trusted_fact("provider", "prov-1"),
-            make_fact("slot", "1.5", TrustLevel.CONTROLLED),
+            trusted_fact("provider_id", "prov-1"),
+            make_fact("slot_start", "1.5", TrustLevel.CONTROLLED),
         )
         decision = engine.evaluate(
             "book_appointment",
@@ -441,8 +441,8 @@ class TestValueTrustAndTheAutonomousPath:
         With the old rules that routing had exactly one outcome.
         """
         case = _planning(
-            trusted_fact("provider", "prov-1"),
-            make_fact("slot", SLOT, TrustLevel.CONTROLLED),
+            trusted_fact("provider_id", "prov-1"),
+            make_fact("slot_start", SLOT, TrustLevel.CONTROLLED),
         )
         decision = engine.evaluate(
             "book_appointment",
@@ -461,7 +461,7 @@ class TestValueTrustAndTheAutonomousPath:
         It is also the only state the case can be parked from: ``AWAITING_HUMAN`` is reachable from
         ``PLANNING`` and from nowhere else that an external effect could be proposed.
         """
-        case = _planning(trusted_fact("carer", "carer@example.org"))
+        case = _planning(trusted_fact("caregiver_email", "carer@example.org"))
         decision = engine.evaluate(
             "send_email",
             {"to": "carer@example.org", "subject": "Referral", "body": "Booked."},
@@ -477,8 +477,8 @@ class TestValueTrustAndTheAutonomousPath:
         case = make_case(
             state=CaseState.GATHERING_EVIDENCE,
             facts=(
-                trusted_fact("provider", "prov-1"),
-                make_fact("slot", SLOT, TrustLevel.CONTROLLED),
+                trusted_fact("provider_id", "prov-1"),
+                make_fact("slot_start", SLOT, TrustLevel.CONTROLLED),
             ),
         )
         decision = engine.evaluate(
@@ -491,8 +491,8 @@ class TestValueTrustAndTheAutonomousPath:
 
     def test_a_missing_required_argument_fails_args_present(self, engine: PolicyEngine) -> None:
         case = _ready(
-            trusted_fact("provider", "prov-1"),
-            make_fact("slot", SLOT, TrustLevel.CONTROLLED),
+            trusted_fact("provider_id", "prov-1"),
+            make_fact("slot_start", SLOT, TrustLevel.CONTROLLED),
         )
         decision = engine.evaluate(
             "book_appointment", {"provider_id": "prov-1", "slot_start": SLOT}, case
@@ -529,7 +529,7 @@ class TestValueTrustAndTheAutonomousPath:
 class TestMatchOrdering:
     def test_deny_beats_require_human_on_the_shipped_rules(self, engine: PolicyEngine) -> None:
         """``grant_portal_access`` to an untrusted grantee matches a DENY and a REQUIRE_HUMAN."""
-        case = _ready(trusted_fact("portal", "portal-1"), trusted_fact("role", "viewer"))
+        case = _ready(trusted_fact("portal_id", "portal-1"), trusted_fact("role", "viewer"))
         matching = [
             rule.id
             for rule in default_rules().rules
@@ -636,14 +636,14 @@ class TestMatchOrdering:
 
 class TestPurity:
     def test_evaluating_twice_gives_the_same_decision(self, engine: PolicyEngine) -> None:
-        case = _planning(trusted_fact("clinic_email", CLINIC))
+        case = _planning(trusted_fact("caregiver_email", CLINIC))
         args = {"to": CLINIC, "subject": "s", "body": "b"}
         assert engine.evaluate("send_email", args, case) == engine.evaluate(
             "send_email", args, case
         )
 
     def test_the_case_is_not_mutated(self, engine: PolicyEngine) -> None:
-        case = _planning(trusted_fact("clinic_email", CLINIC))
+        case = _planning(trusted_fact("caregiver_email", CLINIC))
         before = case.model_dump()
         engine.evaluate("send_email", {"to": CLINIC}, case)
         assert case.model_dump() == before
@@ -669,7 +669,7 @@ class TestDecisionDiagnostics:
     ) -> None:
         from careloop.provenance import ArgClass
 
-        case = _planning(make_fact("recipient", ATTACKER, TrustLevel.CONTROLLED))
+        case = _planning(make_fact("caregiver_email", ATTACKER, TrustLevel.CONTROLLED))
         decision = engine.evaluate("send_email", {"to": ATTACKER, "subject": "s"}, case)
         assert decision.arg_classes == {"to": ArgClass.DESTINATION, "subject": ArgClass.VALUE}
         assert decision.arg_trust == {
@@ -751,7 +751,7 @@ class TestApprovalIsAConditionAndNotAnOverride:
         return case, args
 
     def test_an_unapproved_email_requires_a_human(self, engine: PolicyEngine) -> None:
-        case = _planning(trusted_fact("carer", CLINIC))
+        case = _planning(trusted_fact("caregiver_email", CLINIC))
 
         decision = engine.evaluate("send_email", {"to": CLINIC, "subject": "s", "body": "b"}, case)
 
@@ -760,7 +760,9 @@ class TestApprovalIsAConditionAndNotAnOverride:
     def test_an_approved_email_to_a_trusted_recipient_is_allowed(
         self, engine: PolicyEngine
     ) -> None:
-        case, args = self._approved_case(CaseState.EXECUTING, CLINIC, trusted_fact("carer", CLINIC))
+        case, args = self._approved_case(
+            CaseState.EXECUTING, CLINIC, trusted_fact("caregiver_email", CLINIC)
+        )
 
         decision = engine.evaluate("send_email", args, case)
 
@@ -805,7 +807,9 @@ class TestApprovalIsAConditionAndNotAnOverride:
     def test_an_approval_for_other_arguments_does_not_carry_over(
         self, engine: PolicyEngine
     ) -> None:
-        case, args = self._approved_case(CaseState.EXECUTING, CLINIC, trusted_fact("carer", CLINIC))
+        case, args = self._approved_case(
+            CaseState.EXECUTING, CLINIC, trusted_fact("caregiver_email", CLINIC)
+        )
 
         decision = engine.evaluate("send_email", {**args, "body": "a body nobody approved"}, case)
 
@@ -814,7 +818,9 @@ class TestApprovalIsAConditionAndNotAnOverride:
     def test_a_pending_approval_is_not_an_approval(self, engine: PolicyEngine) -> None:
         from careloop.state.case import ApprovalStatus
 
-        case, args = self._approved_case(CaseState.EXECUTING, CLINIC, trusted_fact("carer", CLINIC))
+        case, args = self._approved_case(
+            CaseState.EXECUTING, CLINIC, trusted_fact("caregiver_email", CLINIC)
+        )
         still_pending = case.model_copy(
             update={
                 "approvals": (
@@ -829,7 +835,9 @@ class TestApprovalIsAConditionAndNotAnOverride:
 
     def test_an_uncanonicalizable_argument_counts_as_unapproved(self, engine: PolicyEngine) -> None:
         """Fail closed: a call that cannot be identified has not been authorised."""
-        case, _ = self._approved_case(CaseState.EXECUTING, CLINIC, trusted_fact("carer", CLINIC))
+        case, _ = self._approved_case(
+            CaseState.EXECUTING, CLINIC, trusted_fact("caregiver_email", CLINIC)
+        )
 
         decision = engine.evaluate("send_email", {"to": CLINIC, "subject": "s", "body": 1.5}, case)
 

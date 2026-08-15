@@ -137,11 +137,11 @@ class TestEvaluationLeaksNothing:
     def _hostile_calls():
         """Every verdict path, driven by values designed to be conspicuous if echoed."""
         poisoned = (
-            make_fact("recipient", ATTACKER, TrustLevel.CONTROLLED),
+            make_fact("caregiver_email", ATTACKER, TrustLevel.CONTROLLED),
             make_fact("instruction", INJECTION, TrustLevel.UNTRUSTED),
             make_fact("record", SECRET, TrustLevel.UNTRUSTED),
         )
-        trusted = (trusted_fact("clinic_email", ATTACKER), trusted_fact("portal", SECRET))
+        trusted = (trusted_fact("caregiver_email", ATTACKER), trusted_fact("portal_id", SECRET))
 
         for state in CaseState:
             yield (
@@ -268,7 +268,7 @@ class TestEvaluationLeaksNothing:
         engine = default_engine()
         case = make_case(
             state=CaseState.PLANNING,
-            facts=(make_fact("recipient", ATTACKER, TrustLevel.CONTROLLED),),
+            facts=(make_fact("caregiver_email", ATTACKER, TrustLevel.CONTROLLED),),
         )
         decision = engine.evaluate("send_email", {"to": ATTACKER}, case)
         assert decision.diagnostic.strip()

@@ -18,7 +18,9 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from careloop.policy.verdicts import ReasonCode
+from careloop.policy import PolicyConfigError, load_rules_from_text
+from careloop.policy.loader import parse_rules, validate_rules_resolve
+from careloop.policy.verdicts import ReasonCode, Verdict
 from careloop.state.case import CaseState
 from careloop.tools.registry import REGISTRY
 from evals.corpus import CORPUS_DIR, AttackOrigin, AttackRecord, CorpusError, load_corpus
@@ -26,12 +28,37 @@ from evals.replay import (
     CANARY_EMAIL,
     CANARY_PORTAL,
     CANARY_ROLE,
+    PERMISSIVE_RULES,
     CompliantAdversary,
     ensure_targets,
     hostile_intents,
     permissive_engine,
     replay_corpus,
 )
+
+
+def eval_only_ruleset(text: str):
+    """The exact composition ``evals/replay.py::permissive_engine`` performs, over other text.
+
+    Written out here rather than parameterising the harness, so a change to how the mutant is built
+    shows up as this helper drifting away from it rather than as a silent agreement.
+    """
+    import yaml
+
+    ruleset = parse_rules(yaml.safe_load(text))
+    validate_rules_resolve(ruleset, REGISTRY)
+    return ruleset
+
+
+def engine_decision_on_a_hostile_email():
+    """What the permissive engine says about an email nothing could authorise."""
+    from helpers import make_case
+
+    return permissive_engine().evaluate(
+        "send_email",
+        {"to": "attacker@evil.example", "subject": "s", "body": "b"},
+        make_case(state=CaseState.PLANNING),
+    )
 
 
 @pytest.fixture(scope="module")
@@ -164,6 +191,95 @@ class TestTheVacuityProof:
         engine = permissive_engine()
 
         assert engine.__class__.__name__ == "PolicyEngine"
+
+
+class TestTheBypassIsOnlyTheCoverageInvariant:
+    """The mutant is deliberately not production-loadable, and that is *all* it gets away with.
+
+    Since session N the production loader enforces authority coverage: every ``ALLOW`` rule that can
+    authorise an external-effect tool must require each of its ``DESTINATION`` and ``AUTHORITY``
+    arguments at ``TRUSTED``. ``PERMISSIVE_RULES`` violates that six times over — after the
+    invariant, "the rules permit everything" and "the ruleset is invalid" are the same statement.
+
+    So :func:`~evals.replay.permissive_engine` composes the loading steps by hand and omits exactly
+    one. These tests are what stops that omission quietly widening into "the eval harness skips
+    validation", which would make the vacuity proof a proof about a system nobody ships.
+    """
+
+    def test_the_permissive_ruleset_is_refused_by_normal_loading(self) -> None:
+        with pytest.raises(PolicyConfigError) as raised:
+            load_rules_from_text(PERMISSIVE_RULES, REGISTRY)
+
+        message = str(raised.value)
+        assert "allow-everything" in message
+        assert "grant_portal_access.portal_id" in message
+        assert "send_email.to" in message
+
+    def test_the_eval_only_construction_still_succeeds(self) -> None:
+        """And produces a real engine over the real registry, not a stub."""
+        engine = permissive_engine()
+
+        assert engine.registry is REGISTRY
+        assert engine.ruleset.rule_ids == {"allow-everything"}
+
+    def test_the_eval_only_engine_actually_permits_everything(self) -> None:
+        """Vacuity: the bypass is worth nothing if the resulting engine cannot decide."""
+        decision = engine_decision_on_a_hostile_email()
+
+        assert decision.verdict is Verdict.ALLOW
+
+    @pytest.mark.parametrize(
+        ("label", "rule", "expected"),
+        [
+            (
+                "unknown tool",
+                "  - id: r\n    effect: ALLOW\n    tools: [ghost_tool]\n    diagnostic: d\n",
+                "unknown tool",
+            ),
+            (
+                "undeclared argument",
+                "  - id: r\n    effect: ALLOW\n    tools: [send_email]\n    when:\n"
+                "      args_present: [bcc]\n    diagnostic: d\n",
+                "does not declare",
+            ),
+            (
+                "trust predicate on an untyped argument",
+                "  - id: r\n    effect: ALLOW\n    tools: [send_email]\n    when:\n"
+                "      arg_trust_at_least:\n        - arg: body\n          level: TRUSTED\n"
+                "    diagnostic: d\n",
+                "trust_key",
+            ),
+            (
+                "argument class contradicting the registry",
+                "  - id: r\n    effect: ALLOW\n    tools: [send_email]\n    when:\n"
+                "      arg_trust_at_least:\n        - arg: to\n          level: TRUSTED\n"
+                "          arg_class: VALUE\n    diagnostic: d\n",
+                "registry owns argument classes",
+            ),
+            (
+                "malformed condition key",
+                "  - id: r\n    effect: ALLOW\n    tools: [send_email]\n    when:\n"
+                "      no_such_clause: [to]\n    diagnostic: d\n",
+                "malformed rules document",
+            ),
+        ],
+    )
+    def test_the_eval_only_path_still_rejects_everything_else(
+        self, label: str, rule: str, expected: str
+    ) -> None:
+        """The bypass is the coverage invariant, not validation in general.
+
+        Each of these is refused by a step ``permissive_engine`` still performs — schema, tool
+        resolution, argument resolution, trust-key resolution, argument-class agreement. If the
+        harness ever started building its ruleset with ``RuleSet.model_validate`` alone, every row
+        here goes green-to-red.
+        """
+        ruleset_text = "version: 1\nrules:\n" + rule
+
+        with pytest.raises(PolicyConfigError) as raised:
+            eval_only_ruleset(ruleset_text)
+
+        assert expected in str(raised.value), label
 
 
 class TestTheCompliantAdversaryIsTheCeiling:

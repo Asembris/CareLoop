@@ -519,6 +519,17 @@ the surface, not fixed**. Any other client hitting `POST …/approve` with that 
 releases the case to execution and still ends `FAILED`. It stays open, and the mitigation should not
 be mistaken for a resolution.
 
+> **Closed in the backend, 2026-08-15.** A parking now raises no `Approval`, so there is no id for
+> any client to post — a fabricated one is a `404` — and `_decide` refuses the records already on
+> disk with a `409` before anything moves. This UI was right and needed no behavioural change: the
+> card is still projected into `DecisionView`, now from the timeline's `MANUAL_HANDOFF_REQUIRED`
+> entry rather than from an approval, with `approval_id` empty because there is genuinely nothing to
+> name. The only frontend change was naming that timeline kind — `backend.ts`, `realApi.ts` and the
+> tone table — so the spine says "CareLoop stopped — manual follow-up needed" in its own words
+> instead of falling through to the backend's `summary`. **The surface mitigation is now a
+> defence-in-depth layer over a backend that refuses independently**, which is what it should have
+> been all along.
+
 ---
 
 ### 12. `D2:` the provider seeded itself with mock cases

@@ -253,6 +253,31 @@ booked, where, or when. Whether it should be verified, templated from controlled
 open, and was deliberately kept out of the patient patch so the two properties have independent
 causal evidence.
 
+**An `Approval` is a capability, and a manual handoff is not one.** An approval says a caregiver was
+asked about *one exact call*, identified by `(tool_name, args_digest)`; deciding it releases that
+call and nothing else. `NO_SAFE_ACTION_AVAILABLE` — every tool in the registry proposed and refused
+— is a **status**, so it raises no `Approval` at all: `_park_with_nothing_safe_to_do` writes a
+`MANUAL_HANDOFF_REQUIRED` timeline entry and leaves the case `AWAITING_HUMAN`, and
+`decision_view` projects the caregiver's card from that entry. It used to raise an approval with
+both identifying fields empty, whose docstring correctly said approving it released nothing and
+whose behaviour did the opposite: `_decide` moved the case to `READY_TO_EXECUTE`, where the execute
+node picked up `latest_proposal` — by construction a proposal policy had just **denied** — and
+dispatched it. The tool boundary refused it a second time, the case ended `FAILED`, and the timeline
+blamed a disagreement between the two enforcement points that had never happened. Reachable by any
+HTTP client; the only thing stopping it was a frontend choosing not to draw a button.
+
+So: **the parking creates no approval, and `_decide` refuses any approval that is not
+`is_actionable`.** Two layers, because the second is what makes cases persisted before the change
+inert — they still deserialize, still render, still sit parked, and return `409` before any state or
+version moves. No migration; `Approval` deliberately grew no validator, since one would make an old
+case *unreadable* rather than merely undecidable. `tests/test_approval_shape.py` sweeps for the one
+remaining production writer of `Approval(...)`, which is how the next notification gets stopped from
+being encoded as one. **Not yet true globally:** `approval_id_for` derives the id from the argument
+digest alone and `_decide` rewrites every record sharing an id, so a reject-then-repropose of
+identical arguments can rewrite a `REJECTED` record to `APPROVED` — open decision 20, audit
+integrity rather than authority. Until it lands, the identity claim holds for what `_decide`
+*accepts*, not for `case.approvals` as a whole.
+
 **`careloop/api/` decides nothing.** It projects stored cases and calls `open_case`, `reopen_case`,
 `approve`, `reject` and `run_case`. The one thing it originates is *when* a run happens, and
 scheduling is not deciding. An endpoint that appears to need logic which does not exist is a signal

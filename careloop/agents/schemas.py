@@ -54,11 +54,14 @@ vacuity proof for the guard in ``tests/test_provider_tool_spec.py``.
 
 **Triage emits no destination.** There is no ``provider_id``, no recipient, no portal on
 :class:`TriageResult`, and its absence is load-bearing rather than an omission. The policy engine
-resolves an argument's trust by looking its *value* up in ``case.facts`` and taking the **lowest**
-trust level among the matches. A triage-emitted ``UNTRUSTED`` fact carrying the same string as a
-``TRUSTED`` configuration fact would therefore drag the legitimate value down to ``UNTRUSTED`` and
-deny the action it was needed for. Triage produces ``VALUE``-class candidates only; destinations
-come from trusted configuration and nowhere else.
+resolves an argument's trust by looking its value up in ``case.facts`` **under the fact key the
+argument declares**, and taking the **lowest** trust level among the matches. A triage-emitted
+``UNTRUSTED`` ``provider_id`` would therefore drag the configured one down to ``UNTRUSTED`` and
+deny the action it was needed for — a *same-key* collision, which is exactly the case lowest-wins
+is meant to catch and cannot be relaxed for. (Before trust was key-bound this hazard was wider
+still: any key would have done it. Narrowing the resolver removed the accidental half of the
+problem and left this one, which is the real one.) Triage produces ``VALUE``-class candidates only;
+destinations come from trusted configuration and nowhere else.
 """
 
 from __future__ import annotations

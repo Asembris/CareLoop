@@ -428,17 +428,23 @@ class ExecuteNode(DeterministicNode):
 
         Otherwise, the only proposals that need an approval are the ones the gate **parked**, and
         an approval exists for exactly those — :func:`~careloop.graph.nodes._request_approval`
-        records it against the argument digest at the moment the gate decides ``REQUIRE_HUMAN``.
-        So an approval covering these arguments must be ``APPROVED``, and a proposal with no
-        approval at all is one the gate allowed outright.
+        records it against the tool and the argument digest at the moment the gate decides
+        ``REQUIRE_HUMAN``. So an approval covering exactly this call must be ``APPROVED``, and a
+        proposal with no approval at all is one the gate allowed outright.
 
         **This was case-scoped until commit 7 and that was a latent bug**, found by running the
         resume rather than by reading the code. The old rule was "a case with any approval needs an
         approval for every action", which holds for a case that does one thing and breaks the
         moment a case does two: a reopened case whose first action needed a caregiver and whose
         second is autonomous was refused for want of an approval nobody should have been asked for.
-        Digest-scoping matches what an approval has meant everywhere else since commit 6 — it
-        authorises specific arguments, not a tool and not a case.
+        Call-scoping matches what an approval means everywhere else — it authorises one exact
+        tool call, not a tool and not a case.
+
+        The lookup names ``proposal.tool_name`` as well as the digest. Passing the digest alone
+        asked whether *some* decision had been made about an argument map that looks like this one,
+        which is a different question and answers it about the wrong action in both directions: a
+        refusal recorded for another tool would have blocked this dispatch, and an approval recorded
+        for another tool would have satisfied ``args_approved`` at the boundary a few lines below.
 
         What this does **not** do is decide whether an unapproved action may proceed. That is
         ``rules.yaml``'s ``args_approved`` clause, evaluated at the tool boundary a few lines
@@ -449,9 +455,9 @@ class ExecuteNode(DeterministicNode):
         if case.pending_approval() is not None:
             return "an approval is still outstanding"
 
-        approval = approval_for(case, proposal.digest)
+        approval = approval_for(case, proposal.tool_name, proposal.digest)
         if approval is not None and approval.status is not ApprovalStatus.APPROVED:
-            return "the caregiver did not approve the arguments being executed"
+            return "the caregiver did not approve the call being executed"
         return None
 
     def _fail(self, case: Case, base: int, reason: str) -> str:
@@ -636,9 +642,11 @@ def _record_decision(case: Case, decision: Decision, kind: TimelineKind, now) ->
 def _request_approval(case: Case, proposal: Proposal, decision: Decision, now) -> Case:
     """Park the proposal as a pending caregiver decision.
 
-    The approval carries the *digest* of the arguments, not the arguments. A caregiver approves a
-    specific action; recording only the tool name would let a later proposal for the same tool
-    execute under it.
+    The approval carries the tool name and the *digest* of the arguments, not the arguments
+    themselves. Both halves are the capability's identity and both are matched:
+    :meth:`careloop.state.case.Case.is_approved` requires them together, so recording only the tool
+    name would let a later proposal for the same tool execute under this decision, and recording
+    only the digest would let another tool do so with an argument map that hashes the same.
 
     **The identifier is the request, not the action.** ``case.next_seq()`` is the position the
     ``APPROVAL_REQUESTED`` entry written below will occupy, so the record and the audit entry that

@@ -275,7 +275,7 @@ class TestApproval:
             now=FIXED_NOW,
         )
 
-        assert store.get("case-0001").is_approved(args_digest(EMAIL))
+        assert store.get("case-0001").is_approved("send_email", args_digest(EMAIL))
 
     def test_an_approval_does_not_authorise_a_different_call(self) -> None:
         store = InMemoryCaseStore()
@@ -289,7 +289,8 @@ class TestApproval:
         )
 
         other = {**EMAIL, "body": "something the caregiver never read"}
-        assert not store.get("case-0001").is_approved(args_digest(other))
+        assert not store.get("case-0001").is_approved("send_email", args_digest(other))
+        assert not store.get("case-0001").is_approved("upload_document", args_digest(EMAIL))
 
 
 class TestTheRunnerReactsToTheSdkRatherThanCounting:

@@ -244,6 +244,48 @@ alongside, because the trust clause strictly dominates it and the weaker one is 
 identifier through. **`args_present` is a presence check and nothing more; any new rule about who or
 what an action affects belongs in `arg_trust_at_least`.**
 
+**A rule that does not name an argument at all is not guarding it either, and that is where the
+next one was.** Session N: `grant_portal_access.portal_id` is `DESTINATION`-class and declares
+`trust_key: portal_id`, so `resolve_trust` had always returned the right answer for it — and no
+rule read the answer. No `DENY` rule named it and `allow-approved-portal-access-grant` did not
+either. With a trusted grantee, a trusted role and a caregiver's approval covering the exact call, a
+grant on `PORTAL-ATTACKER-CONTROLLED` reached `ALLOW` while that same `Decision` reported
+`portal_id: UNTRUSTED`. Session J's shape one class further out: there the argument was guarded by
+presence instead of by trust, here by nothing.
+
+It was unreachable in the shipped configuration — but only because `deny-authority-grant-below-
+trusted` refuses every grant for want of a trusted `role`, which is **a different rule guarding a
+different argument**. An accident is not a boundary, and this one is one deliberate change away from
+being gone: the moment anybody invents a trusted role to make the grant path reachable, they have no
+reason to look at `portal_id`.
+
+So: **every `DESTINATION` and `AUTHORITY` argument of every external-effect tool must have its trust
+required at `TRUSTED` by every `ALLOW` rule that can authorise that tool.** Both halves are written,
+as with the booking patch and for the opposite reason — the `DENY` states the refusal, and the
+`ALLOW` clause is what stops the positive path depending on the `DENY` still being there tomorrow.
+Neither `args_present` nor `args_approved` satisfies this: human approval and deterministic trust
+are different dimensions, and an approval says a caregiver was asked about one exact call, never
+where that call lands. The scope is deliberately narrow — `VALUE` is excluded, because `patient_id`,
+`slot_start` and `document_id` are required at `CONTROLLED` on purpose and `subject`, `body` and
+`reason` declare no `trust_key` at all, so requiring their trust fails at load.
+
+`uncovered_authority_arguments` in `careloop/policy/loader.py` is the check, and
+`tests/test_policy_coverage.py` exercises it against synthetic registries so it is generic rather
+than a spelling of this one tool. It is a **pure diagnostic today, in the shape
+`uncovered_external_tools` established, and not yet a load-time refusal** — making it one rejects
+the deliberately-degenerate rulesets that prove *other* guards non-vacuous, `evals/replay.py`'s
+allow-all mutant among them, and that trade has not been decided. `tests/test_grant_authority.py`
+carries the behavioural boundary, and a mutant restoring exactly the historical hole — the `DENY`
+rule dropped, the `portal_id` predicate removed, nothing else — turns seven of its assertions and
+two structural checks red while the grantee, role and `upload_document.portal_id` controls stay
+green.
+
+**The grant path is still unreachable in production and this changed nothing about that.** No
+producer emits a fact under the `role` key; `tests/test_typed_trust.py::TestTheGrantPathHasNoProduction
+Authority` is unchanged and still passing. The tests above synthesise a trusted role on purpose, to
+ask the only question that matters here: *if the role barrier were satisfied, would portal
+destination safety still hold?*
+
 **One booking argument is still unguarded and that is a recorded decision, not an oversight.**
 `reason` is planner-authored free text, declares no `trust_key` (so no rule may even require trust
 of it), is sent verbatim to the clinic and persisted there, and is the one externally recorded field

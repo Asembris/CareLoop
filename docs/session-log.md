@@ -4157,6 +4157,156 @@ are pinned in `TestNothingOnDiskHadToChange`.
     key is the `ActionRecord` that was actually performed. `AUTHORIZED` in the read-back panel is
     read from it, which is what makes it worth a decision rather than a note.
 
+## Session N — 2026-08-15
+
+### Position
+
+**D1 closed.** `grant_portal_access.portal_id` is now a hard trusted destination. It is
+`DESTINATION`-class and declares `trust_key: portal_id`, so `resolve_trust` had always returned the
+right answer for it — and **no rule read the answer**. No `DENY` rule named it, and
+`allow-approved-portal-access-grant` did not name it either.
+
+This session began as a full trust-boundary audit (plan gate, 13 arguments across 5 tools). Three
+defects were confirmed and seven suspicions were disproved; only the first is implemented here.
+
+### The reproduction, before the repair
+
+Shipped `rules.yaml`, shipped `REGISTRY`, real engine. Grantee from trusted config, a **synthetic**
+`TRUSTED` role fact (see below), portal `PORTAL-ATTACKER-CONTROLLED`, and a real `Approval` keyed on
+the exact `(tool_name, args_digest)`:
+
+```
+UNTRUSTED portal + approval      ALLOW          allow-approved-portal-access-grant
+                                 arg_trust = {grantee: TRUSTED, role: TRUSTED, portal_id: UNTRUSTED}
+UNTRUSTED portal + no approval   REQUIRE_HUMAN  require-human-for-authority-grant
+```
+
+The second line is its own defect. CareLoop was prepared to ask a caregiver *"do you approve
+granting access on a portal nothing established?"* — a question it should have refused before human
+authority was relevant.
+
+**This is session J's shape one class further out.** There `patient_id` was guarded by presence
+instead of by trust; here `portal_id` was guarded by nothing. Both are the engine computing
+something no rule requires, and both were invisible for the same reason: the coverage check the
+project had, `uncovered_external_tools`, asks whether every effectful *tool* is named by some rule.
+Every tool was.
+
+### After
+
+```
+UNTRUSTED portal + approval      DENY           deny-portal-access-to-untrusted-portal
+UNTRUSTED portal + no approval   DENY           deny-portal-access-to-untrusted-portal
+TRUSTED portal   + no approval   REQUIRE_HUMAN  require-human-for-authority-grant
+TRUSTED portal   + approval      ALLOW          allow-approved-portal-access-grant
+```
+
+Two YAML edits and no Python in the authority path: a `DENY` rule mirroring
+`deny-upload-to-untrusted-portal` clause for clause, and `portal_id` added to
+`allow-approved-portal-access-grant`'s `arg_trust_at_least` at `TRUSTED`/`DESTINATION`. Both halves,
+deliberately — the `DENY` states the refusal, and the `ALLOW` clause is what stops the positive path
+depending on the `DENY` still being there tomorrow.
+
+### Why the tests synthesise a trusted role, and what that does not claim
+
+The shipped configuration cannot reach any of this: `deny-authority-grant-below-trusted` refuses
+every grant because nothing anywhere records a fact under the `role` key. **That unreachability is a
+fact about a different rule guarding a different argument, and using it as evidence for this one
+would be answering the wrong question.** So the tests construct a `TRUSTED` role directly — a fact no
+producer emits and `promote()` would refuse — to ask the only question that matters: *if the role
+barrier were satisfied, would portal destination safety still hold?*
+
+**The grant path remains unreachable in production and nothing here changes that.**
+`tests/test_typed_trust.py::TestTheGrantPathHasNoProductionAuthority` is untouched and still passing.
+
+### The generalisation, and what it is not yet
+
+`uncovered_authority_arguments(registry, ruleset)` in `careloop/policy/loader.py` reports
+`(rule id, tool, argument)` for every `DESTINATION`/`AUTHORITY` argument of an external-effect tool
+that an `ALLOW` rule capable of authorising that tool fails to require at `TRUSTED`. Per rule, not
+per ruleset — a union reading is satisfied by one strict rule beside one permissive one, and the
+permissive one is the rule that fires. Neither `args_present` nor `args_approved` counts, and nor
+does a clause below `TRUSTED`. Scoped to those two classes only: `VALUE` is excluded because
+`patient_id`, `slot_start` and `document_id` are required at `CONTROLLED` on purpose, and `subject`,
+`body` and `reason` declare no `trust_key`, so requiring their trust fails at load.
+
+Against the shipped registry it reported exactly one entry before the repair and none after.
+
+**It is a pure diagnostic, not a load-time refusal, and that is open decision 27 rather than a
+decision made here.** The patch brief asked for a loader raise. Making it one was measured rather
+than argued: wrapping `load_rules_from_mapping` to refuse an uncovered ruleset leaves the shipped
+path entirely green and turns **10 tests across 3 files** red, all of them deliberately-degenerate
+rulesets that exist to prove *other* guards non-vacuous —
+`evals/replay.py::PERMISSIVE_RULES` (the allow-all mutant behind `0/320` vs `320/320`, 6 uncovered
+pairs, 7 tests), `tests/test_docs_claims.py`'s published-headline replay (2 tests), and one
+legitimate synthetic rule in `tests/test_typed_trust.py` (1 test). The conflict is irreducible: after
+A1, *a ruleset that permits everything is by construction not a valid ruleset*, so the allow-all
+mutant cannot be built through a loader that enforces it. Resolving it means changing how
+`evals/replay.py` assembles its mutant and amending `docs/security-evaluation.md`, which claims the
+mutant goes "through the real loader". That is outside this patch's approved scope and was reported
+rather than taken.
+
+### Non-vacuity
+
+The bounded mutant restores exactly the historical hole — `deny-portal-access-to-untrusted-portal`
+dropped, the `portal_id` predicate removed from the `ALLOW` rule, nothing else, each edit asserted to
+have happened. Under it:
+
+- **red**: 5 behavioural assertions in `tests/test_grant_authority.py` plus 2 structural checks in
+  `tests/test_policy_coverage.py`; 4 more error because the mutant harness itself asserts the `DENY`
+  rule is present in the shipped file.
+- **green**: the trusted-portal `REQUIRE_HUMAN` and `ALLOW` rows, the untrusted-grantee refusal, the
+  role barrier, and both `upload_document.portal_id` controls — so the mutation is portal-destination
+  binding and not a broad policy change.
+- **unmoved**: 133 tests across `test_typed_trust.py`, `test_approval_capability.py`,
+  `test_approval_identity.py`, `test_decision_surface.py` and `test_booking_authority.py`.
+
+`rules.yaml` was restored byte-for-byte afterwards, verified by SHA-256
+(`2acfe553fc50bfade4e29a8d748bf11b02ea677de4e053afa3041eb7d300ceae`). No source-mutating test ships.
+
+### Results
+
+**2080 passed, 37 skipped** — 2048 before; the 19 tests in `tests/test_grant_authority.py` and the
+13 in `tests/test_policy_coverage.py` are the whole difference. `ruff check` and
+`ruff format --check` clean. `evals.replay` unchanged: 0 confirmed attacker-derived effects and
+320/320 clean under the shipped rules, 560 effects and 0/320 clean under the allow-all mutant.
+
+That replay is **no-regression evidence only**. The corpus contains no synthetic-trusted-role grant,
+so it never exercised D1 and cannot be cited as proof of portal coverage. The targeted tests, the
+structural check and the bounded mutant are what prove it.
+
+### Compatibility
+
+No DB migration, no API contract change, no frontend change, no persisted-case invalidation, no Demo
+World change. `rules.yaml` changed; loader *behaviour* did not. Executable effects are strictly
+narrower, and only for grants naming a portal the case has not established.
+
+### Open decisions
+
+24. **Unchanged and still open** — `PolicyEngine.evaluate` permits a call that omits a declared
+    argument. Confirmed true this session and measured per tool: four omissions reach
+    `ALLOW`/`REQUIRE_HUMAN`, and none can produce an effect, because `ToolSet.call` raises
+    `TypeError` for all 13 argument positions and `PlannerIntentBase` fills every declared argument
+    before a `Proposal` can exist. A crash where a clean `DENY` belongs. **Do not add a regression
+    test requiring partial argument sets to keep being accepted.**
+
+25. **Unchanged.**
+
+26. **Unchanged.** Frontend `latestProposal` resolution, deferred.
+
+27. **New. Should `uncovered_authority_arguments` become a load-time refusal?** The property is
+    written and tested; only its enforcement point is open. Measured cost above: the shipped path is
+    unaffected, and 10 tests across `evals/replay.py`'s allow-all mutant, `test_docs_claims.py` and
+    `test_typed_trust.py` would need their degenerate rulesets built another way, plus an amendment
+    to `docs/security-evaluation.md`. Until this is decided, **CLAUDE.md must not claim the loader
+    rejects an uncovered ruleset** — it says "pure diagnostic today" and that is the honest wording.
+
+28. **New. `book_appointment.reason` is transmitted, externally observable and never verified.**
+    Confirmed by execution against a live Demo World: it is sent in the POST, stored, and returned by
+    the read-back `GET`, but `ClinicClient._appointment` drops it and `_verify_booking` never
+    compares it — a clinic-side change to `reason` alone leaves verification `PASSED` and the case
+    `DONE`. Integrity-relevant rather than authority-bearing: it cannot change who, where or when.
+    This is Patch 2 and is deliberately untouched here.
+
 ## Standing risks
 
 - **The resume is a `CaseStore` reconstruction across a process boundary, not a Strands session

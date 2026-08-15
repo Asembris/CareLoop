@@ -56,8 +56,14 @@ class Condition(BaseModel):
     arg_trust_below: tuple[ArgTrust, ...] = ()
     """Holds when every named argument resolves *below* its level.
 
-    An argument the call omits resolves ``UNTRUSTED``, so it is below anything higher — a missing
-    destination denies rather than slipping past the guard.
+    An argument the call does not carry resolves ``UNTRUSTED``, so it is below anything higher.
+    **That is no longer how a missing destination is refused**, and the docstring used to say it
+    was: since session P, :meth:`careloop.policy.engine.PolicyEngine.evaluate` refuses an argument
+    map that omits any argument the tool declares *before* any condition is evaluated, so
+    ``send_email`` with no ``to`` is denied ``NO_RULE_MATCH`` as an incomplete call rather than
+    ``DESTINATION_NOT_TRUSTED`` as an email to an untrusted recipient. A mapping with no recipient
+    is not an email to the wrong person; it is not a complete call. The resolver's fail-closed
+    default is unchanged and kept as defence in depth.
     """
 
     arg_trust_at_least: tuple[ArgTrust, ...] = ()

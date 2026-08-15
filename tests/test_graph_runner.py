@@ -173,7 +173,25 @@ class TestApproval:
 
         approval = result.case.pending_approval()
         assert approval.args_digest == args_digest(EMAIL)
-        assert approval.approval_id == approval_id_for(args_digest(EMAIL))
+
+    def test_the_id_names_the_request_rather_than_the_arguments(self) -> None:
+        """Two identities, and the identifier is the one that says *which time we asked*.
+
+        It was ``approval_id_for(args_digest(EMAIL))`` until session K, which is what made a
+        reproposed action arrive under an earlier request's name. See
+        ``tests/test_approval_identity.py`` for what that cost and why the seed is the timeline
+        position of the ``APPROVAL_REQUESTED`` entry instead.
+        """
+        store = InMemoryCaseStore()
+
+        result, _ = parked_case(store)
+
+        approval = result.case.pending_approval()
+        requested = next(
+            event for event in result.case.timeline if event.kind is TimelineKind.APPROVAL_REQUESTED
+        )
+        assert approval.approval_id == approval_id_for(requested.seq)
+        assert args_digest(EMAIL) not in approval.approval_id
 
     def test_approving_releases_the_case_for_execution(self) -> None:
         store = InMemoryCaseStore()

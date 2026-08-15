@@ -30,6 +30,19 @@ SLOT = "2026-09-01T10:00:00+00:00"
 SLOT_DT = datetime(2026, 9, 1, 10, 0, 0, tzinfo=UTC)
 PATIENT = "pat-1"
 
+#: Filler for the argument no rule reads, so these calls are *complete* tool calls.
+#:
+#: ``book_appointment.reason`` and ``send_email.subject``/``body`` carry no ``trust_key``, so no
+#: rule names them and every test below was written without them. Session P made
+#: ``PolicyEngine.evaluate`` refuse an argument map that omits anything the tool declares, before
+#: trust is resolved — so a call missing one of these is now refused as incomplete and never
+#: reaches the rule the test is about.
+#: They are supplied here to keep each test testing what its name says;
+#: ``tests/test_policy_completeness.py`` owns the completeness property itself.
+REASON = "cardiology follow-up"
+SUBJECT = "Referral"
+BODY = "Booked."
+
 
 def _validated_patient():
     """The ``patient_id`` fact a booking now needs, at the level validation produces.
@@ -193,7 +206,9 @@ class TestUnknownToolAndArguments:
             ),
             REGISTRY,
         )
-        decision = engine.evaluate("send_email", {"to": CLINIC}, _planning())
+        decision = engine.evaluate(
+            "send_email", {"to": CLINIC, "subject": SUBJECT, "body": BODY}, _planning()
+        )
         assert decision.verdict is Verdict.DENY
         assert decision.reason_code is ReasonCode.NO_RULE_MATCH
         assert decision.matched_rule_id is None
@@ -216,15 +231,24 @@ class TestCaseStateGate:
         self, engine: PolicyEngine, state: CaseState
     ) -> None:
         case = make_case(state=state, facts=(trusted_fact("caregiver_email", CLINIC),))
-        decision = engine.evaluate("send_email", {"to": CLINIC}, case)
+        decision = engine.evaluate(
+            "send_email", {"to": CLINIC, "subject": SUBJECT, "body": BODY}, case
+        )
         assert decision.verdict is Verdict.DENY
         assert decision.reason_code is ReasonCode.WRONG_CASE_STATE
         assert decision.matched_rule_id == "deny-external-effect-outside-execution-states"
 
     def test_the_state_gate_precedes_argument_level_denials(self, engine: PolicyEngine) -> None:
-        """A call that is wrong in two ways reports the more fundamental objection."""
+        """A call that is wrong in two ways reports the more fundamental objection.
+
+        Two ways, not three: the call is *complete*, or completeness would report the more
+        fundamental objection still. That ordering is
+        ``tests/test_policy_completeness.py::TestCompletenessPrecedesEverythingElse``'s property.
+        """
         case = make_case(state=CaseState.GATHERING_EVIDENCE)
-        decision = engine.evaluate("send_email", {"to": ATTACKER}, case)
+        decision = engine.evaluate(
+            "send_email", {"to": ATTACKER, "subject": SUBJECT, "body": BODY}, case
+        )
         assert decision.reason_code is ReasonCode.WRONG_CASE_STATE
 
     def test_the_read_path_is_open_in_evidence_gathering(self, engine: PolicyEngine) -> None:
@@ -248,20 +272,57 @@ class TestDestinationTrust:
     def test_validation_cannot_launder_a_destination(self, engine: PolicyEngine) -> None:
         """CONTROLLED is what a validator can produce, and it is still not good enough."""
         case = _planning(make_fact("caregiver_email", ATTACKER, TrustLevel.CONTROLLED))
-        decision = engine.evaluate("send_email", {"to": ATTACKER}, case)
+        decision = engine.evaluate(
+            "send_email", {"to": ATTACKER, "subject": SUBJECT, "body": BODY}, case
+        )
         assert decision.verdict is Verdict.DENY
         assert decision.reason_code is ReasonCode.DESTINATION_NOT_TRUSTED
 
-    def test_an_omitted_destination_is_denied_rather_than_skipped(
+    def test_an_omitted_destination_is_refused_as_an_incomplete_call(
         self, engine: PolicyEngine
     ) -> None:
-        decision = engine.evaluate("send_email", {"subject": "s", "body": "b"}, _planning())
+        """Retargeted in session P, and the change of cause is the point.
+
+        This used to assert ``DESTINATION_NOT_TRUSTED``, on the strength of ``_condition_holds``
+        resolving an omitted argument to ``UNTRUSTED``. The resolver still does that and it is still
+        the fail-closed direction — but ``evaluate`` no longer gets there, because an argument map
+        missing a declared key is refused as incomplete first. That is the more honest objection: a
+        mapping with no recipient is not an email to an untrusted recipient, it is not a complete
+        ``send_email`` call, and there is nothing for a destination rule to have an opinion about.
+
+        The destination-trust invariant itself is unaffected and stays non-vacuous — see the test
+        below, where the recipient is *present* and hostile.
+        """
+        decision = engine.evaluate("send_email", {"subject": SUBJECT, "body": BODY}, _planning())
+        assert decision.verdict is Verdict.DENY
+        assert decision.reason_code is ReasonCode.NO_RULE_MATCH
+        assert decision.matched_rule_id is None
+        assert decision.arg_trust == {}, "completeness must precede trust resolution"
+        assert "without declared argument" in decision.diagnostic
+        assert "to" in decision.diagnostic
+
+    def test_a_present_but_untrusted_destination_is_denied_by_the_destination_rule(
+        self, engine: PolicyEngine
+    ) -> None:
+        """The invariant the test above used to carry, on a call that is actually a call.
+
+        Supplied, well-formed, hostile: this is the shape the destination rule exists for, and it is
+        what keeps ``deny-email-to-untrusted-recipient`` non-vacuous now that omission is refused
+        upstream of it.
+        """
+        decision = engine.evaluate(
+            "send_email", {"to": ATTACKER, "subject": SUBJECT, "body": BODY}, _planning()
+        )
         assert decision.verdict is Verdict.DENY
         assert decision.reason_code is ReasonCode.DESTINATION_NOT_TRUSTED
+        assert decision.matched_rule_id == "deny-email-to-untrusted-recipient"
+        assert decision.arg_trust["to"] is TrustLevel.UNTRUSTED
 
     def test_a_trusted_recipient_reaches_the_human(self, engine: PolicyEngine) -> None:
         case = _planning(trusted_fact("caregiver_email", CLINIC))
-        decision = engine.evaluate("send_email", {"to": CLINIC, "subject": "s"}, case)
+        decision = engine.evaluate(
+            "send_email", {"to": CLINIC, "subject": SUBJECT, "body": BODY}, case
+        )
         assert decision.verdict is Verdict.REQUIRE_HUMAN
         assert decision.reason_code is ReasonCode.REQUIRES_HUMAN_APPROVAL
         assert decision.matched_rule_id == "require-human-for-outbound-email"
@@ -331,7 +392,12 @@ class TestAuthorityTrust:
         )
         value = engine.evaluate(
             "book_appointment",
-            {"provider_id": "prov-1", "patient_id": "pat-1", "slot_start": SLOT},
+            {
+                "provider_id": "prov-1",
+                "patient_id": "pat-1",
+                "slot_start": SLOT,
+                "reason": REASON,
+            },
             _ready(
                 trusted_fact("provider_id", "prov-1"),
                 make_fact("slot_start", SLOT, TrustLevel.UNTRUSTED),
@@ -385,7 +451,12 @@ class TestValueTrustAndTheAutonomousPath:
         )
         decision = engine.evaluate(
             "book_appointment",
-            {"provider_id": "prov-1", "patient_id": "pat-1", "slot_start": SLOT},
+            {
+                "provider_id": "prov-1",
+                "patient_id": "pat-1",
+                "slot_start": SLOT,
+                "reason": REASON,
+            },
             case,
         )
         assert decision.verdict is Verdict.DENY
@@ -400,7 +471,12 @@ class TestValueTrustAndTheAutonomousPath:
         )
         decision = engine.evaluate(
             "book_appointment",
-            {"provider_id": "prov-1", "patient_id": PATIENT, "slot_start": SLOT},
+            {
+                "provider_id": "prov-1",
+                "patient_id": PATIENT,
+                "slot_start": SLOT,
+                "reason": REASON,
+            },
             case,
         )
         assert decision.verdict is Verdict.ALLOW
@@ -418,7 +494,12 @@ class TestValueTrustAndTheAutonomousPath:
         )
         decision = engine.evaluate(
             "book_appointment",
-            {"provider_id": "prov-1", "patient_id": PATIENT, "slot_start": SLOT_DT},
+            {
+                "provider_id": "prov-1",
+                "patient_id": PATIENT,
+                "slot_start": SLOT_DT,
+                "reason": REASON,
+            },
             case,
         )
         assert decision.verdict is Verdict.ALLOW
@@ -432,7 +513,7 @@ class TestValueTrustAndTheAutonomousPath:
         )
         decision = engine.evaluate(
             "book_appointment",
-            {"provider_id": "prov-1", "patient_id": "pat-1", "slot_start": 1.5},
+            {"provider_id": "prov-1", "patient_id": "pat-1", "slot_start": 1.5, "reason": REASON},
             case,
         )
         assert decision.verdict is Verdict.DENY
@@ -461,7 +542,12 @@ class TestValueTrustAndTheAutonomousPath:
         )
         decision = engine.evaluate(
             "book_appointment",
-            {"provider_id": "prov-1", "patient_id": PATIENT, "slot_start": SLOT},
+            {
+                "provider_id": "prov-1",
+                "patient_id": PATIENT,
+                "slot_start": SLOT,
+                "reason": REASON,
+            },
             case,
         )
         assert decision.verdict is Verdict.ALLOW
@@ -498,23 +584,33 @@ class TestValueTrustAndTheAutonomousPath:
         )
         decision = engine.evaluate(
             "book_appointment",
-            {"provider_id": "prov-1", "patient_id": "pat-1", "slot_start": SLOT},
+            {
+                "provider_id": "prov-1",
+                "patient_id": "pat-1",
+                "slot_start": SLOT,
+                "reason": REASON,
+            },
             case,
         )
         assert decision.verdict is Verdict.DENY
         assert decision.reason_code is ReasonCode.WRONG_CASE_STATE
 
-    def test_a_missing_required_argument_fails_args_present(self, engine: PolicyEngine) -> None:
-        """Retargeted onto ``fetch_document``, which is where ``args_present`` still lives.
+    def test_a_missing_required_argument_is_refused_as_an_incomplete_call(
+        self, engine: PolicyEngine
+    ) -> None:
+        """Renamed twice now, and each rename records where the responsibility moved.
 
-        It used to omit ``patient_id`` from a booking, on the strength of
+        It began by omitting ``patient_id`` from a booking, on the strength of
         ``allow-booking-on-validated-slot``'s ``args_present: [patient_id]`` clause. Session J
-        replaced that clause with a trust requirement, so the booking is now refused
-        ``INSUFFICIENT_FACT_TRUST`` by ``deny-booking-for-unverified-patient`` before the ``ALLOW``
-        rule is reached — a stronger refusal for a better reason, and no longer a test of this
-        clause. Preserving the old shape here would have been preserving obsolete booking semantics
-        under a name that describes something else;
-        ``tests/test_booking_authority.py`` covers the booking behaviour.
+        replaced that clause with a trust requirement, so it was retargeted onto ``fetch_document``,
+        which is where ``args_present`` still lives. Session P moved it once more: an omitted key
+        can no longer reach ``args_present`` at all, because ``evaluate`` refuses an incomplete
+        argument map before any rule is considered.
+
+        The verdict is unchanged — ``DENY`` / ``NO_RULE_MATCH`` either way — which is exactly why
+        the cause has to be asserted. ``args_present``'s own live coverage is
+        :meth:`test_an_empty_argument_does_not_satisfy_args_present` below, where the key is
+        supplied and the value is not.
         """
         case = make_case(state=CaseState.GATHERING_EVIDENCE)
 
@@ -522,6 +618,8 @@ class TestValueTrustAndTheAutonomousPath:
 
         assert decision.verdict is Verdict.DENY
         assert decision.reason_code is ReasonCode.NO_RULE_MATCH
+        assert "without declared argument" in decision.diagnostic
+        assert "document_id" in decision.diagnostic
 
     def test_an_empty_argument_does_not_satisfy_args_present(self, engine: PolicyEngine) -> None:
         decision = engine.evaluate("fetch_document", {"document_id": ""}, _planning())
@@ -668,22 +766,22 @@ class TestPurity:
     def test_the_case_is_not_mutated(self, engine: PolicyEngine) -> None:
         case = _planning(trusted_fact("caregiver_email", CLINIC))
         before = case.model_dump()
-        engine.evaluate("send_email", {"to": CLINIC}, case)
+        engine.evaluate("send_email", {"to": CLINIC, "subject": SUBJECT, "body": BODY}, case)
         assert case.model_dump() == before
         assert case.version == 0
         assert case.state is CaseState.PLANNING
         assert case.timeline == ()
 
     def test_the_arguments_are_not_mutated(self, engine: PolicyEngine) -> None:
-        args = {"to": ATTACKER, "subject": "s"}
+        args = {"to": ATTACKER, "subject": SUBJECT, "body": BODY}
         engine.evaluate("send_email", args, _planning())
-        assert args == {"to": ATTACKER, "subject": "s"}
+        assert args == {"to": ATTACKER, "subject": SUBJECT, "body": BODY}
 
     def test_the_decision_holds_a_copy_of_the_arguments(self, engine: PolicyEngine) -> None:
-        args = {"to": ATTACKER}
+        args = {"to": ATTACKER, "subject": SUBJECT, "body": BODY}
         decision = engine.evaluate("send_email", args, _planning())
         args["to"] = "changed"
-        assert decision.args == {"to": ATTACKER}
+        assert decision.args == {"to": ATTACKER, "subject": SUBJECT, "body": BODY}
 
 
 class TestDecisionDiagnostics:
@@ -693,20 +791,30 @@ class TestDecisionDiagnostics:
         from careloop.provenance import ArgClass
 
         case = _planning(make_fact("caregiver_email", ATTACKER, TrustLevel.CONTROLLED))
-        decision = engine.evaluate("send_email", {"to": ATTACKER, "subject": "s"}, case)
-        assert decision.arg_classes == {"to": ArgClass.DESTINATION, "subject": ArgClass.VALUE}
+        args = {"to": ATTACKER, "subject": SUBJECT, "body": BODY}
+        decision = engine.evaluate("send_email", args, case)
+        assert decision.arg_classes == {
+            "to": ArgClass.DESTINATION,
+            "subject": ArgClass.VALUE,
+            "body": ArgClass.VALUE,
+        }
         assert decision.arg_trust == {
             "to": TrustLevel.CONTROLLED,
             "subject": TrustLevel.UNTRUSTED,
+            "body": TrustLevel.UNTRUSTED,
         }
-        assert decision.args == {"to": ATTACKER, "subject": "s"}
+        assert decision.args == args
 
     def test_a_matched_decision_carries_the_rule_diagnostic(self, engine: PolicyEngine) -> None:
-        decision = engine.evaluate("send_email", {"to": ATTACKER}, _planning())
+        decision = engine.evaluate(
+            "send_email", {"to": ATTACKER, "subject": SUBJECT, "body": BODY}, _planning()
+        )
         assert "DESTINATION-class" in decision.diagnostic
 
     def test_str_renders_without_argument_values(self, engine: PolicyEngine) -> None:
-        decision = engine.evaluate("send_email", {"to": ATTACKER, "body": "secret"}, _planning())
+        decision = engine.evaluate(
+            "send_email", {"to": ATTACKER, "subject": SUBJECT, "body": "secret"}, _planning()
+        )
         rendered = str(decision)
         assert ATTACKER not in rendered
         assert "secret" not in rendered

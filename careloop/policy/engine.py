@@ -33,6 +33,29 @@ The text an argument is reduced to before that lookup comes from
 always read it from this module. It lives in ``provenance`` because tool idempotency keys derive
 from the same reduction, and one value must not have two spellings.
 
+**Completeness comes before all of it.** A verdict is only meaningful for a *complete* tool call, so
+an argument map whose keys are not exactly the ones the registry declares is refused before trust is
+resolved, before an approval is consulted and before any rule is matched. Undeclared arguments were
+always refused that way; arguments the tool declares and the call omits were not, and session P
+found what the missing half cost. Ten of the thirteen declared arguments were denied when omitted,
+but only because a rule happened to name each of them and read the absence as ``UNTRUSTED``; the
+three that no rule names — ``send_email.subject``, ``send_email.body`` and
+``book_appointment.reason``, which carry no ``trust_key`` and by design cannot — went the other way.
+A booking without its reason reached ``ALLOW`` autonomously on the one tool whose effect is
+genuinely external, and an email without its subject or body reached ``ALLOW`` once a caregiver's
+approval covered the incomplete map, so the policy layer considered a malformed capability approved.
+Nothing incomplete could execute — ``ToolSet.<tool>(**args)`` raises ``TypeError`` before the
+executor — and nothing incomplete could be proposed, because
+:meth:`careloop.agents.schemas.PlannerIntentBase._bind_arguments_to_the_chosen_tool` rebuilds a
+proposal's arguments as exactly ``spec.arg_names``. The defect was that the authority layer issued
+verdicts about objects that are not tool calls, with an argument-binding accident in another layer
+as the only thing between one of those verdicts and an effect.
+
+**Key presence, and nothing else.** ``{"body": ""}`` is a complete ``send_email`` call: the model
+named the argument and put nothing in it, which is a statement about the *value*, and the trust
+rules and ``args_present`` already answer those. Reading truthiness here would conflate syntactic
+completeness with semantic validity and take work away from the rules that own it.
+
 **Match ordering**, fixed here and not configurable from YAML: explicit ``DENY``, then
 ``REQUIRE_HUMAN``, then ``ALLOW``, then a default ``DENY``. A rules file that could reorder its own
 precedence could be talked into promoting an ``ALLOW`` above a ``DENY``.
@@ -101,8 +124,12 @@ def _condition_holds(
     if condition.case_state_not_in and case.state in condition.case_state_not_in:
         return False
 
-    # An omitted argument resolves UNTRUSTED rather than skipping the clause, so a missing
-    # destination is denied instead of slipping past the guard that names it.
+    # An argument the map does not carry resolves UNTRUSTED rather than skipping the clause. That
+    # is defence in depth rather than the live path: since session P, `evaluate` refuses an argument
+    # map missing a declared key before any condition is read, so this default is unreachable
+    # through the engine for a *declared* argument. It is kept because it is the fail-closed
+    # direction and because a rule may name an argument the tool does not declare — which the loader
+    # refuses at startup, and which this would refuse again if one ever got past it.
     for predicate in condition.arg_trust_below:
         if at_least(trust.get(predicate.arg, TrustLevel.UNTRUSTED), predicate.level):
             return False
@@ -196,6 +223,33 @@ class PolicyEngine:
                 diagnostic=(
                     f"tool {tool_name!r} was called with undeclared argument(s) "
                     f"{', '.join(undeclared)}; undeclared arguments have no argument class"
+                ),
+            )
+
+        missing = sorted(spec.arg_names - set(supplied))
+        if missing:
+            # The symmetric half, and it was absent until session P. Ten of the thirteen declared
+            # arguments were denied when omitted, but by accident: each happens to be named by a
+            # rule, so its absence surfaced as UNTRUSTED through the ``trust.get(arg, UNTRUSTED)``
+            # default and the rule refused it. The three named by no rule — ``send_email.subject``,
+            # ``send_email.body`` and ``book_appointment.reason``, which carry no ``trust_key`` and
+            # by design cannot — went the other way: a booking without its reason reached ALLOW
+            # autonomously, and an email without its subject or body reached ALLOW once a
+            # caregiver's approval covered the incomplete map. The approval subsystem was right and
+            # unchanged; what was wrong is that the engine ever reached it.
+            #
+            # Key presence and nothing else. ``{"body": ""}`` is a complete call — the model named
+            # the argument and put nothing in it, which is a statement about the *value*, and the
+            # trust rules and ``args_present`` already answer those. Reading truthiness here would
+            # conflate syntactic completeness with semantic validity and quietly take work away
+            # from the rules that own it.
+            return self._default_deny(
+                tool_name,
+                supplied,
+                diagnostic=(
+                    f"tool {tool_name!r} was called without declared argument(s) "
+                    f"{', '.join(missing)}; a policy verdict is only meaningful for a complete "
+                    f"tool call"
                 ),
             )
 

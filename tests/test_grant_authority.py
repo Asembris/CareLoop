@@ -43,6 +43,7 @@ from helpers import trusted_fact
 from careloop.graph.trusted import configured
 from careloop.policy import (
     RULES_PATH,
+    PolicyConfigError,
     PolicyEngine,
     ReasonCode,
     Verdict,
@@ -50,6 +51,10 @@ from careloop.policy import (
     load_rules_from_mapping,
     uncovered_authority_arguments,
 )
+
+# From the module rather than the package: the validation steps are not part of `careloop.policy`'s
+# surface, so composing them by hand is a visible act. See `careloop/policy/loader.py`.
+from careloop.policy.loader import parse_rules, validate_rules_resolve
 from careloop.provenance import Fact, Provenance, TrustLevel
 from careloop.state import Case, CaseState
 from careloop.state.case import Approval, ApprovalStatus
@@ -371,8 +376,16 @@ def historical_ruleset() -> Any:
     2. ``allow-approved-portal-access-grant`` loses its ``portal_id`` trust predicate.
 
     Everything else — argument classes, the state clauses, ``args_approved``, the match ordering,
-    the loader's validation against the registry — is the shipped system. Same discipline as
+    the rules' resolution against the registry — is the shipped system. Same discipline as
     ``tests/test_booking_authority.py::historical_ruleset``.
+
+    **Built without the authority-coverage step, because that step now refuses it.** This ruleset is
+    exactly the one session N's loader invariant exists to reject, and
+    :class:`TestTheProductionLoaderRefusesTheHistoricalHole` asserts that it does. What this
+    function is for is the *runtime* question — what the engine decides once such a ruleset is in
+    front of it — and answering that requires constructing the thing the loader will not produce.
+    The two properties are separate and each has its own evidence: `rules.yaml` being correct is not
+    the same claim as an incorrect `rules.yaml` being unloadable.
     """
     raw: Any = yaml.safe_load(RULES_PATH.read_text(encoding="utf-8"))
 
@@ -394,7 +407,43 @@ def historical_ruleset() -> Any:
         edited += 1
     assert edited == 1
 
-    return load_rules_from_mapping(raw, REGISTRY)
+    ruleset = parse_rules(raw)
+    validate_rules_resolve(ruleset, REGISTRY)
+    return ruleset
+
+
+class TestTheProductionLoaderRefusesTheHistoricalHole:
+    """The load-time half, and it is a different claim from the runtime half.
+
+    ``rules.yaml`` being correct is what refuses the grant today. This is what stops an incorrect
+    ``rules.yaml`` from ever reaching a :class:`~careloop.policy.engine.PolicyEngine` again — so the
+    hole cannot be reintroduced by an edit, only by an edit *and* deleting an invariant.
+    """
+
+    def test_the_historical_ruleset_cannot_be_loaded_normally(self) -> None:
+        raw: Any = yaml.safe_load(RULES_PATH.read_text(encoding="utf-8"))
+        raw["rules"] = [rule for rule in raw["rules"] if rule["id"] != DENY_RULE]
+        for rule in raw["rules"]:
+            if rule["id"] == ALLOW_RULE:
+                rule["when"]["arg_trust_at_least"] = [
+                    predicate
+                    for predicate in rule["when"]["arg_trust_at_least"]
+                    if predicate["arg"] != "portal_id"
+                ]
+
+        with pytest.raises(PolicyConfigError) as raised:
+            load_rules_from_mapping(raw, REGISTRY)
+
+        message = str(raised.value)
+        assert ALLOW_RULE in message
+        assert "grant_portal_access.portal_id" in message
+        assert str(TrustLevel.TRUSTED) in message
+
+    def test_the_shipped_ruleset_loads(self) -> None:
+        """Vacuity: the loader is refusing this ruleset, not every ruleset."""
+        raw: Any = yaml.safe_load(RULES_PATH.read_text(encoding="utf-8"))
+
+        assert load_rules_from_mapping(raw, REGISTRY).rule_ids == default_rules().rule_ids
 
 
 @pytest.fixture

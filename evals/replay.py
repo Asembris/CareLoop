@@ -36,6 +36,7 @@ import sys
 from collections.abc import AsyncGenerator, AsyncIterable, Iterable, Sequence
 from typing import Any, Final
 
+import yaml
 from pydantic import BaseModel, ConfigDict
 from strands.models import Model
 from strands.types.content import Message
@@ -46,7 +47,7 @@ from careloop.agents.planner import PlannerAgent
 from careloop.agents.schemas import PlannerIntent, TriageCategory, TriageResult, Urgency
 from careloop.agents.triage import TriageAgent
 from careloop.policy.engine import PolicyEngine
-from careloop.policy.loader import load_rules_from_text
+from careloop.policy.loader import parse_rules, validate_rules_resolve
 from careloop.tools.registry import REGISTRY
 from evals.capture import CapturedRun, attacker_derived_effects
 from evals.corpus import AttackOrigin, AttackRecord, Corpus, CorpusError, load_corpus
@@ -77,10 +78,16 @@ _ROLE = re.compile(r"\b[a-z]+(?:_[a-z]+)+\b")
 
 #: Every rule replaced by permission. Used only by the vacuity proof.
 #:
-#: A real ``RuleSet`` through the real loader and the real engine, not a stub that returns
-#: ``ALLOW``: the mutation under test is "the rules permit this", and a hand-written stub would
-#: also bypass argument-class validation, canonicalisation and the state clauses, making the
-#: mutant differ from the shipped system in more ways than the one being proved.
+#: A real ``RuleSet`` and the real engine, not a stub that returns ``ALLOW``: the mutation under
+#: test is "the rules permit this", and a hand-written stub would also bypass argument-class
+#: validation, canonicalisation and the state clauses, making the mutant differ from the shipped
+#: system in more ways than the one being proved.
+#:
+#: **This ruleset is deliberately not production-loadable**, and has not been since session N. An
+#: unconditional ``ALLOW`` over four external-effect tools names none of their destinations, which
+#: is exactly what :func:`careloop.policy.loader.validate_authority_coverage` refuses. That is not
+#: an obstacle to work around: it is the invariant agreeing with this file about what removing the
+#: authority layer means. See :func:`permissive_engine`.
 PERMISSIVE_RULES: Final[str] = """
 version: 1
 rules:
@@ -99,11 +106,35 @@ def permissive_engine() -> PolicyEngine:
     """An engine that permits every tool call. **Never used by a measurement.**
 
     Built over the shipped :data:`~careloop.tools.registry.REGISTRY`, so the mutant differs from
-    the real engine in its *rules* and in nothing else — same argument classes, same
-    canonicalisation, same load-time validation that a rule may not name a tool the registry does
-    not declare.
+    the real engine in its *rules* and in nothing else — same schema, same tool and argument
+    resolution, same argument classes, same canonicalisation, same :class:`PolicyEngine`.
+
+    **The three loading steps, composed by hand, with the third deliberately absent.** Since session
+    N the production loader also enforces authority coverage: every ``ALLOW`` rule that can
+    authorise an external-effect tool must require each of its ``DESTINATION`` and ``AUTHORITY``
+    arguments at ``TRUSTED``. :data:`PERMISSIVE_RULES` violates that six times over, and *that is
+    the mutation* — after the invariant, "the rules permit everything" and "the ruleset is invalid"
+    are the same statement, so this mutant cannot be built through
+    :func:`careloop.policy.loader.load_rules_from_mapping` and does not try to.
+
+    What it omits is one call and nothing else. :func:`~careloop.policy.loader.parse_rules` still
+    rejects a malformed document and
+    :func:`~careloop.policy.loader.validate_rules_resolve` still rejects an unknown tool, an
+    undeclared argument, a trust predicate on an argument with no ``trust_key``, and an argument
+    class that contradicts the registry — all measured in
+    ``tests/test_evals_replay.py::TestTheBypassIsOnlyTheCoverageInvariant``.
+
+    Written as a missing line rather than as a parameter, on purpose. There is no
+    ``skip_validation`` flag anywhere in the loader, because a flag is a thing another caller can
+    pass; an omission is a thing a sweep can find, and
+    ``tests/test_policy_coverage.py::TestOnlyTheEvaluationMutantSkipsCoverage`` is that sweep.
     """
-    return PolicyEngine(load_rules_from_text(PERMISSIVE_RULES, REGISTRY))
+    ruleset = parse_rules(yaml.safe_load(PERMISSIVE_RULES))
+    validate_rules_resolve(ruleset, REGISTRY)
+    # validate_authority_coverage is deliberately NOT called. See the docstring above: the ruleset
+    # violating it is the property under test, and this is the only place in the repository that
+    # omits it.
+    return PolicyEngine(ruleset, REGISTRY)
 
 
 def _first(pattern: re.Pattern[str], text: str, fallback: str) -> str:

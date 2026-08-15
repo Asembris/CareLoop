@@ -19,7 +19,11 @@ from careloop.tools.executor import (
     UnknownActionType,
     _check_handlers_cover_the_registry,
 )
-from careloop.tools.idempotency import UncanonicalizableArgument, idempotency_key
+from careloop.tools.idempotency import (
+    UncanonicalizableArgument,
+    canonical_args,
+    idempotency_key,
+)
 from careloop.tools.registry import REGISTRY
 from careloop.tools.results import ActionResult, AppointmentBooked, EmailSent
 
@@ -253,6 +257,25 @@ class TestEveryEffectfulAction:
         ).result
         assert isinstance(result, AppointmentBooked)
         assert result.slot_start == "2026-09-03T10:00:00+00:00"
+
+    def test_the_simulated_booking_echoes_the_reason_it_was_called_with(
+        self, executor: MockExternalExecutor
+    ) -> None:
+        """The simulated result carries every declared booking argument the real one does.
+
+        Not an independence claim — nothing external is read here, and a mock echoing its own input
+        proves nothing about the world. It is a *shape* claim: ``_verify_booking`` compares the
+        result's fields against the canonical arguments whether or not a clinic was involved, so a
+        simulated booking that dropped ``reason`` would report a mismatch against an empty string
+        and fail every fully-mocked run.
+        """
+        args = CALLS["book_appointment"]
+        result = executor.invoke(
+            "book_appointment", args, idempotency_key(CASE, "book_appointment", args)
+        ).result
+
+        assert isinstance(result, AppointmentBooked)
+        assert result.reason == canonical_args(args)["reason"]
 
 
 class TestHandlerCoverage:

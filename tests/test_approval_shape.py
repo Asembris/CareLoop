@@ -44,6 +44,18 @@ from careloop.state.case import Approval
 THE_ONLY_WRITER = {("careloop/graph/nodes.py", "_request_approval")}
 
 PACKAGE = Path(__file__).resolve().parent.parent / "careloop"
+RUNNER = PACKAGE / "graph" / "runner.py"
+
+
+def decide_source() -> str:
+    """``_decide``'s body, normalised through the AST so formatting cannot affect the match."""
+    tree = ast.parse(RUNNER.read_text(encoding="utf-8"))
+    decide = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_decide"
+    )
+    return ast.unparse(decide)
 
 
 def construction_sites(source: str) -> set[str]:
@@ -111,6 +123,33 @@ class TestOnlyOnePlaceCreatesAnApproval:
 
     def test_a_writer_hiding_at_module_scope_would_be_caught_too(self) -> None:
         assert construction_sites("from x import Approval\nSPARE = Approval()\n") == {"module"}
+
+
+class TestADecisionReplacesOneRecordByPosition:
+    """The companion guard: one writer, and one record written.
+
+    Behaviour is pinned by ``tests/test_approval_identity.py`` and proven non-vacuous by the M2
+    mutant. This is the cheap structural backstop for the one line that carries the property, kept
+    deliberately small — the rebuild is keyed on a position, so a future edit that keys it on the
+    identifier again fails here as well as there.
+
+    Identifiers are unique for anything written after session K, so on a fresh case the two forms
+    behave identically and only the persisted duplicates tell them apart. That is exactly why this
+    is worth a structural test: the difference is invisible in ordinary use.
+    """
+
+    def test_the_rebuild_is_keyed_on_a_position(self) -> None:
+        assert "for index, existing in enumerate(case.approvals)" in decide_source()
+
+    def test_it_is_not_keyed_on_the_identifier(self) -> None:
+        assert "existing.approval_id == approval_id" not in decide_source()
+
+    def test_the_matcher_reads_the_function_it_claims_to(self) -> None:
+        """Vacuity: a lookup that found the wrong function would pass both tests above."""
+        source = decide_source()
+
+        assert source.startswith("def _decide(")
+        assert "raise AmbiguousApproval" in source
 
 
 class TestWhatMakesAnApprovalApprovable:

@@ -417,7 +417,16 @@ class TestARuleMayNotRequireTrustOfAnUntypedArgument:
         assert ruleset.rule_ids == {"require-trusted-body"}
 
     def test_args_present_on_an_untyped_argument_is_still_permitted(self) -> None:
-        """Presence is not a trust claim, so it needs no key."""
+        """Presence is not a trust claim, so it needs no key.
+
+        The ``to`` clause is here because this is an ``ALLOW`` rule over an external-effect tool,
+        and since session N every such rule must require each of that tool's ``DESTINATION``
+        arguments at ``TRUSTED`` or the loader refuses it. It does not weaken what is being proved:
+        ``body`` is still named only in ``args_present``, still declares no ``trust_key``, and the
+        rule still loads — which is the whole property. Making the ruleset satisfy the invariant is
+        the right repair; exempting it would have made this test the one place a rule can authorise
+        an email without naming its recipient.
+        """
         ruleset = load_rules_from_text(
             "version: 1\nrules:\n"
             "  - id: allow-with-a-body\n"
@@ -425,6 +434,9 @@ class TestARuleMayNotRequireTrustOfAnUntypedArgument:
             "    tools: [send_email]\n"
             "    when:\n"
             "      args_present: [body]\n"
+            "      arg_trust_at_least:\n"
+            "        - arg: to\n"
+            "          level: TRUSTED\n"
             "    diagnostic: d\n",
             REGISTRY,
         )

@@ -34,7 +34,7 @@ from careloop.policy.gate import PolicyGate
 from careloop.policy.gated import GatedToolSet
 from careloop.policy.hook import PolicyHook, policy_registry
 from careloop.policy.verdicts import ReasonCode
-from careloop.state.case import Approval, ApprovalStatus, Case, TimelineKind
+from careloop.state.case import Approval, ApprovalStatus, Case, CaseState, TimelineKind
 from careloop.state.store import CaseStore
 from careloop.tools.callables import ToolSet
 from careloop.tools.clinic import ClinicClient, ClinicRefused, ClinicUnavailable, clinic_executor
@@ -102,6 +102,44 @@ def proposal_for(case: Case, digest: str) -> Proposal | None:
         )
         if proposal.digest == digest:
             return proposal
+    return None
+
+
+class Handoff(BaseModel):
+    """A case CareLoop has stopped on, with no safe action left to take.
+
+    The counterpart of an :class:`~careloop.state.case.Approval` and deliberately not one. An
+    approval is a capability — it releases exactly the call its digest covers. This is a status:
+    every tool was proposed and refused, so there is no call, nothing to authorise, and nothing any
+    decision could mean. It carries a reason code and a time, which is all a caregiver's card needs
+    and all the audit trail has to say.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    reason_code: str
+    at: datetime
+
+
+def manual_handoff(case: Case) -> Handoff | None:
+    """The outstanding manual handoff on ``case``, or ``None``.
+
+    Read from the ``MANUAL_HANDOFF_REQUIRED`` entry rather than from a field, for the reason
+    :func:`latest_proposal` and :func:`latest_delivery` are: the timeline already records it,
+    durably, in order and append-only, and a second copy on ``Case`` would be a second answer to a
+    question the trail already answers.
+
+    Outstanding means ``AWAITING_HUMAN`` with nothing pending. Both clauses are load-bearing rather
+    than belt-and-braces. A case that parked, was reopened by a later event and went on to park for
+    a genuine approval still carries the old entry, and reporting a handoff *beside* a live decision
+    request would put two cards on one case. And the state check is what makes "outstanding" mean
+    now rather than ever.
+    """
+    if case.state is not CaseState.AWAITING_HUMAN or case.pending_approval() is not None:
+        return None
+    for event in reversed(case.timeline):
+        if event.kind is TimelineKind.MANUAL_HANDOFF_REQUIRED:
+            return Handoff(reason_code=event.payload["reason_code"], at=event.at)
     return None
 
 
@@ -297,6 +335,7 @@ def _empty_registry():
 __all__ = [
     "ConflictingExecutors",
     "Delivery",
+    "Handoff",
     "Proposal",
     "RunContext",
     "approval_for",
@@ -304,6 +343,7 @@ __all__ = [
     "is_approved",
     "latest_delivery",
     "latest_proposal",
+    "manual_handoff",
     "prior_denials",
     "proposal_for",
 ]

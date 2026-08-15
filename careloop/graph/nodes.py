@@ -692,41 +692,45 @@ def _every_tool_has_been_refused(case: Case) -> bool:
 
 
 def _park_with_nothing_safe_to_do(case: Case, now) -> Case:
-    """Ask the caregiver what to do, rather than failing.
+    """Stop, and hand the case to a person. **No approval is raised, because there is nothing to
+    approve.**
 
     "Every available action was correctly refused" is the system working exactly as designed, and
     on a poisoned case it is the best available outcome. Reporting a defence as a fault would be
     wrong in the product and wrong in the audit trail, so this parks rather than fails: the agent
-    hit a wall, refused everything, and asked a human instead of forcing an action.
+    hit a wall, refused everything, and said so.
 
-    The approval carries no ``args_digest`` that authorises anything, because there is no proposal
-    to authorise — it is a request for direction, not a request to proceed with a specific call.
-    Approving it releases nothing on its own.
+    **This used to raise an ``Approval`` with both identifying fields empty, and that was the
+    defect.** The intent was right — the docstring said approving it released nothing — but an
+    ``Approval`` is not a notification, and every consumer downstream reads a pending one as a
+    decision waiting to be made. :func:`careloop.graph.runner._decide` did exactly that: it moved
+    the case to ``READY_TO_EXECUTE``, where the execute node picked up ``latest_proposal`` — which
+    at this point is by construction a proposal policy has just **denied** — and dispatched it. The
+    tool boundary refused it a second time and the case ended ``FAILED``, with a timeline entry
+    blaming a disagreement between CareLoop's two enforcement points. They had never disagreed.
+    Nothing had ever allowed that call; the runner had released a case with no authority behind it.
+
+    So the handoff is a **status**, not a capability, and it lives where statuses live: the case's
+    state and one timeline entry. There is no approval id, so there is nothing for any client to
+    post a decision to — the refusal does not depend on a caregiver being shown the right buttons.
+
+    What a caregiver sees is unchanged: the case is still ``AWAITING_HUMAN``, still in the "Needs
+    You" section, and :func:`careloop.api.projections.decision_view` still renders a card. It reads
+    the entry written here rather than an approval, which is why removing the approval cost the UI
+    nothing.
     """
-    approval = Approval(
-        approval_id=approval_id_for(f"no-safe-action:{case.case_id}:{len(case.timeline)}"),
-        tool_name="",
-        args_digest="",
-        reason_code=str(ReasonCode.NO_SAFE_ACTION_AVAILABLE),
-        status=ApprovalStatus.PENDING,
-        requested_at=now,
-    )
-    case = case.model_copy(update={"approvals": (*case.approvals, approval)})
     case = append_event(
         case,
-        kind=TimelineKind.APPROVAL_REQUESTED,
+        kind=TimelineKind.MANUAL_HANDOFF_REQUIRED,
         actor="policy",
-        summary="no safe action is available; a caregiver decision is needed",
+        summary="no safe action is available; manual follow-up is required",
         diagnostic=(
             f"every tool in the registry has been proposed and refused: "
             f"{sorted(REGISTRY.names)}. Parked rather than failed — the refusals are the system "
-            f"working, and FAILED means something broke."
+            f"working, and FAILED means something broke. No approval is raised: there is no "
+            f"proposal to authorise, and a record that authorises nothing must not be decidable."
         ),
-        payload={
-            "approval_id": approval.approval_id,
-            "tool_name": "",
-            "reason_code": approval.reason_code,
-        },
+        payload={"reason_code": str(ReasonCode.NO_SAFE_ACTION_AVAILABLE)},
         now=now,
     )
     return transition(

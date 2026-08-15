@@ -10,6 +10,7 @@ from careloop.graph.builder import (
 from careloop.graph.conditions import when_case_is, when_case_is_not
 from careloop.graph.context import (
     Delivery,
+    Handoff,
     Proposal,
     RunContext,
     approval_for,
@@ -17,6 +18,7 @@ from careloop.graph.context import (
     is_approved,
     latest_delivery,
     latest_proposal,
+    manual_handoff,
     prior_denials,
     proposal_for,
 )
@@ -34,6 +36,7 @@ from careloop.graph.extract import (
 from careloop.graph.runner import (
     ApprovalAlreadyDecided,
     NoSuchApproval,
+    NotAnApprovableAction,
     RunResult,
     approve,
     context_for,
@@ -63,7 +66,9 @@ __all__ = [
     "VERIFIERS",
     "ApprovalAlreadyDecided",
     "Delivery",
+    "Handoff",
     "NoSuchApproval",
+    "NotAnApprovableAction",
     "Proposal",
     "RunContext",
     "RunResult",
@@ -81,6 +86,7 @@ __all__ = [
     "is_approved",
     "latest_delivery",
     "latest_proposal",
+    "manual_handoff",
     "open_case",
     "prior_denials",
     "proposal_for",

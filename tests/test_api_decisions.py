@@ -14,6 +14,8 @@ from api_helpers import CASE_ID, EMAIL, api_client, finished_store, intent, park
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from helpers import make_case
+from test_no_safe_action import CASE_ID as HANDOFF_CASE_ID
+from test_no_safe_action import handoff_store, historical_handoff_store
 
 from careloop.api.app import create_app, resume_event
 from careloop.api.app import decide as decide_directly
@@ -247,6 +249,100 @@ class TestDecisionsThatCannotBeMade:
 
         assert response.status_code == 409
         assert len(store.get(CASE_ID).actions) == 1
+
+
+class TestAManualHandoffCannotBeApprovedThroughTheApi:
+    """The backend half of open decision 19.
+
+    The frontend renders no Approve button for ``NO_SAFE_ACTION_AVAILABLE`` and that was the only
+    thing stopping this — a mitigation at the surface, not a fix. Anything that can reach the port
+    can post to the route, and the header it needs is an audit string anyone may claim.
+
+    A case parked this way *today* carries no approval at all, so there is no id to post; these
+    tests exercise the **historical** record, which is the only shape that can still reach
+    ``_decide`` with nothing to authorise.
+    """
+
+    def test_approving_a_historical_handoff_is_a_409(self) -> None:
+        store = historical_handoff_store()
+        approval_id = store.get(HANDOFF_CASE_ID).pending_approval().approval_id
+
+        with api_client(store) as client:
+            response = decide(client, "approve", approval_id, case_id=HANDOFF_CASE_ID)
+
+        assert response.status_code == 409
+        assert store.get(HANDOFF_CASE_ID).state is CaseState.AWAITING_HUMAN
+
+    def test_rejecting_a_historical_handoff_is_a_409_too(self) -> None:
+        store = historical_handoff_store()
+        approval_id = store.get(HANDOFF_CASE_ID).pending_approval().approval_id
+
+        with api_client(store) as client:
+            response = decide(client, "reject", approval_id, case_id=HANDOFF_CASE_ID)
+
+        assert response.status_code == 409
+        assert store.get(HANDOFF_CASE_ID).state is CaseState.AWAITING_HUMAN
+
+    def test_nothing_is_recorded_and_no_run_is_scheduled(self) -> None:
+        """All-or-nothing, the same property the in-flight check exists for.
+
+        ``decide`` records the decision and *then* schedules a run. A refusal that came after the
+        recording would leave a decision made, a case released and a caller told it was refused.
+        """
+        store = historical_handoff_store()
+        before = store.get(HANDOFF_CASE_ID)
+
+        with api_client(store) as client:
+            response = decide(
+                client, "approve", before.pending_approval().approval_id, case_id=HANDOFF_CASE_ID
+            )
+            run = client.get(f"/api/runs/{response.json().get('run_id', 'none')}")
+
+        after = store.get(HANDOFF_CASE_ID)
+        assert after.version == before.version
+        assert after.timeline == before.timeline
+        assert after.actions == ()
+        assert run.status_code == 404
+
+    def test_a_case_parked_today_offers_no_approval_at_all(self) -> None:
+        """The card renders; the id does not exist. Both halves are the point.
+
+        A caregiver must still see what CareLoop stopped on — the case is in "Needs You" and the
+        card says manual follow-up is required — while there is nothing for any client to post a
+        decision to. The frontend already refuses to draw the buttons; this is the half that does
+        not depend on which client is asking.
+        """
+        store = handoff_store()
+
+        with api_client(store) as client:
+            body = client.get(f"/api/cases/{HANDOFF_CASE_ID}").json()
+            response = decide(
+                client, "approve", "apr-no-safe-action:c", case_id=HANDOFF_CASE_ID, wait=0
+            )
+
+        assert body["state"] == "AWAITING_HUMAN"
+        assert body["section"] == NEEDS_YOU
+        assert body["approvals"] == []
+        assert body["decision"]["reason_code"] == "NO_SAFE_ACTION_AVAILABLE"
+        assert body["decision"]["approval_id"] == ""
+        assert response.status_code == 404
+        assert store.get(HANDOFF_CASE_ID).state is CaseState.AWAITING_HUMAN
+
+    def test_the_card_is_still_there_afterwards(self) -> None:
+        """Refused, not consumed. The caregiver still sees what CareLoop stopped on."""
+        store = historical_handoff_store()
+
+        with api_client(store) as client:
+            decide(
+                client,
+                "approve",
+                store.get(HANDOFF_CASE_ID).pending_approval().approval_id,
+                case_id=HANDOFF_CASE_ID,
+            )
+            sections = client.get("/api/cases").json()
+
+        (card,) = sections[NEEDS_YOU]
+        assert card["decision"]["reason_code"] == "NO_SAFE_ACTION_AVAILABLE"
 
 
 class TestADecisionDuringARunIsRefusedBeforeAnythingIsRecorded:

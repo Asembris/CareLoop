@@ -55,6 +55,18 @@ class TimelineKind(StrEnum):
     APPROVAL_REQUESTED = "APPROVAL_REQUESTED"
     APPROVAL_GRANTED = "APPROVAL_GRANTED"
     APPROVAL_REJECTED = "APPROVAL_REJECTED"
+    MANUAL_HANDOFF_REQUIRED = "MANUAL_HANDOFF_REQUIRED"
+    """Every available action was refused; CareLoop has stopped and a person must take over.
+
+    Deliberately **not** ``APPROVAL_REQUESTED``, which means *"I have one exact action and need
+    your authority for it."* This means *"I have no safe action left."* The two were written under
+    one kind until the parking stopped raising an :class:`Approval` for the second, and sharing a
+    kind was not merely imprecise: it put a claim in an append-only audit trail that was not true,
+    and left the strongest thing CareLoop does indistinguishable from the ordinary thing it does.
+
+    Since a handoff carries no approval, this entry is the whole durable record of it — the case's
+    state says a human is needed and this says why.
+    """
     ACTION_EXECUTED = "ACTION_EXECUTED"
     DUPLICATE_SUPPRESSED = "DUPLICATE_SUPPRESSED"
     VERIFICATION_PASSED = "VERIFICATION_PASSED"
@@ -91,7 +103,11 @@ class TimelineEvent(BaseModel):
 
 
 class Approval(BaseModel):
-    """A request for a caregiver decision, and its outcome."""
+    """A request for a caregiver decision about one exact proposed call, and its outcome.
+
+    **One exact call.** An approval that names no tool and covers no arguments authorises nothing,
+    because there is nothing for a caregiver to have decided about — see :attr:`is_actionable`.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -107,6 +123,27 @@ class Approval(BaseModel):
     requested_at: datetime = Field(default_factory=_utcnow)
     decided_at: datetime | None = None
     decided_by: str | None = None
+
+    @property
+    def is_actionable(self) -> bool:
+        """Whether this record identifies a call a decision could release.
+
+        Both halves are required and neither is redundant: the digest is what
+        :func:`careloop.state.case.Case.is_approved` matches on, and the tool name is what the
+        audit trail and the caregiver's card are written against.
+
+        **Derived rather than stored, and checked rather than validated.** A stored ``actionable``
+        flag could disagree with the record it describes; emptiness cannot. And a
+        ``model_validator`` refusing an empty ``tool_name`` would make
+        :meth:`Case.model_validate_json` raise on cases persisted before manual handoffs stopped
+        being written as approvals — turning a legacy row that is merely inert into a case that
+        cannot be read at all. So the refusal lives where a decision is made,
+        :func:`careloop.graph.runner._decide`, and reading stays total.
+
+        Nothing in CareLoop constructs a non-actionable approval any more. This exists for what is
+        already on disk, and as the predicate a second writer would have to defeat on purpose.
+        """
+        return bool(self.tool_name and self.args_digest)
 
 
 class ActionRecord(BaseModel):

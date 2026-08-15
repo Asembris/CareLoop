@@ -449,9 +449,10 @@ export interface DecisionCopy {
  *  `REASON_TEXT` written for the *planner* — "This action needs the caregiver's decision. Stop and
  *  await it." — which is the wrong register and the wrong reader.
  *
- *  `args` is the load-bearing input. An `Approval` stores only a digest, so the backend walks back
- *  to the `PLAN_PROPOSED` entry that digest came from; the card therefore names exactly the call
- *  that will be made. Losing that would leave a caregiver approving a tool name. */
+ *  `args` is the load-bearing input. An `Approval` stores `(tool_name, args_digest)`, so the
+ *  backend walks back to the `PLAN_PROPOSED` entry that pair came from — matching both halves, so
+ *  another tool's proposal cannot supply them — and the card therefore names exactly the call that
+ *  will be made. Losing that would leave a caregiver approving a tool name. */
 export function decisionCopy(
   reasonCode: string,
   toolName: string,

@@ -639,10 +639,16 @@ def _request_approval(case: Case, proposal: Proposal, decision: Decision, now) -
     The approval carries the *digest* of the arguments, not the arguments. A caregiver approves a
     specific action; recording only the tool name would let a later proposal for the same tool
     execute under it.
+
+    **The identifier is the request, not the action.** ``case.next_seq()`` is the position the
+    ``APPROVAL_REQUESTED`` entry written below will occupy, so the record and the audit entry that
+    announces it carry the same number by construction, and two requests on one case cannot collide
+    — see :func:`careloop.graph.context.approval_id_for` for why that used to be derived from the
+    digest and what it cost.
     """
     digest = proposal.digest
     approval = Approval(
-        approval_id=approval_id_for(digest),
+        approval_id=approval_id_for(case.next_seq()),
         tool_name=proposal.tool_name,
         args_digest=digest,
         reason_code=str(decision.reason_code),

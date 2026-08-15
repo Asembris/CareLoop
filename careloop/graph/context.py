@@ -192,13 +192,40 @@ def prior_denials(case: Case) -> tuple[tuple[str, ReasonCode], ...]:
     return tuple(seen)
 
 
-def approval_id_for(digest: str) -> str:
-    """A deterministic approval identifier, derived from the arguments it covers.
+def approval_id_for(seq: int) -> str:
+    """A durable identity for one *request* for human authority.
 
-    No clock and no randomness, so a case replayed from its own history produces the same
-    identifiers — which is what lets a test assert on one.
+    **Two identities are in play here and they are not the same thing.** ``args_digest`` says which
+    exact argument set is involved. This says which *occurrence of asking a caregiver* a decision is
+    about. Reproposing identical arguments after a refusal is one action asked twice, which is two
+    requests — and it has to be two identifiers, or a decision about the second names the first as
+    well.
+
+    It was ``f"apr-{digest[:16]}"`` until this commit, which made the identifier a pure function of
+    the action. Session K: a rejected proposal, reproposed unchanged and then approved, produced two
+    records under one id, and :func:`careloop.graph.runner._decide` rewrote both — turning one
+    caregiver's recorded refusal into a different caregiver's approval, timestamp and name included.
+    Nothing about authority moved, because ``is_approved`` reads the most recent record matching the
+    digest; what moved was the audit trail, in the one direction an append-only trail must not.
+
+    ``seq`` is the position the ``APPROVAL_REQUESTED`` entry recording this request will occupy on
+    the case timeline. The timeline is append-only, so two requests on one case cannot share it:
+    **uniqueness here is structural rather than a collision argument**, which is why nothing is
+    hashed and nothing is truncated. It is also why there is no clock, no random source and no
+    counter — a case replayed from its own history produces the same identifiers, which is what lets
+    a test assert on one and what keeps ``evals/`` and ``bench/`` reproducible.
+
+    The case id is deliberately absent. An approval identifier is only ever resolved inside one
+    case — the route is ``/api/cases/{case_id}/decisions/{approval_id}/…`` and
+    :func:`careloop.graph.runner._decide` scans one case's approvals — so scoping it any wider would
+    lengthen every identifier to buy a property nothing reads.
+
+    The digest is deliberately absent too, and that is a change in kind rather than in length. An
+    identifier carrying a fragment of the digest reads as though it names the action, which is
+    exactly the conflation this repair exists to end. What the action is stays where it belongs: on
+    :class:`~careloop.state.case.Approval`, in full, as ``args_digest``.
     """
-    return f"apr-{digest[:16]}"
+    return f"apr-{seq}"
 
 
 def approval_for(case: Case, digest: str) -> Approval | None:

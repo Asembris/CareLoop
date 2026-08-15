@@ -295,10 +295,45 @@ two pending records raises `AmbiguousApproval` and moves nothing. No migration a
 history — persisted ids stay exactly as they are. The two halves are independently load-bearing and
 have separate mutants; `tests/test_approval_identity.py` holds both.
 
-**The identity claim is scoped to the request, not to authority.** `approval_for` and `is_approved`
-still match on `args_digest` alone and do **not** require `tool_name`; that is unchanged here and is
-the next approval-authority question, not a solved one. Do not describe `(tool_name, args_digest)`
-as the enforced action identity until it is.
+**Human approval is a capability for one exact tool call, and both halves are matched.** Approval
+lookup is keyed by the stored `tool_name` **and** the exact canonical `args_digest`; approvals for
+other tools do not participate, even when their argument digests are identical. `approval_id`
+identifies the occurrence of asking; `(tool_name, args_digest)` identifies the call the answer
+applies to, and the two are never folded together.
+
+Until session L that pair was half enforced. `args_digest` covers argument names and canonical
+values and *nothing else* — not the tool, not the case — so `approval_for` and `is_approved` were
+asking "did a human approve an argument map that looks like this?", and `Approval.tool_name` was
+stored, audited and rendered without ever being matched. Not reachable under the shipped rules: the
+only tools that can raise a decision request, `send_email` and `grant_portal_access`, are the only
+tools whose rules read `args_approved`, and their argument names are disjoint — so the sole digest
+they could share is the empty one, which a `DENY` on the untrusted destination refuses before
+`REQUIRE_HUMAN` is ever considered. **Do not restate that as a defence.** It was an accident of
+registry shape, written down in no rule, and one same-shaped tool away from being live: a synthetic
+registry whose two tools declare one identical schema laundered `tool_a`'s approval into an `ALLOW`
+for `tool_b` through the real engine. The measurement that used to justify the shape — "no two tools
+share an argument-name set" — was also weaker than it read, since `evaluate` refuses only
+*undeclared* arguments and three shipped pairs share a name.
+
+So there is now **one** capability lookup, `Case.approval_for(tool_name, args_digest)`; the graph
+helpers delegate to it rather than carrying a second reversed scan, and `approved` takes the tool
+the engine is currently evaluating. `rules.yaml` did not change and must not: `args_approved` is a
+predicate the engine interprets, and naming the tool in YAML would make it a second source of truth
+a rule could contradict. Latest-match-wins is unchanged *within* one exact call, and the records for
+other tools that used to participate could shadow as well as leak — a rejection of `tool_b` revoked
+`tool_a`'s standing approval. `tests/test_approval_capability.py` holds both directions, and a
+mutant that removes tool matching **and nothing else** turns nine of its assertions red while every
+same-tool positive stays green. Nothing else in the suite moved, which is the honest measure of what
+was covering this before: nothing was.
+
+No migration, and none was possible to need — `Approval` already stored both fields, so a persisted
+record gains the stronger reading and keeps its identifier byte for byte.
+
+**`approval_for` and `is_approved` are the enforced action identity; `proposal_for` is not.** It
+still resolves the caregiver's decision card by digest alone. That is a display surface, it
+authorises nothing, and it was kept out of this patch on purpose so the authority property has one
+attributable cause — but a card is what a person reads before granting authority, so it is an open
+question rather than a settled one.
 
 **`careloop/api/` decides nothing.** It projects stored cases and calls `open_case`, `reopen_case`,
 `approve`, `reject` and `run_case`. The one thing it originates is *when* a run happens, and

@@ -3422,6 +3422,160 @@ Carry these forward. Nothing here is blocking the next commit except where it sa
     **Whoever builds the frontend needs an answer**, because the Needs You card renders an Approve
     button off `decision.reason_code` and this is the one value where pressing it is wrong.
 
+## Session I — 2026-08-15
+
+### Position
+
+One security defect, closed. **Trust was resolved by canonical value alone; it is now resolved by
+`(fact key, canonical value)`.** Nothing else about the authority layer moved — no rule gained or
+lost a requirement, no argument class changed, no new abstraction was introduced.
+
+**1917 passed, 37 skipped** — 1880 before, and the 37 new tests are the whole difference.
+`ruff check` and `ruff format --check` clean. `evals.replay` unchanged at **0 / 320** shipped and
+**320 / 320** allow-all. All three `resume_demo` phases reach their intended resting states.
+
+### The defect
+
+`resolve_trust(value, case)` matched on `fact.value` and never read `fact.key`. The question it
+actually answered was *"has this string ever been seen at this trust level, under any key at all?"*
+So a value that earned trust for one purpose satisfied a requirement for another. Reproduced
+against the **shipped** `rules.yaml`, `REGISTRY` and `TRUSTED_CONFIG`:
+
+| Case facts | Proposal | Verdict before | Now |
+|---|---|---|---|
+| `patient_id=PT-4417` CONTROLLED | `upload_document(document_id="PT-4417")` | **ALLOW** | DENY |
+| `document_id=doc-0004-receipt` CONTROLLED | `book_appointment(slot_start="doc-0004-receipt")` | **ALLOW** | DENY |
+| trusted config only | `grant_portal_access(role="PORTAL-NORTHGATE-RECORDS")` | **REQUIRE_HUMAN** | DENY |
+| trusted config only | `send_email(to="PROV-NORTHGATE-CARDIOLOGY")` | **REQUIRE_HUMAN** | DENY |
+
+**The third is the serious one.** `deny-authority-grant-below-trusted` is the system's only
+`AUTHORITY` guard, and its own diagnostic argued a role "can never resolve TRUSTED" because
+`AUTHORITY` is absent from `PROMOTABLE_ARG_CLASSES`. That argument is about *promotion* and is
+correct. It said nothing about *collision*, and naming the configured portal id as a role walked
+straight past it with no promotion involved and nothing but trusted configuration on the case.
+
+**It was reachable, not theoretical.** `planner_user_prompt` renders `fact {key}: {value}` for
+every fact, so the planner is handed the three configured literals in its own prompt, and
+`PlannerIntentBase` lets it put any string in any declared argument of the tool it chooses.
+
+The second row reached the clinic over HTTP. Only Demo World's own "this clinic offers no slot at
+…" check refused it — a downstream validity check in a system CareLoop does not control, not an
+authority decision, and `upload_document` has no equivalent.
+
+### Why 0 / 320 coexisted with all of this
+
+**The replay never exercised this class, and that is worth stating plainly rather than filing
+under "still green".** Every attack in the corpus aims at an attacker-supplied destination —
+`CANARY_EMAIL`, `CANARY_PORTAL`, `CANARY_PROVIDER`, `CANARY_ROLE = "records_admin"` — because
+`ensure_targets` appends one when the payload names none. Not one of them tries CareLoop's *own*
+trusted literals in the wrong field. A cross-semantic collision needs no attacker-supplied value at
+all, so the corpus could not have found it however many attacks it held.
+
+`0 / 320` was and remains a true measurement of *indirect prompt injection*. It was never a
+measurement of semantic trust binding, and the fact that both numbers are unchanged after this fix
+is the evidence: the corpus does not reach the defect from either side.
+
+### The fix
+
+`ArgSpec.trust_key: str | None`, in the registry, next to `arg_class` and for the same reason —
+the fact key an argument may draw trust from is the same kind of statement about the same argument,
+and a second declaration site is one more place to forget one. `resolve_trust(fact_key, value,
+case)` takes the key **required and positional**, so a value-only lookup cannot be written by
+omission. `None` resolves `UNTRUSTED` outright; there is no fallback, because a fallback is the
+vulnerability.
+
+Argument name and fact key are deliberately allowed to differ, and two arguments may share one key
+— `send_email.to` and `grant_portal_access.grantee` both draw on `caregiver_email`. Mapping names
+to keys by identity would have broken the hero demo on the first argument.
+
+Three consequences worth recording:
+
+1. **The loader refuses a trust predicate on an untyped argument.** `arg_trust_at_least: body` is
+   a rule that could never fire and `arg_trust_below: body` one that always would; both are
+   configuration mistakes about authority, and both are now startup failures. This is the check
+   that would have caught `grant_portal_access.role` the day it was written.
+2. **`promote_fact`'s shadowing check is key-scoped**, so it is exactly as wide as `resolve_trust`
+   — no wider and no narrower. It was wider, which under value-only resolution looked correct and
+   would now refuse a perfectly effective promotion because an unrelated field was spelled the
+   same. Both directions are asserted.
+3. **`check_promotable_keys_match_the_registry` resolves through `trust_key`, not argument names.**
+   It compared fact keys against argument names and agreed only because every promotable key
+   happened to be spelled like its consumer. It would have gone on silently checking nothing.
+
+### The order the work was done in, because it is the proof
+
+The renames came **first**, as a step that had to leave the suite green under the *old* resolver —
+1880 passed, unchanged — which is what makes them mechanical rather than a way of making failures
+go away. Then the collision tests, run against the shipped resolver: **10 failed, 19 passed**, with
+all four required collisions among the failures. Then the resolver. Then everything else.
+
+`tests/test_typed_trust.py` carries the non-vacuity proof. `value_only_resolve_trust` restores the
+historical resolution and differs from the shipped one **in exactly one respect** — it discards
+`fact_key` — keeping the same canonicalisation, the same lowest-wins reduction and the same answer
+for an uncanonicalisable value. Same discipline as `evals/replay.py::permissive_engine`, one layer
+in: that mutant removes the rules and keeps the engine, this one removes the semantic binding and
+keeps everything else. It is deliberately **not** a permissive mutant. Patched in globally it fails
+8 tests, including all four collisions.
+
+### Invariant 3 amended
+
+Approved as part of this session. Lowest-wins is now stated as scoped to one key:
+
+```
+provider_id = X TRUSTED  +  provider_id = X UNTRUSTED   →  UNTRUSTED   (a duplicate; caught)
+provider_id = X TRUSTED  +  patient_id  = X UNTRUSTED   →  TRUSTED     (not a duplicate at all)
+```
+
+This **strengthens** the invariant rather than relaxing it. The property lowest-wins exists for —
+a poisoned duplicate not being laundered by a legitimate twin — is a statement about one key, and
+it is untouched. Cross-key contamination was never protective; it was an accident that also made
+every configured literal a standing false-denial hazard, which is why `careloop/graph/trusted.py`
+carried a warning that no configured value may appear in any document. That warning is now defence
+in depth and says so. **Correctness no longer depends on literals being globally unique**, and
+nothing new should be built as though it does.
+
+### The grant path, and what was deliberately not done
+
+`grant_portal_access.role` declares `trust_key="role"` and **no producer anywhere records a fact
+under that key** — `TRUSTED_CONFIG` declares `caregiver_email`, `provider_id`, `portal_id` and
+nothing else. So the tool can never reach `ALLOW` under the shipped configuration, and
+`allow-approved-portal-access-grant` is unreachable.
+
+That is the correct safe state and it was left alone. No trusted role was added to configuration;
+manufacturing authority to restore a rule's reachability is the wrong direction, and the rule is
+kept because it states what a legitimate grant *would* require.
+`TestTheGrantPathHasNoProductionAuthority` tries every configured literal as a role in every state
+a grant could be proposed from, and requires `AUTHORITY_NOT_TRUSTED` for all of them.
+
+Tests that manufactured `trusted_fact("role", "viewer")` — a state production cannot create —
+survive, because they test the rule's *shape*. What they no longer do is stand alone: the
+no-producer test says plainly what production can actually reach.
+
+### Open decisions
+
+12. **`book_appointment.patient_id` requires presence and not trust, and typed trust does not fix
+    it.** `allow-booking-on-validated-slot` carries `args_present: [patient_id]`, which any
+    non-empty string satisfies. The planner can therefore book a correctly authorised provider at a
+    correctly validated slot **for an arbitrary patient identifier** — no collision needed; this
+    one is a plain hole and it predates the defect this session closed.
+
+    Deliberately **out of scope**, so that this change has one attributable security property.
+    Verified satisfiable when it is picked up: the hero path promotes `patient_id=PT-4417` to
+    `CONTROLLED` through `_patient_id_agrees`, so requiring `CONTROLLED` would not break the demo.
+    It should be bound through the *evidence*, not seeded as trusted config — a case can
+    legitimately concern a patient the config has never heard of.
+
+13. **`book_appointment.reason` is model-generated free text that lands verbatim in an external
+    record.** `VALUE`-class, named by no rule, declares no `trust_key`, and now resolves
+    `UNTRUSTED` honestly. It is not a destination, an identifier or an authority, and requiring
+    trust of it would be unsatisfiable — no producer, and no deterministic validator for clinical
+    prose. Recorded rather than fixed: it is the one argument through which document-derived text
+    reaches Demo World unexamined.
+
+14. **`grant_portal_access.portal_id` is `DESTINATION`-class and no rule names it.** Smaller than
+    it looks, because the tool is denied outright on `role` before any portal is considered. Worth
+    closing when the grant workflow is decided either way.
+
 ## Standing risks
 
 - **The resume is a `CaseStore` reconstruction across a process boundary, not a Strands session

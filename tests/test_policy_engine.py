@@ -28,6 +28,18 @@ CLINIC = "scheduling@clinic.example"
 ATTACKER = "attacker@evil.example"
 SLOT = "2026-09-01T10:00:00+00:00"
 SLOT_DT = datetime(2026, 9, 1, 10, 0, 0, tzinfo=UTC)
+PATIENT = "pat-1"
+
+
+def _validated_patient():
+    """The ``patient_id`` fact a booking now needs, at the level validation produces.
+
+    ``allow-booking-on-validated-slot`` requires ``patient_id`` at ``CONTROLLED`` as of session J.
+    It used to require only that the argument be non-empty, which let an invented identifier reach
+    the clinic; ``tests/test_booking_authority.py`` is where that is now refused, and these tests
+    carry the fact so they go on testing what they were written for.
+    """
+    return make_fact("patient_id", PATIENT, TrustLevel.CONTROLLED)
 
 
 @pytest.fixture
@@ -384,10 +396,11 @@ class TestValueTrustAndTheAutonomousPath:
         case = _ready(
             trusted_fact("provider_id", "prov-1"),
             make_fact("slot_start", SLOT, TrustLevel.CONTROLLED),
+            _validated_patient(),
         )
         decision = engine.evaluate(
             "book_appointment",
-            {"provider_id": "prov-1", "patient_id": "pat-1", "slot_start": SLOT},
+            {"provider_id": "prov-1", "patient_id": PATIENT, "slot_start": SLOT},
             case,
         )
         assert decision.verdict is Verdict.ALLOW
@@ -401,10 +414,11 @@ class TestValueTrustAndTheAutonomousPath:
         case = _ready(
             trusted_fact("provider_id", "prov-1"),
             make_fact("slot_start", SLOT, TrustLevel.CONTROLLED),
+            _validated_patient(),
         )
         decision = engine.evaluate(
             "book_appointment",
-            {"provider_id": "prov-1", "patient_id": "pat-1", "slot_start": SLOT_DT},
+            {"provider_id": "prov-1", "patient_id": PATIENT, "slot_start": SLOT_DT},
             case,
         )
         assert decision.verdict is Verdict.ALLOW
@@ -443,10 +457,11 @@ class TestValueTrustAndTheAutonomousPath:
         case = _planning(
             trusted_fact("provider_id", "prov-1"),
             make_fact("slot_start", SLOT, TrustLevel.CONTROLLED),
+            _validated_patient(),
         )
         decision = engine.evaluate(
             "book_appointment",
-            {"provider_id": "prov-1", "patient_id": "pat-1", "slot_start": SLOT},
+            {"provider_id": "prov-1", "patient_id": PATIENT, "slot_start": SLOT},
             case,
         )
         assert decision.verdict is Verdict.ALLOW
@@ -490,13 +505,21 @@ class TestValueTrustAndTheAutonomousPath:
         assert decision.reason_code is ReasonCode.WRONG_CASE_STATE
 
     def test_a_missing_required_argument_fails_args_present(self, engine: PolicyEngine) -> None:
-        case = _ready(
-            trusted_fact("provider_id", "prov-1"),
-            make_fact("slot_start", SLOT, TrustLevel.CONTROLLED),
-        )
-        decision = engine.evaluate(
-            "book_appointment", {"provider_id": "prov-1", "slot_start": SLOT}, case
-        )
+        """Retargeted onto ``fetch_document``, which is where ``args_present`` still lives.
+
+        It used to omit ``patient_id`` from a booking, on the strength of
+        ``allow-booking-on-validated-slot``'s ``args_present: [patient_id]`` clause. Session J
+        replaced that clause with a trust requirement, so the booking is now refused
+        ``INSUFFICIENT_FACT_TRUST`` by ``deny-booking-for-unverified-patient`` before the ``ALLOW``
+        rule is reached — a stronger refusal for a better reason, and no longer a test of this
+        clause. Preserving the old shape here would have been preserving obsolete booking semantics
+        under a name that describes something else;
+        ``tests/test_booking_authority.py`` covers the booking behaviour.
+        """
+        case = make_case(state=CaseState.GATHERING_EVIDENCE)
+
+        decision = engine.evaluate("fetch_document", {}, case)
+
         assert decision.verdict is Verdict.DENY
         assert decision.reason_code is ReasonCode.NO_RULE_MATCH
 

@@ -54,6 +54,20 @@ def _case(*facts, state: CaseState = CaseState.PLANNING):
     return make_case(state=state, facts=(*trusted_facts(), *facts))
 
 
+def _validated_patient():
+    """The ``patient_id`` fact every booking needs, at the level validation produces.
+
+    A **precondition** of the tests below rather than any part of what they measure. Session J made
+    ``allow-booking-on-validated-slot`` require ``patient_id`` at ``CONTROLLED``; without the fact,
+    every booking here would be refused by ``deny-booking-for-unverified-patient`` and the tests
+    would pass or fail for a reason that has nothing to do with semantic key binding. That matters
+    most in :class:`TestTheOldSemanticsAreDetected`, where a mutant test passing for the wrong
+    reason would silently stop proving anything. See ``tests/test_booking_authority.py`` for the
+    patient property itself.
+    """
+    return make_fact("patient_id", PATIENT, TrustLevel.CONTROLLED)
+
+
 class TestTheConfiguredLiteralsAreDistinct:
     """A precondition. Without it the collision tests could pass for the wrong reason."""
 
@@ -97,7 +111,9 @@ class TestCrossFieldCollisionsAreRefused:
         downstream validity check in a system CareLoop does not control, not an authority decision,
         and ``upload_document`` has no equivalent.
         """
-        case = _case(make_fact("document_id", DOCUMENT, TrustLevel.CONTROLLED))
+        case = _case(
+            make_fact("document_id", DOCUMENT, TrustLevel.CONTROLLED), _validated_patient()
+        )
 
         decision = engine.evaluate(
             "book_appointment",
@@ -179,7 +195,7 @@ class TestTheCorrectlyKeyedFactStillSatisfies:
     """The other half. Exactness must not be achieved by denying everything."""
 
     def test_booking_under_the_correct_keys_is_allowed(self, engine: PolicyEngine) -> None:
-        case = _case(make_fact("slot_start", SLOT, TrustLevel.CONTROLLED))
+        case = _case(make_fact("slot_start", SLOT, TrustLevel.CONTROLLED), _validated_patient())
 
         decision = engine.evaluate(
             "book_appointment",
@@ -220,7 +236,7 @@ class TestTheCorrectlyKeyedFactStillSatisfies:
         """Canonicalisation is untouched; only the set of facts consulted narrows."""
         from datetime import datetime
 
-        case = _case(make_fact("slot_start", SLOT, TrustLevel.CONTROLLED))
+        case = _case(make_fact("slot_start", SLOT, TrustLevel.CONTROLLED), _validated_patient())
 
         decision = engine.evaluate(
             "book_appointment",
@@ -289,7 +305,11 @@ class TestLowestWinsIsScopedToOneKey:
         """
         case = _case(
             make_fact("slot_start", SLOT, TrustLevel.CONTROLLED),
+            # An untrusted fact under `patient_id` carrying the *provider's* literal. It must not
+            # touch the configured provider_id, and it must not touch the validated patient below
+            # either: resolution matches key AND value, and these two share only the key.
             make_fact("patient_id", PROVIDER, TrustLevel.UNTRUSTED),
+            _validated_patient(),
         )
 
         decision = engine.evaluate(
@@ -305,6 +325,7 @@ class TestLowestWinsIsScopedToOneKey:
 
         assert decision.verdict is Verdict.ALLOW
         assert decision.arg_trust["provider_id"] is TrustLevel.TRUSTED
+        assert decision.arg_trust["patient_id"] is TrustLevel.CONTROLLED
 
 
 class TestArgumentsWithNoTrustKey:
@@ -491,7 +512,13 @@ class TestTheOldSemanticsAreDetected:
         assert decision.matched_rule_id == "allow-upload-to-trusted-portal"
 
     def test_the_document_id_collision_reappears(self, value_only_engine: PolicyEngine) -> None:
-        case = _case(make_fact("document_id", DOCUMENT, TrustLevel.CONTROLLED))
+        # The patient fact is a precondition, not the collision. Without it the booking would be
+        # refused by deny-booking-for-unverified-patient under *both* resolvers, and this test
+        # would report "the collision no longer reappears" while proving nothing about the key
+        # binding. The collision under test is still slot_start satisfied by a document id.
+        case = _case(
+            make_fact("document_id", DOCUMENT, TrustLevel.CONTROLLED), _validated_patient()
+        )
 
         decision = value_only_engine.evaluate(
             "book_appointment",
@@ -534,6 +561,7 @@ class TestTheOldSemanticsAreDetected:
         case = _case(
             make_fact("slot_start", SLOT, TrustLevel.CONTROLLED),
             make_fact("patient_id", PROVIDER, TrustLevel.UNTRUSTED),
+            _validated_patient(),
         )
 
         decision = value_only_engine.evaluate(
@@ -549,6 +577,12 @@ class TestTheOldSemanticsAreDetected:
 
         assert decision.verdict is Verdict.DENY
         assert decision.arg_trust["provider_id"] is TrustLevel.UNTRUSTED
+        # The contamination is what denies it, not the patient or the slot: both of those resolve
+        # fine here, so no explicit DENY rule matches and the refusal is the default one. Pinned
+        # because a denial arriving from deny-booking-for-unverified-patient would let this test
+        # keep passing with the contamination gone.
+        assert decision.matched_rule_id is None
+        assert decision.arg_trust["patient_id"] is TrustLevel.CONTROLLED
 
     def test_the_legitimate_paths_are_unaffected_by_the_mutation(
         self, value_only_engine: PolicyEngine
@@ -558,7 +592,7 @@ class TestTheOldSemanticsAreDetected:
         The correctly-keyed booking is allowed under both resolvers. If the mutant changed that
         too, the collisions above would not be attributable to the semantic binding alone.
         """
-        case = _case(make_fact("slot_start", SLOT, TrustLevel.CONTROLLED))
+        case = _case(make_fact("slot_start", SLOT, TrustLevel.CONTROLLED), _validated_patient())
 
         decision = value_only_engine.evaluate(
             "book_appointment",

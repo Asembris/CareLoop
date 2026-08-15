@@ -9,7 +9,7 @@ executor rather than about the gate.
 from __future__ import annotations
 
 import pytest
-from helpers import FIXED_NOW, make_case, trusted_fact
+from helpers import FIXED_NOW, make_case, make_fact, trusted_fact
 
 from careloop.policy.gate import PolicyDenied, PolicyGate
 from careloop.policy.gated import (
@@ -22,7 +22,7 @@ from careloop.policy.gated import (
     reserved_method_names,
 )
 from careloop.policy.verdicts import ReasonCode
-from careloop.provenance import ArgClass
+from careloop.provenance import ArgClass, TrustLevel
 from careloop.state import CaseState, record_fact
 from careloop.tools import REGISTRY, MockExternalExecutor, ToolSet, UnknownTool
 from careloop.tools.registry import ArgSpec, ToolRegistry, ToolSpec
@@ -31,6 +31,20 @@ ATTACKER = "records-intake@claims-continuity-partners.example"
 PORTAL = "PORTAL-MG-TRANSFER"
 PROVIDER = "PROV-NORTHGATE-CARD"
 SLOT = "2026-09-03T09:30:00"
+PATIENT = "PT-4417"
+
+#: A legitimate booking, and the evidence a case must carry for policy to allow it.
+#:
+#: ``patient_id`` at ``CONTROLLED`` is required as of session J — the rule used to accept any
+#: non-empty identifier, which is what ``tests/test_booking_authority.py`` now refuses. It is
+#: carried here so that these tests go on measuring what they were written for: the backstop, and
+#: the two enforcement points sharing one evaluation.
+BOOKING = {
+    "provider_id": PROVIDER,
+    "patient_id": PATIENT,
+    "slot_start": SLOT,
+    "reason": "cardiology review",
+}
 
 #: The three payloads the poisoned continuity notice asks for, as tool calls.
 POISONED_CALLS = [
@@ -45,6 +59,15 @@ def executing_case(*facts):
     for fact in facts:
         case = record_fact(case, fact, now=FIXED_NOW)
     return case
+
+
+def bookable_case():
+    """A case whose provider, slot and patient all satisfy the booking rule."""
+    return executing_case(
+        trusted_fact("provider_id", PROVIDER),
+        trusted_fact("slot_start", SLOT),
+        make_fact("patient_id", PATIENT, TrustLevel.CONTROLLED),
+    )
 
 
 def build(case=None) -> tuple[GatedToolSet, MockExternalExecutor]:
@@ -137,40 +160,17 @@ class TestAllowedCallsStillWork:
         assert executor.invocation_count == 0
 
     def test_a_validated_booking_reaches_the_executor(self) -> None:
-        case = executing_case(
-            trusted_fact("provider_id", PROVIDER),
-            trusted_fact("slot_start", SLOT),
-        )
-        gated, executor = build(case)
+        gated, executor = build(bookable_case())
 
-        result = gated.call(
-            "book_appointment",
-            {
-                "provider_id": PROVIDER,
-                "patient_id": "PT-4417",
-                "slot_start": SLOT,
-                "reason": "cardiology review",
-            },
-        )
+        result = gated.call("book_appointment", BOOKING)
 
         assert result.executed
         assert executor.invocation_count == 1
 
     def test_the_result_is_the_executor_s_and_not_a_forgery(self) -> None:
-        case = executing_case(
-            trusted_fact("provider_id", PROVIDER), trusted_fact("slot_start", SLOT)
-        )
-        gated, executor = build(case)
+        gated, executor = build(bookable_case())
 
-        result = gated.call(
-            "book_appointment",
-            {
-                "provider_id": PROVIDER,
-                "patient_id": "PT-4417",
-                "slot_start": SLOT,
-                "reason": "cardiology review",
-            },
-        )
+        result = gated.call("book_appointment", BOOKING)
 
         assert executor.ledger[0].result == result.result
 
@@ -299,19 +299,11 @@ class TestTheDecoratorItself:
 class TestBothLayersShareOneEvaluation:
     def test_the_hook_and_the_backstop_cost_one_engine_call(self) -> None:
         """Not a performance claim: two layers reading two different answers is the hazard."""
-        case = executing_case(
-            trusted_fact("provider_id", PROVIDER), trusted_fact("slot_start", SLOT)
-        )
+        case = bookable_case()
         gate = PolicyGate(lambda: case)
         gated = GatedToolSet(ToolSet("case-0001", executor=MockExternalExecutor()), gate)
-        args = {
-            "provider_id": PROVIDER,
-            "patient_id": "PT-4417",
-            "slot_start": SLOT,
-            "reason": "cardiology review",
-        }
 
-        gate.decide("book_appointment", args)  # what the hook would ask
-        gated.call("book_appointment", args)  # what the backstop asks
+        gate.decide("book_appointment", BOOKING)  # what the hook would ask
+        gated.call("book_appointment", BOOKING)  # what the backstop asks
 
         assert gate.evaluations == 1

@@ -86,6 +86,12 @@ class TestTheCacheCannotAnswerForAChangedCase:
         raw = make_fact("slot_start", SLOT)
         case = record_fact(make_case(state=CaseState.EXECUTING), raw, now=FIXED_NOW)
         case = record_fact(case, trusted_fact("provider_id", PROVIDER), now=FIXED_NOW)
+        # The booking also needs its patient established, as of session J. Recorded already
+        # CONTROLLED so that the only thing changing between the two evaluations is the slot, which
+        # is what this test is about.
+        case = record_fact(
+            case, make_fact("patient_id", "PT-4417", TrustLevel.CONTROLLED), now=FIXED_NOW
+        )
         holder = Holder(case)
         gate = PolicyGate(holder)
 

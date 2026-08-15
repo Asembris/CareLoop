@@ -11,6 +11,23 @@ is refused here for the same reason. Nothing can establish trust for such an arg
 predicate resolves ``UNTRUSTED`` for ever: written as ``arg_trust_at_least`` it is a rule that can
 never fire, and written as ``arg_trust_below`` it is one that always does. Both are configuration
 mistakes about authority, and both should be an outage rather than a surprise three nodes later.
+
+**Loading is three named steps and production performs all three**:
+:func:`parse_rules` (schema), :func:`validate_rules_resolve` (does each rule mean anything against
+the registry), and :func:`validate_authority_coverage` (does the ruleset leave any authority-bearing
+argument unguarded). :func:`load_rules_from_mapping` composes them and every other loader here
+funnels into it, so there is one answer to "was this ruleset validated".
+
+They are named rather than inlined for one reason, and it is not convenience. The security
+evaluation's allow-all mutant exists to measure what removing the authority layer costs, and after
+the third step *a ruleset that permits everything is by construction not a valid ruleset* — so it
+cannot come through the normal path. It composes the first two steps by hand and omits the third.
+That omission is a missing line at its own call site, which is greppable and swept for; a parameter
+switching the check off would have been neither, and none exists.
+
+The three steps are deliberately **not** re-exported from :mod:`careloop.policy`. Only the loaders
+are. Reaching a step directly means importing this module by name, which is what makes the one
+caller that does so visible.
 """
 
 from __future__ import annotations
@@ -59,11 +76,30 @@ class PolicyConfigError(Exception):
     """
 
 
-def _validate_against_registry(ruleset: RuleSet, registry: ToolRegistry) -> None:
+def parse_rules(raw: Any) -> RuleSet:
+    """Validate a parsed rules document against the schema. No registry, no coverage.
+
+    The first of the three validation steps :func:`load_rules_from_mapping` composes. Separated so
+    the steps can be named, not so they can be skipped: production loads all three, and the only
+    caller that composes them by hand is the evaluation harness's allow-all mutant — see
+    :func:`validate_authority_coverage` for why that one has to.
+    """
+    try:
+        return RuleSet.model_validate(raw)
+    except ValidationError as exc:
+        raise PolicyConfigError(f"malformed rules document: {exc}") from exc
+
+
+def validate_rules_resolve(ruleset: RuleSet, registry: ToolRegistry) -> None:
     """Raise :class:`PolicyConfigError` listing every way ``ruleset`` fails to resolve.
 
     Every problem is collected rather than raised on the first one: a rules file with three
     mistakes should report three, not three consecutive startup failures.
+
+    This is about whether each rule *means* anything against the registry — that it names tools
+    that exist, arguments those tools declare, trust keys that can be established, and argument
+    classes the registry agrees with. Whether the ruleset as a whole leaves an authority-bearing
+    argument unguarded is a different question and lives in :func:`validate_authority_coverage`.
     """
     problems: list[str] = []
 
@@ -108,14 +144,64 @@ def _validate_against_registry(ruleset: RuleSet, registry: ToolRegistry) -> None
         )
 
 
-def load_rules_from_mapping(raw: Any, registry: ToolRegistry) -> RuleSet:
-    """Validate an already-parsed rules document against ``registry``."""
-    try:
-        ruleset = RuleSet.model_validate(raw)
-    except ValidationError as exc:
-        raise PolicyConfigError(f"malformed rules document: {exc}") from exc
+def validate_authority_coverage(ruleset: RuleSet, registry: ToolRegistry) -> None:
+    """Raise :class:`PolicyConfigError` if any authority-bearing argument is left uncovered.
 
-    _validate_against_registry(ruleset, registry)
+    The load-time half of the invariant :func:`uncovered_authority_arguments` describes: every
+    ``DESTINATION`` and ``AUTHORITY`` argument of every external-effect tool must have its trust
+    required at :data:`REQUIRED_AUTHORITY_TRUST` by **every** ``ALLOW`` rule that could authorise a
+    call to that tool.
+
+    A load-time failure rather than a reported gap, and the difference from
+    :func:`uncovered_external_tools` is the difference between a policy that is incomplete and a
+    policy that is wrong. A tool no rule mentions cannot be called at all — deny-by-default refuses
+    it and the gap is visible in the timeline. An ``ALLOW`` rule that authorises a tool while
+    ignoring where its effect lands is a rule that *works*, silently, on any destination at all;
+    session N's grant on ``PORTAL-ATTACKER-CONTROLLED`` reached ``ALLOW`` while the same
+    ``Decision`` reported ``portal_id: UNTRUSTED``. Nothing downstream would have noticed.
+
+    **One ruleset in this repository violates this on purpose**: the allow-all mutant in
+    ``evals/replay.py``, which exists to measure what removing the authority layer costs. After
+    this check, *a ruleset that permits everything is by construction not a valid ruleset*, so that
+    mutant cannot come through :func:`load_rules_from_mapping` and does not try to. It composes
+    :func:`parse_rules` and :func:`validate_rules_resolve` by hand and omits this one call, which is
+    a visible missing line at its own call site rather than a flag on a security check — there is
+    deliberately no parameter anywhere that turns this off.
+    ``tests/test_policy_coverage.py::TestOnlyTheEvaluationMutantSkipsCoverage`` sweeps for a second
+    caller.
+    """
+    uncovered = uncovered_authority_arguments(registry, ruleset)
+    if not uncovered:
+        return
+
+    problems = []
+    for rule_id, tool_name, arg_name in sorted(uncovered):
+        arg_class = registry.arg_class(tool_name, arg_name)
+        required = REQUIRED_AUTHORITY_TRUST[arg_class]
+        problems.append(
+            f"rule {rule_id!r} can authorise {tool_name}, but does not require "
+            f"{tool_name}.{arg_name} at {required}; it is {arg_class}-class, so nothing else "
+            f"establishes where this effect lands"
+        )
+    raise PolicyConfigError(
+        "rules leave an authority-bearing argument uncovered:\n  "
+        + "\n  ".join(problems)
+        + "\n  Every ALLOW rule that can authorise a tool must require every DESTINATION and "
+        "AUTHORITY argument of that tool in arg_trust_at_least. args_present and args_approved "
+        "do not satisfy this: presence is not trust, and human approval is a different dimension "
+        "from where an effect lands."
+    )
+
+
+def load_rules_from_mapping(raw: Any, registry: ToolRegistry) -> RuleSet:
+    """Validate an already-parsed rules document against ``registry``.
+
+    The normal production entry point, and the one every other loader here funnels into. Three
+    steps, all of them: schema, registry resolution, authority coverage.
+    """
+    ruleset = parse_rules(raw)
+    validate_rules_resolve(ruleset, registry)
+    validate_authority_coverage(ruleset, registry)
     return ruleset
 
 
@@ -133,7 +219,8 @@ def load_rules(path: Path = RULES_PATH, registry: ToolRegistry = REGISTRY) -> Ru
 
     Raises:
         PolicyConfigError: if the file is missing, is not valid YAML, does not match the schema,
-            or names a tool or argument the registry does not have.
+            names a tool or argument the registry does not have, or leaves an authority-bearing
+            argument uncovered.
     """
     try:
         text = path.read_text(encoding="utf-8")
@@ -228,7 +315,10 @@ __all__ = [
     "load_rules",
     "load_rules_from_mapping",
     "load_rules_from_text",
+    "parse_rules",
     "uncovered_authority_arguments",
     "uncovered_external_tools",
     "unknown_rule_tools",
+    "validate_authority_coverage",
+    "validate_rules_resolve",
 ]

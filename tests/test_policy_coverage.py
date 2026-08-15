@@ -12,9 +12,13 @@ failure mode the project's working agreement calls vacuous.
 
 from __future__ import annotations
 
-from typing import Any
+from pathlib import Path
+from typing import Any, Final
+
+import pytest
 
 from careloop.policy import (
+    PolicyConfigError,
     RuleSet,
     default_rules,
     load_rules_from_mapping,
@@ -22,12 +26,34 @@ from careloop.policy import (
     uncovered_external_tools,
     unknown_rule_tools,
 )
+
+# Imported from the module rather than the package on purpose: the three validation steps are not
+# part of `careloop.policy`'s surface, so reaching one is a deliberate act that a sweep can see.
+from careloop.policy.loader import parse_rules, validate_rules_resolve
 from careloop.provenance import ArgClass, TrustLevel
 from careloop.tools import REGISTRY, ArgSpec, ToolRegistry, ToolSpec
 
 
 def _registry_plus(*extra: ToolSpec) -> ToolRegistry:
     return ToolRegistry([*REGISTRY, *extra])
+
+
+def _ruleset_skipping_coverage(raw: Any, registry: ToolRegistry) -> RuleSet:
+    """Build a ruleset with everything except the authority-coverage invariant.
+
+    Needed because half of these tests are *about* an uncovered ruleset, and since session N the
+    normal loader refuses to produce one. Two questions are being asked and they need different
+    constructors: :func:`uncovered_authority_arguments` is what the check *reports*, tested here,
+    and :func:`load_rules_from_mapping` is what production *refuses*, tested in
+    :class:`TestProductionLoadingRejectsUncoveredAuthorityArguments` below.
+
+    This is the same composition ``evals/replay.py::permissive_engine`` performs, for the same
+    reason and no other; the sweep in :class:`TestOnlyTheEvaluationMutantSkipsCoverage` covers
+    production code, where it remains the only one.
+    """
+    ruleset = parse_rules(raw)
+    validate_rules_resolve(ruleset, registry)
+    return ruleset
 
 
 _UNGOVERNED = ToolSpec(
@@ -107,27 +133,83 @@ _HARMLESS_DESTINATION = _ONE_DESTINATION.model_copy(
 )
 
 
+def _synthetic_raw(when: dict[str, Any], tool: str = "wire_transfer") -> dict[str, Any]:
+    """One ``ALLOW`` rule over ``tool`` with exactly the condition given, unvalidated."""
+    return {
+        "version": 1,
+        "rules": [
+            {
+                "id": "allow-the-new-tool",
+                "effect": "ALLOW",
+                "tools": [tool],
+                "when": when,
+                "diagnostic": "d",
+            }
+        ],
+    }
+
+
 def _synthetic_rules(when: dict[str, Any], tool: str = "wire_transfer") -> RuleSet:
-    """One ``ALLOW`` rule over ``tool`` with exactly the condition given."""
-    return load_rules_from_mapping(
-        {
-            "version": 1,
-            "rules": [
-                {
-                    "id": "allow-the-new-tool",
-                    "effect": "ALLOW",
-                    "tools": [tool],
-                    "when": when,
-                    "diagnostic": "d",
-                }
-            ],
-        },
+    """The same rule as a ``RuleSet``, built without the coverage invariant.
+
+    Deliberately not through :func:`load_rules_from_mapping`: most of the conditions below are
+    uncovered on purpose, and the normal loader now refuses them — which is itself asserted, a few
+    classes down.
+    """
+    return _ruleset_skipping_coverage(
+        _synthetic_raw(when, tool),
         _registry_plus(_ONE_DESTINATION, _ONE_AUTHORITY, _HARMLESS_DESTINATION),
     )
 
 
 def _trust(arg: str, level: str = "TRUSTED") -> dict[str, Any]:
     return {"arg_trust_at_least": [{"arg": arg, "level": level}]}
+
+
+#: A ``DENY`` naming the destination beside an ``ALLOW`` that does not. The ``DENY`` would refuse
+#: the call today; the ``ALLOW`` is what would authorise it the day somebody edits the ``DENY``.
+_DENY_BESIDE_A_PERMISSIVE_ALLOW: Final[dict[str, Any]] = {
+    "version": 1,
+    "rules": [
+        {
+            "id": "deny-the-new-tool",
+            "effect": "DENY",
+            "tools": ["wire_transfer"],
+            "when": {"arg_trust_below": [{"arg": "payee", "level": "TRUSTED"}]},
+            "reason_code": "DESTINATION_NOT_TRUSTED",
+            "diagnostic": "d",
+        },
+        {
+            "id": "allow-the-new-tool",
+            "effect": "ALLOW",
+            "tools": ["wire_transfer"],
+            "when": {},
+            "diagnostic": "d",
+        },
+    ],
+}
+
+#: One strict ``ALLOW`` and one permissive one over the same tool. The permissive rule is the one
+#: that fires, which is why coverage is checked per rule rather than over their union.
+_STRICT_BESIDE_PERMISSIVE: Final[dict[str, Any]] = {
+    "version": 1,
+    "rules": [
+        {
+            "id": "allow-the-careful-way",
+            "effect": "ALLOW",
+            "tools": ["wire_transfer"],
+            "when": _trust("payee"),
+            "diagnostic": "d",
+        },
+        {
+            "id": "allow-the-convenient-way",
+            "effect": "ALLOW",
+            "tools": ["wire_transfer"],
+            "when": {},
+            "diagnostic": "d",
+        },
+    ],
+}
 
 
 class TestEveryAuthorityBearingArgumentIsRequiredByEveryAllowRule:
@@ -242,28 +324,8 @@ class TestEveryAuthorityBearingArgumentIsRequiredByEveryAllowRule:
         depending on the ``DENY`` still being there tomorrow. Session N is the argument: the grant's
         portal was missing from both at once, and either alone would have refused the call.
         """
-        ruleset = load_rules_from_mapping(
-            {
-                "version": 1,
-                "rules": [
-                    {
-                        "id": "deny-the-new-tool",
-                        "effect": "DENY",
-                        "tools": ["wire_transfer"],
-                        "when": {"arg_trust_below": [{"arg": "payee", "level": "TRUSTED"}]},
-                        "reason_code": "DESTINATION_NOT_TRUSTED",
-                        "diagnostic": "d",
-                    },
-                    {
-                        "id": "allow-the-new-tool",
-                        "effect": "ALLOW",
-                        "tools": ["wire_transfer"],
-                        "when": {},
-                        "diagnostic": "d",
-                    },
-                ],
-            },
-            _registry_plus(_ONE_DESTINATION),
+        ruleset = _ruleset_skipping_coverage(
+            _DENY_BESIDE_A_PERMISSIVE_ALLOW, _registry_plus(_ONE_DESTINATION)
         )
 
         assert uncovered_authority_arguments(_registry_plus(_ONE_DESTINATION), ruleset) == {
@@ -273,27 +335,8 @@ class TestEveryAuthorityBearingArgumentIsRequiredByEveryAllowRule:
     def test_every_allow_rule_is_checked_and_not_merely_their_union(self) -> None:
         """One strict rule beside one permissive one is the arrangement this exists to catch: the
         permissive one is the rule that fires."""
-        ruleset = load_rules_from_mapping(
-            {
-                "version": 1,
-                "rules": [
-                    {
-                        "id": "allow-the-careful-way",
-                        "effect": "ALLOW",
-                        "tools": ["wire_transfer"],
-                        "when": _trust("payee"),
-                        "diagnostic": "d",
-                    },
-                    {
-                        "id": "allow-the-convenient-way",
-                        "effect": "ALLOW",
-                        "tools": ["wire_transfer"],
-                        "when": {},
-                        "diagnostic": "d",
-                    },
-                ],
-            },
-            _registry_plus(_ONE_DESTINATION),
+        ruleset = _ruleset_skipping_coverage(
+            _STRICT_BESIDE_PERMISSIVE, _registry_plus(_ONE_DESTINATION)
         )
 
         assert uncovered_authority_arguments(_registry_plus(_ONE_DESTINATION), ruleset) == {
@@ -307,6 +350,149 @@ class TestEveryAuthorityBearingArgumentIsRequiredByEveryAllowRule:
 
         assert uncovered_authority_arguments(registry, default_rules()) == frozenset()
         assert uncovered_external_tools(registry, default_rules()) == {"wire_transfer"}
+
+
+class TestProductionLoadingRejectsUncoveredAuthorityArguments:
+    """The invariant is enforced when a ruleset is *loaded*, not merely reported by a helper.
+
+    The class above proves what :func:`uncovered_authority_arguments` finds. This one proves that
+    finding something is fatal on the path production actually takes — ``default_rules`` →
+    ``load_rules`` → ``load_rules_from_text`` → ``load_rules_from_mapping`` — so a ruleset with an
+    unguarded destination cannot reach a :class:`~careloop.policy.engine.PolicyEngine` at all.
+
+    Session N shipped the check as a diagnostic and left this open as decision 27, because the one
+    ruleset in the repository that violates it on purpose is the security evaluation's allow-all
+    mutant. That is resolved by construction rather than by exemption: see
+    :class:`TestOnlyTheEvaluationMutantSkipsCoverage`.
+    """
+
+    def test_the_shipped_rules_load(self) -> None:
+        """The positive anchor. Without it, a loader that rejected everything would pass below."""
+        shipped = default_rules()
+        raw = {"version": 1, "rules": [rule.model_dump(mode="json") for rule in shipped.rules]}
+
+        assert load_rules_from_mapping(raw, REGISTRY).rule_ids == shipped.rule_ids
+
+    def test_an_uncovered_destination_is_refused_at_load(self) -> None:
+        with pytest.raises(PolicyConfigError) as raised:
+            load_rules_from_mapping(_synthetic_raw({}), _registry_plus(_ONE_DESTINATION))
+
+        assert "wire_transfer.payee" in str(raised.value)
+
+    def test_the_message_names_the_rule_the_tool_the_argument_and_the_threshold(self) -> None:
+        """A precise diagnostic, because a vague one turns a policy mistake into a mystery."""
+        with pytest.raises(PolicyConfigError) as raised:
+            load_rules_from_mapping(_synthetic_raw({}), _registry_plus(_ONE_DESTINATION))
+
+        message = str(raised.value)
+        assert "allow-the-new-tool" in message
+        assert "wire_transfer" in message
+        assert "payee" in message
+        assert str(TrustLevel.TRUSTED) in message
+        assert str(ArgClass.DESTINATION) in message
+
+    def test_an_uncovered_authority_argument_is_refused_at_load(self) -> None:
+        with pytest.raises(PolicyConfigError) as raised:
+            load_rules_from_mapping(
+                _synthetic_raw({}, tool="elevate_privileges"), _registry_plus(_ONE_AUTHORITY)
+            )
+
+        assert "elevate_privileges.scope" in str(raised.value)
+
+    def test_a_covered_destination_loads(self) -> None:
+        ruleset = load_rules_from_mapping(
+            _synthetic_raw(_trust("payee")), _registry_plus(_ONE_DESTINATION)
+        )
+
+        assert ruleset.rule_ids == {"allow-the-new-tool"}
+
+    def test_a_permissive_allow_beside_a_strict_one_is_refused_at_load(self) -> None:
+        with pytest.raises(PolicyConfigError) as raised:
+            load_rules_from_mapping(_STRICT_BESIDE_PERMISSIVE, _registry_plus(_ONE_DESTINATION))
+
+        assert "allow-the-convenient-way" in str(raised.value)
+
+    def test_a_deny_rule_does_not_rescue_a_permissive_allow_at_load(self) -> None:
+        with pytest.raises(PolicyConfigError):
+            load_rules_from_mapping(
+                _DENY_BESIDE_A_PERMISSIVE_ALLOW, _registry_plus(_ONE_DESTINATION)
+            )
+
+    def test_every_normal_entry_point_enforces_it(self, tmp_path) -> None:
+        """``load_rules_from_text`` and ``load_rules`` funnel into the mapping loader, so all three
+        refuse. Asserted rather than assumed, because a future entry point that forgot would be the
+        whole hole reopened."""
+        import yaml as _yaml
+
+        from careloop.policy import load_rules, load_rules_from_text
+
+        text = _yaml.safe_dump(_synthetic_raw({}))
+        path = tmp_path / "rules.yaml"
+        path.write_text(text, encoding="utf-8")
+        registry = _registry_plus(_ONE_DESTINATION)
+
+        with pytest.raises(PolicyConfigError):
+            load_rules_from_text(text, registry)
+        with pytest.raises(PolicyConfigError):
+            load_rules(path, registry)
+
+
+class TestOnlyTheEvaluationMutantSkipsCoverage:
+    """Exactly one place in the repository composes the loading steps and omits coverage.
+
+    There is deliberately no ``skip_validation`` parameter: a flag is something any caller can
+    pass, an omission is something a sweep can find, and this is that sweep. It is the same
+    discipline as ``tests/test_reopen.py``'s sweep for ``reopen_case`` and
+    ``tests/test_api_demo.py``'s for ``CaseStore.clear`` — a property enforced by enumeration
+    rather than by everyone remembering.
+    """
+
+    #: Production trees. Test modules legitimately build uncovered rulesets to test the check.
+    ROOTS = ("careloop", "evals", "bench", "scripts", "demoworld")
+
+    def _modules(self):
+        root = Path(__file__).resolve().parents[1]
+        for tree in self.ROOTS:
+            yield from sorted((root / tree).rglob("*.py"))
+
+    def test_only_the_permissive_engine_calls_the_lower_level_path(self) -> None:
+        callers = {
+            path.name
+            for path in self._modules()
+            if "validate_rules_resolve" in path.read_text(encoding="utf-8")
+        }
+
+        assert callers == {"loader.py", "replay.py"}, (
+            "a module other than evals/replay.py composes rule validation by hand. That is how "
+            "the authority-coverage invariant gets skipped without anyone deciding to skip it."
+        )
+
+    def test_the_permissive_engine_omits_exactly_that_call(self) -> None:
+        """Vacuity: the sweep above would pass if ``replay.py`` also called the coverage check."""
+        source = (Path(__file__).resolve().parents[1] / "evals" / "replay.py").read_text(
+            encoding="utf-8"
+        )
+
+        assert "validate_rules_resolve(" in source
+        assert "validate_authority_coverage(ruleset" not in source
+
+    def test_nothing_in_the_loader_offers_a_way_to_turn_it_off(self) -> None:
+        """No flag, by construction. A parameter is a thing the next caller can pass.
+
+        Read off the real signatures rather than the source text, so the check is about what the
+        functions accept and not about what their prose mentions.
+        """
+        from inspect import signature
+
+        from careloop.policy import loader
+
+        permitted = {"path", "text", "raw", "registry"}
+        for name in ("load_rules", "load_rules_from_text", "load_rules_from_mapping"):
+            parameters = set(signature(getattr(loader, name)).parameters)
+            assert parameters <= permitted, (
+                f"{name} grew the parameter(s) {sorted(parameters - permitted)}; a loader "
+                f"switch is a way to turn the coverage invariant off"
+            )
 
 
 class TestEveryRuleCanEverFire:

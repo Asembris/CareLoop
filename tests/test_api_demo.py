@@ -269,6 +269,91 @@ class TestReset:
         assert clinic_state.appointments() == ()
 
 
+class TestAScenarioResetsAndStartsInOneRequest:
+    """Pressing a scenario puts the world back first, server-side, in one call.
+
+    Two of the scenarios carry the same referral and therefore ask for the same slot, so a scenario
+    pressed on top of another one gets a correct refusal from a clinic that already holds it — and
+    that reads, in front of a judge, like the injection defence collapsing at something that has
+    nothing to do with injection. The frontend used to reset and then start, which is two requests
+    with a window between them: the reset lands, the start is refused, and the visitor is left with
+    an empty dashboard and no run. No client can close that window from outside.
+    """
+
+    def test_a_second_scenario_does_not_find_the_first_ones_cases(self) -> None:
+        store = InMemoryCaseStore()
+        with demo_client(store, *[intent("book_appointment", **BOOKING)] * 2) as client:
+            client.post("/api/demo/scenarios/referral?wait=5")
+            client.post("/api/demo/scenarios/injection?wait=5")
+
+            held = client.get("/api/cases").json()
+
+        cases = [card["case_id"] for section in held.values() for card in section]
+        assert cases == [DEMO_SCENARIOS["injection"].case_id]
+
+    def test_the_clinic_is_put_back_too(self, clinic, clinic_state) -> None:
+        """The half that made the shared demo fail: one seeded slot, pressed twice."""
+        store = InMemoryCaseStore()
+        with clinic_demo_client(store, clinic, *[intent("book_appointment", **BOOKING)] * 2) as (
+            client
+        ):
+            first = client.post("/api/demo/scenarios/referral?wait=5")
+            second = client.post("/api/demo/scenarios/injection?wait=5")
+
+        assert [first.status_code, second.status_code] == [202, 202]
+        # One appointment, because the clinic was reseeded — not two, and not a refusal.
+        assert len(clinic_state.appointments()) == 1
+        assert store.get(DEMO_SCENARIOS["injection"].case_id).state is CaseState.DONE
+
+    def test_it_is_one_request_rather_than_two(self, monkeypatch) -> None:
+        """The atomicity claim: the reset happens inside the scenario call, not before it.
+
+        Asserted on the order of what the server did rather than on a status code, because a client
+        that reset first would produce the same statuses and the same final state.
+        """
+        seen: list[str] = []
+        real_reset = app_module.reset_world
+        real_deliver = app_module.deliver
+
+        def spy_reset(deps):
+            seen.append("reset")
+            return real_reset(deps)
+
+        async def spy_deliver(deps, case_id, event_id, *, wait):
+            seen.append("deliver")
+            return await real_deliver(deps, case_id, event_id, wait=wait)
+
+        monkeypatch.setattr(app_module, "reset_world", spy_reset)
+        monkeypatch.setattr(app_module, "deliver", spy_deliver)
+
+        with demo_client(InMemoryCaseStore(), intent("book_appointment", **BOOKING)) as client:
+            assert client.post("/api/demo/scenarios/referral?wait=5").status_code == 202
+
+        assert seen == ["reset", "deliver"]
+
+    def test_a_run_in_flight_refuses_the_whole_thing_rather_than_half_of_it(self) -> None:
+        """409, and nothing wiped: the reset and the start stand or fall together."""
+        gate = threading.Event()
+        store = InMemoryCaseStore()
+        app = create_app(
+            store,
+            context_factory=factory_proposing(intent("book_appointment", **BOOKING), gate=gate),
+            demo=True,
+        )
+        with TestClient(app) as client:
+            try:
+                client.post("/api/demo/scenarios/referral")
+                refused = client.post("/api/demo/scenarios/injection")
+
+                assert refused.status_code == 409
+                assert "in flight" in refused.json()["detail"]
+                # The first scenario's case is still there: nothing was cleared on the way to the
+                # refusal, which is what "all or nothing" has to mean here.
+                assert store.get(DEMO_SCENARIOS["referral"].case_id)
+            finally:
+                gate.set()
+
+
 class TestResetRefusesWhileWorkIsInFlight:
     """A store cleared underneath a live graph is a version conflict wearing a costume."""
 

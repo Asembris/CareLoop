@@ -66,6 +66,30 @@ class DecisionView(ResponseModel):
     args: dict[str, str]
     requested_at: datetime
 
+    recheckable: bool
+    """Whether the **stored case** is structurally eligible for a caregiver to ask for a re-check.
+
+    Computed by :func:`careloop.graph.context.recheck_target`, the same resolver
+    :func:`careloop.graph.runner.request_recheck` reads — so the button this drives and the endpoint
+    that validates the click cannot disagree about whether a handoff is bound to a valid target.
+
+    **What it claims** is narrow and exact: the case is stopped on an unconfirmed effect, that
+    handoff durably names an existing :class:`~careloop.state.case.ActionRecord`, the action's type
+    has a real independent observer, and the current proposal re-derives the same identity.
+
+    **What it does not claim, and cannot.** It does not promise that no run will start between this
+    response being rendered and the button being pressed; that a
+    :class:`~careloop.graph.context.RunContext` with an observer bound will actually be built for
+    the run that follows; that the external system will answer; or that the verification will pass.
+    A projector reads durable state, and none of those four are durable state — the first is
+    execution context and the rest are facts about a run that has not happened. The endpoint and the
+    verify node remain authoritative, and both re-check everything.
+
+    So this is an **affordance hint**, deliberately: it exists to stop a client reverse-engineering
+    eligibility from ``reason_code``, which would offer a button on a pre-2A handoff, on a handoff
+    naming no record, and on an action type nothing can observe.
+    """
+
 
 class ApprovalView(ResponseModel):
     """One decision request and its outcome, pending or not."""

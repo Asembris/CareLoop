@@ -61,7 +61,7 @@ from careloop.api.models import (
     TimelineEventView,
 )
 from careloop.api.runs import RunRecord
-from careloop.graph.context import manual_handoff, proposal_for
+from careloop.graph.context import manual_handoff, proposal_for, recheck_target
 from careloop.policy.verdicts import ReasonCode, reason_text
 from careloop.provenance.facts import Fact, Provenance
 from careloop.state.case import ActionRecord, Approval, Case, CaseState, TimelineEvent
@@ -377,6 +377,14 @@ DERIVED: Final[Mapping[type[ResponseModel], Mapping[str, str]]] = MappingProxyTy
                     "Approval.requested_at when one is pending; else TimelineEvent.at on the "
                     "MANUAL_HANDOFF_REQUIRED entry"
                 ),
+                "recheckable": (
+                    "graph.context.recheck_target(case) is not None — the same resolver "
+                    "graph.runner.request_recheck reads, over Case.state, Case.approvals, the "
+                    "MANUAL_HANDOFF_REQUIRED entry, Case.actions and the PLAN_PROPOSED entry. "
+                    "False whenever an approval is pending, since a decision request is not a "
+                    "post-effect handoff. Durable state only: it cannot know whether a run is in "
+                    "flight or whether the next run will have an observer bound"
+                ),
             }
         ),
         ActionView: MappingProxyType({}),
@@ -670,6 +678,11 @@ def decision_view(case: Case) -> DecisionView | None:
             reason_text=_reason_text_for(approval.reason_code),
             args=dict(proposal.args) if proposal is not None else {},
             requested_at=approval.requested_at,
+            # Never, and it is worth being explicit rather than relying on the resolver: a pending
+            # decision request is a question about an action that has *not* happened, so there is
+            # no external record to re-observe. Offering Approve, Reject and a re-check on one card
+            # would present a caregiver with two unrelated kinds of authority at once.
+            recheckable=False,
         )
 
     handoff = manual_handoff(case)
@@ -683,6 +696,11 @@ def decision_view(case: Case) -> DecisionView | None:
         reason_text=_reason_text_for(handoff.reason_code),
         args={},
         requested_at=handoff.at,
+        # The one derived field on this card that is not about what a caregiver is being told, but
+        # about what they may do next. It is read through the graph layer's own resolver rather than
+        # recomputed here, for the reason `proposal_for` and `latest_delivery` are: this package
+        # projects and decides nothing, and eligibility is a lifecycle rule with one home.
+        recheckable=recheck_target(case) is not None,
     )
 
 

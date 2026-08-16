@@ -35,6 +35,7 @@ from careloop.graph.context import latest_delivery
 from careloop.graph.runner import (
     AmbiguousApproval,
     ApprovalAlreadyDecided,
+    CaseNotRecheckable,
     CaseNotReopenable,
     NoSuchApproval,
     NotAnApprovableAction,
@@ -42,6 +43,7 @@ from careloop.graph.runner import (
     open_case,
     reject,
     reopen_case,
+    request_recheck,
 )
 from careloop.state.case import Case
 from careloop.state.machine import IllegalTransition
@@ -204,6 +206,50 @@ def create_app(
         the case would sit in ``PLANNING`` with nothing driving it.
         """
         return await decide(reject, case_id, approval_id, deps, who, wait)
+
+    @app.post(
+        f"{API_PREFIX}/cases/{{case_id}}/recheck",
+        response_model=RunView,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def recheck_case(case_id: str, deps: Deps, who: Caregiver, wait: float = 0.0) -> RunView:
+        """ "I checked the clinic." Ask CareLoop to observe an existing effect again.
+
+        ``AWAITING_HUMAN`` → ``VERIFYING``, then run. The case parked because an effect could not be
+        certified; this asks for another independent read of that exact effect, and for nothing
+        else. :func:`careloop.graph.runner.request_recheck` decides whether the case is in a shape
+        where that means anything, the graph run that follows executes ``dispatch → verify``, and
+        the verify node refuses to certify if no observer actually took part.
+
+        **The route takes no body, and that is the security property rather than an omission.**
+        Which external object is read is derived entirely from durable case state, so there is no
+        parameter here through which a caller could name a tool, an argument, a digest, a
+        confirmation id or an action index. A hostile body cannot participate in target selection
+        because nothing binds one.
+
+        The in-flight check comes first so the request is all-or-nothing, exactly as
+        :func:`decide` does: recording the request and then failing to schedule would leave a case
+        released into ``VERIFYING`` with a caller told it was refused.
+        """
+        case = load_case(deps.store, case_id)
+        if (running := deps.runs.in_flight_for(case_id)) is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"case {case_id!r} has run {running.run_id} in flight; ask for a re-check once "
+                    f"it settles"
+                ),
+            )
+        inbound = resume_event(deps, case)
+
+        try:
+            request_recheck(deps.store, case_id, requested_by=who)
+        except (CaseNotRecheckable, IllegalTransition) as refusal:
+            # 409 for the reason a decision conflict is one: the request is well formed and names a
+            # case the store really holds. What it conflicts with is the state of that case.
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(refusal)) from None
+
+        return await schedule(deps, case_id, inbound, wait=wait)
 
     @app.get(f"{API_PREFIX}/runs/{{run_id}}", response_model=RunView)
     async def get_run(run_id: str, deps: Deps, wait: float = 0.0) -> RunView:

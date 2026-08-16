@@ -35,6 +35,62 @@ export function scanner(page: Page) {
   return new AxeBuilder({ page }).withTags([...WCAG_TAGS]);
 }
 
+/**
+ * Wait until nothing on the page is still animating.
+ *
+ * **Measured, and it changes the answer.** Every page in this product enters on a `clRise` or
+ * `clFade` opacity animation. Scanned mid-flight, axe resolves the *blended* colour and reports
+ * results like `1.19:1` for the demo launcher's 52px heading — text that is merely part-way
+ * through fading in, not text anybody could fail to read. A suite that reported those as contrast
+ * defects would be reporting its own timing, and the first person to investigate would rightly
+ * stop trusting the whole layer.
+ *
+ * **Awaiting once is not enough, and that also had to be measured.** Pages fetch their case before
+ * rendering it, so the entrance animation begins *after* a single check has already found the
+ * document quiet — scanning then produced ratios like `1.03:1`, which is not a colour choice,
+ * it is an element at four percent opacity. So this waits, re-checks, and only stops when a fresh
+ * look finds nothing running.
+ *
+ * Infinite animations are skipped rather than waited on, since `finished` never resolves for one.
+ */
+/**
+ * Put every animation on the page at its end state, and keep it there.
+ *
+ * **Waiting for a settled moment does not work here, and that was measured rather than assumed.**
+ * Three identical runs of these scans failed 3, then 2, then 6 of ten — including states that had
+ * passed twice — because axe was photographing a moving page. Every surface enters on a `clRise` or
+ * `clFade` opacity animation, and scanned mid-flight axe resolves the *blended* colour: ratios like
+ * `1.03:1` for a 52px heading, which is not a colour choice, it is an element at four percent
+ * opacity.
+ *
+ * Two waits were tried before this. Awaiting `getAnimations()` once is not enough, because the
+ * pages fetch their case before rendering it, so the animation starts after a single check has
+ * already found the document quiet. Waiting for the network to go idle first — the dashboard polls
+ * `GET /api/cases` about once a second and every response re-renders — made nine of ten scans time
+ * out at 30s without ever reaching a quiet window.
+ *
+ * So the page is made deterministic instead of waited for. `finish()` jumps every running animation
+ * to its end, and the injected stylesheet stops any later re-render from starting another. Nothing
+ * about the palette changes: this removes the transient blend, which is precisely the thing a
+ * contrast scan must not measure. What it deliberately does *not* cover is contrast **during** a
+ * transition — a real but separate question, and one no fixed-duration wait would answer reliably
+ * either.
+ */
+export async function freezeAnimations(page: Page): Promise<void> {
+  await page.addStyleTag({
+    content: `*, *::before, *::after {
+      animation-duration: 0s !important;
+      animation-delay: 0s !important;
+      transition-duration: 0s !important;
+      transition-delay: 0s !important;
+    }`
+  });
+
+  await page.evaluate(() => {
+    for (const animation of document.getAnimations()) animation.finish();
+  });
+}
+
 /** Readable failure output. The rule id and where it landed, never the whole axe result object. */
 function describe(results: Result[]): string[] {
   return results.map(
@@ -54,6 +110,7 @@ function describe(results: Result[]): string[] {
  * time: one scan per route would test one theme and never see an open drawer.
  */
 export async function scan(page: Page, label: string, allowed: Allowance[] = []): Promise<void> {
+  await freezeAnimations(page);
   const results = await scanner(page).analyze();
 
   expect(describe(results.violations), `${label}: accessibility violations`).toEqual([]);

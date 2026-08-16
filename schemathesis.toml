@@ -1,0 +1,54 @@
+# Schemathesis, for tests/test_api_schema.py only.
+#
+# Discovered by walking up from the working directory until a `.git` directory is found, so this
+# applies when the suite is run from the repository root — which is the documented command.
+#
+# Nothing here reaches the network. The app is driven in-process over ASGI, so there is no server,
+# no port and no model call: offline and $0, like the rest of the suite.
+
+# A fixed seed and deterministic generation, on purpose.
+#
+# This is a blocking CI gate, and the whole value of a property-based failure is a counterexample
+# somebody can reproduce locally. A run that explores different inputs each time can fail once,
+# pass on re-run, and teach everybody to press the button again — which is worse than not having
+# the gate. The cost is real and worth stating: a fixed seed explores the same inputs every run,
+# so this suite finds a fixed set of defects rather than gradually discovering new ones. Raising
+# `max-examples` widens coverage deliberately; letting the seed drift would widen it by accident
+# and make the gate unreliable at the same time.
+seed = 0
+
+# Bounded, and the bound is per operation rather than per run: the pytest integration emits one
+# test per operation, so each gets its own slice of the 60s pytest-timeout in pyproject.toml
+# instead of eleven operations sharing one budget. Two app shapes are exercised at this figure —
+# see tests/test_api_schema.py — which is what keeps the total inside the job's target.
+[generation]
+max-examples = 15
+deterministic = true
+
+# The default headers every generated request carries.
+#
+# X-Caregiver is an audit identity and not a credential, so a constant is exactly right: there is
+# nothing to authenticate and any name is as valid as any other. It is declared here rather than
+# through a `map_headers` hook because a hook must *assign* — the header is a declared schema
+# parameter, so it is already generated, and `setdefault` would silently lose to the generated
+# value.
+#
+# X-CareLoop-Session is deliberately absent. It cannot be a constant: a session must be minted by
+# POST /api/sessions before it resolves to anything, and a made-up one is answered 410. The
+# isolated-app target mints one and supplies it programmatically.
+[headers]
+X-Caregiver = "schemathesis"
+
+# Off, and this is a judgement rather than a default.
+#
+# The stateful phase is a state machine over CRUD resource data-flow, and its only two checks are
+# `use_after_free` and `ensure_resource_availability`. Both need one operation to *mint* an
+# identifier another consumes. CareLoop has no such flow: POST /api/events takes a caller-chosen
+# case_id and mints nothing, and no route returns an id another route's path parameter consumes as
+# a created resource. So there is nothing for the link inference to bind, and enabling it would buy
+# a large number of additional calls for no coverage.
+#
+# What it therefore does NOT test is written down in tests/test_api_schema.py: the case lifecycle
+# is not exercised through HTTP by this suite and is not meant to be.
+[phases.stateful]
+enabled = false

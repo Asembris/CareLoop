@@ -15,6 +15,7 @@ would sit in front of this, not replace it.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Annotated
@@ -119,6 +120,15 @@ class ApiDeps:
 
     demo: bool = False
     """Whether the demo control surface is mounted. Read at build time; no route consults it."""
+
+    scenarios: asyncio.Lock = field(default_factory=asyncio.Lock)
+    """Held while a scenario puts this world back and starts it again.
+
+    Scheduling, not deciding — the same kind of thing the run registry does. Pressing a scenario is
+    a reset *and* a delivery, and no client can make two requests atomic from outside; without this
+    a visitor pressing twice quickly could have the second reset land between the first's reset and
+    its delivery. Per world, so one visitor's press never blocks another's.
+    """
 
     def __post_init__(self) -> None:
         if self.graph_runner is None:

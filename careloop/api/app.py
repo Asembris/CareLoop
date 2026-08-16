@@ -410,32 +410,16 @@ def mount_demo(app: FastAPI) -> None:
 
     @app.post(f"{API_PREFIX}/demo/reset")
     async def reset(deps: Deps) -> dict[str, object]:
-        """Clear every case, and put the external clinic back to its seeded world.
+        """Clear this world's cases, and put its clinic back to the seeded world.
 
         Not a response model, for the reason ``/api/health`` is not: it projects no stored case, so
         there is no stored field for a response field to name as its source.
 
-        **Refused while any run is in flight.** Clearing the store underneath a live graph is a
-        version conflict wearing a costume, and the run would keep going against a store nobody is
-        reading. Waiting a second and pressing again is the whole remedy.
+        **Whose world is not a parameter.** ``deps.store`` is the store the presented session
+        resolved to, so on an isolated app this cannot empty anybody else's cases — not because it
+        checks, but because there is no other store in reach.
         """
-        if (running := deps.runs.any_in_flight()) is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    f"run {running.run_id} is in flight for case {running.case_id!r}; reset once "
-                    f"it settles"
-                ),
-            )
-
-        removed = deps.store.clear()
-        if deps.clinic is not None:
-            deps.clinic.reset()
-        return {
-            "cases_cleared": removed,
-            "clinic_reset": deps.clinic is not None,
-            "scenarios": sorted(DEMO_SCENARIOS),
-        }
+        return reset_world(deps)
 
     @app.post(
         f"{API_PREFIX}/demo/scenarios/{{key}}",
@@ -443,14 +427,58 @@ def mount_demo(app: FastAPI) -> None:
         status_code=status.HTTP_202_ACCEPTED,
     )
     async def run_scenario(key: str, deps: Deps, wait: float = 0.0) -> RunView:
-        """Seed and trigger one scenario, through the ordinary delivery path."""
+        """Put this world back and trigger one scenario, through the ordinary delivery path.
+
+        **One request, and that is a repair rather than a convenience.** The frontend used to reset
+        and then start, with a retry budget in between, because two scenarios carry the same
+        referral and the second would otherwise ask a clinic that already holds the slot. Two
+        requests means a window: the reset can land and the start can be refused, leaving a world
+        wiped and nothing running, and no client can make that atomic from outside. Here the pair
+        happens under this world's own lock, so a visitor pressing twice quickly gets one settled
+        outcome rather than two half-applied ones.
+
+        The lock is per world, so it never makes one visitor wait for another.
+        """
         scenario = DEMO_SCENARIOS.get(key)
         if scenario is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"no demo scenario {key!r}; known: {', '.join(sorted(DEMO_SCENARIOS))}",
             )
-        return await deliver(deps, scenario.case_id, scenario.event_id, wait=wait)
+
+        async with deps.scenarios:
+            reset_world(deps)
+            return await deliver(deps, scenario.case_id, scenario.event_id, wait=wait)
+
+
+def reset_world(deps: ApiDeps) -> dict[str, object]:
+    """Clear one world's cases and reseed its clinic.
+
+    One function rather than two call sites, because ``POST /api/demo/reset`` and the reset a
+    scenario performs are the same act and a scenario that reset *slightly* differently is a demo
+    with a second code path in it.
+
+    **Refused while any run is in flight.** Clearing the store underneath a live graph is a version
+    conflict wearing a costume, and the run would keep going against a store nobody is reading.
+    Waiting a second and pressing again is the whole remedy.
+    """
+    if (running := deps.runs.any_in_flight()) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"run {running.run_id} is in flight for case {running.case_id!r}; reset once it "
+                f"settles"
+            ),
+        )
+
+    removed = deps.store.clear()
+    if deps.clinic is not None:
+        deps.clinic.reset()
+    return {
+        "cases_cleared": removed,
+        "clinic_reset": deps.clinic is not None,
+        "scenarios": sorted(DEMO_SCENARIOS),
+    }
 
 
 def load_event(events: EventSimulator, event_id: str) -> InboundEvent:
@@ -567,12 +595,14 @@ async def schedule(deps: ApiDeps, case_id: str, inbound: InboundEvent, *, wait: 
 
 __all__ = [
     "API_PREFIX",
+    "build_dependencies",
     "create_app",
     "decide",
     "deliver",
     "load_case",
     "load_event",
     "mount_demo",
+    "reset_world",
     "resume_event",
     "schedule",
 ]

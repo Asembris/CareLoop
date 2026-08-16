@@ -375,7 +375,8 @@ describe("building a case", () => {
           reason_code: "REQUIRES_HUMAN_APPROVAL",
           reason_text: "This action needs the caregiver's decision. Stop and await it.",
           args: BOOKING,
-          requested_at: "2026-08-13T11:00:00+00:00"
+          requested_at: "2026-08-13T11:00:00+00:00",
+          recheckable: false
         }
       }),
       detail({ state: "AWAITING_HUMAN", section: "needs_you" }),

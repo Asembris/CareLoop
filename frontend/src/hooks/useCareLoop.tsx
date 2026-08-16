@@ -10,6 +10,9 @@ interface CareLoopContextValue extends DashboardState {
   caseById(id: string): CareCase | undefined;
   approve(caseId: string, decisionId: string): void;
   reject(caseId: string, decisionId: string): void;
+  /** Ask CareLoop to look at the external record again. Takes no decision id: a re-check is not
+   *  a decision, and there is nothing for one to name. */
+  recheck(caseId: string): void;
   runScenario(id: ScenarioId): void;
   resetDemo(): void;
 }
@@ -31,6 +34,10 @@ export function CareLoopProvider({ children }: { children: ReactNode }) {
     void api.approveAction({ caseId, decisionId, approved: false });
   }, []);
 
+  const recheck = useCallback((caseId: string) => {
+    void api.recheckCase(caseId);
+  }, []);
+
   const runScenario = useCallback((id: ScenarioId) => {
     void api.runScenario(id);
   }, []);
@@ -49,10 +56,11 @@ export function CareLoopProvider({ children }: { children: ReactNode }) {
       caseById: (id: string) => state.cases.find((c) => c.id === id),
       approve,
       reject,
+      recheck,
       runScenario,
       resetDemo
     };
-  }, [state, approve, reject, runScenario, resetDemo]);
+  }, [state, approve, reject, recheck, runScenario, resetDemo]);
 
   return <CareLoopContext.Provider value={value}>{children}</CareLoopContext.Provider>;
 }

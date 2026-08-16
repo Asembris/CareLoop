@@ -87,6 +87,7 @@ function approval(over: Partial<DecisionView> = {}): DecisionView {
     reason_text: "This action needs the caregiver's decision. Stop and await it.",
     args: BOOKING,
     requested_at: "2026-08-13T11:00:00+00:00",
+    recheckable: false,
     ...over
   };
 }
@@ -267,6 +268,91 @@ describe("NO_SAFE_ACTION_AVAILABLE", () => {
     // Locked copy, and the distinction it carries is the whole point of the value.
     await screen.findByText("One case needs a person.");
     expect(screen.queryByText("One decision is waiting.")).not.toBeInTheDocument();
+  });
+});
+
+describe("EXTERNAL_STATE_NOT_CONFIRMED", () => {
+  const handoff = (over = {}) =>
+    approval({
+      reason_code: "EXTERNAL_STATE_NOT_CONFIRMED",
+      tool_name: "",
+      args: {},
+      ...over
+    });
+
+  it("offers a re-check when the server says the case is eligible, and no approval", async () => {
+    // The whole affordance. It says LOOK, never ACT: Approve, Reject and any retry wording must
+    // stay absent, because the effect already happened and no decision could change it.
+    serve([
+      card({
+        case_id: "demo-referral",
+        state: "AWAITING_HUMAN",
+        section: "needs_you",
+        decision: handoff({ recheckable: true })
+      })
+    ]);
+    show();
+
+    await screen.findByText("The result could not be confirmed");
+    expect(screen.getByRole("button", { name: "Check the clinic again" })).toBeInTheDocument();
+    expect(screen.getByText("MANUAL FOLLOW-UP REQUIRED")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reject" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Retry/ })).not.toBeInTheDocument();
+  });
+
+  it("draws no re-check button when the server says the case is not eligible", async () => {
+    // **The load-bearing half of this pair.** The reason code is identical to the case above, so
+    // a client that inferred eligibility from it would draw the button here too — on a handoff
+    // that recorded no action identity, or names an action nothing can observe, both of which the
+    // backend refuses with a 409. Server truth drives the affordance.
+    serve([
+      card({
+        case_id: "demo-referral",
+        state: "AWAITING_HUMAN",
+        section: "needs_you",
+        decision: handoff({ recheckable: false })
+      })
+    ]);
+    show();
+
+    await screen.findByText("The result could not be confirmed");
+    expect(screen.queryByRole("button", { name: "Check the clinic again" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Review situation" })).toBeInTheDocument();
+  });
+
+  it("tells the caregiver the action will not be repeated but may be looked at again", async () => {
+    serve([
+      card({
+        case_id: "demo-referral",
+        state: "AWAITING_HUMAN",
+        section: "needs_you",
+        decision: handoff({ recheckable: true })
+      })
+    ]);
+    show();
+
+    await screen.findByText(/will not repeat the action/);
+    expect(screen.getByText(/ask it to look again/)).toBeInTheDocument();
+    expect(screen.queryByText(/will not retry/)).not.toBeInTheDocument();
+  });
+
+  it("never offers a re-check beside an approval", async () => {
+    // Two unrelated kinds of authority on one card would be the worst possible confusion: one
+    // button authorises an action that has not happened, the other looks at one that has.
+    serve([
+      card({
+        case_id: "demo-referral",
+        state: "AWAITING_HUMAN",
+        section: "needs_you",
+        decision: approval({ recheckable: true })
+      })
+    ]);
+    show();
+
+    await screen.findByText("DECISION NEEDED");
+    expect(screen.queryByRole("button", { name: "Check the clinic again" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
   });
 });
 

@@ -413,7 +413,12 @@ export function decisionFor(decision: DecisionView | null): UiDecisionView | nul
     facts: copy.facts,
     after: copy.after,
     approveLabel: copy.approveLabel,
-    rejectLabel: copy.rejectLabel
+    rejectLabel: copy.rejectLabel,
+    // Straight from the backend, never derived from `reason_code` here. The server evaluates the
+    // handoff's recorded action identity and the action type's observer capability; a client that
+    // guessed from the code alone would draw a button on cases the endpoint refuses with a 409.
+    recheckable: decision.recheckable,
+    recheckLabel: copy.recheckLabel
   };
 }
 
@@ -716,6 +721,31 @@ export class RealCareLoopApi implements CareLoopApi {
     this.kick();
     return {
       caseId: input.caseId,
+      runId: result.data?.run_id ?? this.run.id,
+      accepted: result.status === 202
+    };
+  }
+
+  /** Ask CareLoop to observe an already-recorded effect again.
+   *
+   *  **The case id is the entire request.** No body is sent, and there is nothing in this
+   *  signature that could carry a tool, an argument, a confirmation id or an action — the backend
+   *  resolves what to read from the handoff it already stored. That is the security property of
+   *  the route, and it is worth keeping visible on the client side of it too.
+   *
+   *  Refusals are answers rather than errors, exactly as they are for `approveAction`: **409**
+   *  means a run is in flight or the case is not one where looking again means anything, and
+   *  **404** means the case is gone. Nothing is thrown; the next poll tells the truth. */
+  async recheckCase(caseId: string): Promise<ApprovalResult> {
+    const result = await request<RunView>(
+      `/api/cases/${encodeURIComponent(caseId)}/recheck`,
+      { method: "POST", headers: { "X-Caregiver": CAREGIVER } }
+    );
+
+    if (result.data) this.adopt(result.data);
+    this.kick();
+    return {
+      caseId,
       runId: result.data?.run_id ?? this.run.id,
       accepted: result.status === 202
     };

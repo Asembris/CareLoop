@@ -252,13 +252,37 @@ describe("decisions", () => {
     expect(copy.title).toBe("The result could not be confirmed");
     expect(copy.body).not.toContain("Nothing has been");
     expect(copy.body).toContain("carried this out");
-    expect(copy.after).toContain("will not retry");
     expect(decisionCopy("NO_SAFE_ACTION_AVAILABLE", "", {}).body).not.toBe(copy.body);
+  });
+
+  it("distinguishes not repeating the action from not looking again", () => {
+    // This line used to read "CareLoop will not retry", which was true until a caregiver could
+    // ask for another observation and is the exact sentence the re-check makes misleading. Both
+    // halves are asserted because both are dangerous to lose: dropping the first would imply the
+    // booking might be made again, and dropping the second would promise no further contact with
+    // the clinic while a button on the same card does precisely that.
+    const copy = decisionCopy("EXTERNAL_STATE_NOT_CONFIRMED", "book_appointment", {});
+    expect(copy.after).toContain("will not repeat the action");
+    expect(copy.after).toContain("ask it to look again");
+    expect(copy.after).not.toContain("will not retry");
+  });
+
+  it("labels the re-check as looking rather than as acting", () => {
+    // The label must never read as authority or as a repeat of the effect. A caregiver pressing
+    // something called "Retry" would reasonably expect a second booking, which is the one thing
+    // this operation structurally cannot do.
+    const copy = decisionCopy("EXTERNAL_STATE_NOT_CONFIRMED", "book_appointment", {});
+    expect(copy.recheckLabel).toBe("Check the clinic again");
+    for (const forbidden of ["Approve", "Retry", "Run again", "Resume", "Continue", "Book"]) {
+      expect(copy.recheckLabel).not.toContain(forbidden);
+    }
   });
 
   it("still offers no approval affordance for it", () => {
     // The safety half, separate from the copy half: a new reason to stop must never arrive with
-    // authority attached, and `decisionKindFor` defaulting closed is what guarantees that.
+    // authority attached, and `decisionKindFor` defaulting closed is what guarantees that. The
+    // re-check does not change this — it is a different axis, carried by `recheckable`, and a
+    // re-checkable card still renders no Approve and no Reject.
     expect(decisionKindFor("EXTERNAL_STATE_NOT_CONFIRMED")).toBe("NO_SAFE_ACTION_AVAILABLE");
   });
 });

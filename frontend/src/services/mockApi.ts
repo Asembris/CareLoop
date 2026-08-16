@@ -117,6 +117,11 @@ class MockCareLoopApi implements CareLoopApi {
     return this.resume();
   }
 
+  /** Not offered by the mock: a re-check needs a real recorded effect and a real observer. */
+  async recheckCase(caseId: string): Promise<ApprovalResult> {
+    return { caseId, runId: this.run.id, accepted: false };
+  }
+
   async approveAction(input: ApprovalInput): Promise<ApprovalResult> {
     const target = this.cases.find((c) => c.id === input.caseId);
     if (!target) return { caseId: input.caseId, runId: this.run.id, accepted: false };
@@ -213,7 +218,9 @@ class MockCareLoopApi implements CareLoopApi {
           ],
           after: "After you approve: book, file the confirmation, then check the clinic's own record.",
           approveLabel: "Approve Thursday",
-          rejectLabel: "Choose another"
+          rejectLabel: "Choose another",
+          recheckable: false,
+          recheckLabel: "Check the clinic again"
         }
       }));
       this.addEvent(id, { tone: "decision", text: "Decision requested" });
@@ -472,7 +479,13 @@ class MockCareLoopApi implements CareLoopApi {
           ],
           after: "Nothing was changed. CareLoop will not retry until a person resolves this.",
           approveLabel: "Approve",
-          rejectLabel: "Reject"
+          rejectLabel: "Reject",
+          // The mock is the record of the approved demo package and predates the re-check, so its
+          // cards offer none. Kept false rather than invented: this adapter is wired to no backend
+          // that could resolve a real target, and a button that resolved nothing would be worse
+          // than an absent one.
+          recheckable: false,
+          recheckLabel: "Check the clinic again"
         }
       }));
       this.setRun("SETTLED", runId + " · halted (verification mismatch)", {

@@ -454,6 +454,11 @@ export interface DecisionCopy {
   after: string;
   approveLabel: string;
   rejectLabel: string;
+  /** The label for the non-authorising re-observation affordance.
+   *
+   *  Present on every copy variant so the type stays total, and rendered only when the backend
+   *  says the case is actually re-checkable — see `DecisionView.recheckable`. */
+  recheckLabel: string;
 }
 
 /** The caregiver-facing decision card.
@@ -488,9 +493,17 @@ export function decisionCopy(
         "two do not agree, or the record could not be read at all — so CareLoop has stopped " +
         "rather than assume, and will not act again on this case by itself.",
       facts,
-      after: "Check the other system before taking another action. CareLoop will not retry.",
+      // The old line said "CareLoop will not retry", which stopped being true the moment a
+      // caregiver could ask for another observation — and the distinction it now has to carry is
+      // the whole patch. CareLoop will not repeat the *action*; it can be asked to repeat the
+      // *look*. Getting that backwards in either direction is the dangerous copy: promising no
+      // further contact while a re-check exists, or implying the booking might be made again.
+      after:
+        "CareLoop will not repeat the action. If you have checked or corrected the other " +
+        "system, you can ask it to look again.",
       approveLabel: "Approve",
-      rejectLabel: "Reject"
+      rejectLabel: "Reject",
+      recheckLabel: "Check the clinic again"
     };
   }
 
@@ -503,7 +516,8 @@ export function decisionCopy(
       facts,
       after: "Nothing was changed. CareLoop will not retry on its own.",
       approveLabel: "Approve",
-      rejectLabel: "Reject"
+      rejectLabel: "Reject",
+      recheckLabel: "Check the clinic again"
     };
   }
 
@@ -515,7 +529,8 @@ export function decisionCopy(
     facts,
     after: "After you approve: CareLoop acts, then checks the result independently.",
     approveLabel: "Approve",
-    rejectLabel: "Not now"
+    rejectLabel: "Not now",
+    recheckLabel: "Check the clinic again"
   };
 }
 

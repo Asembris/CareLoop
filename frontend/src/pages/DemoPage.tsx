@@ -1,7 +1,9 @@
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { SCENARIOS } from "@/data/mock/scenarios";
 import ScenarioCard from "@/components/scenarios/ScenarioCard";
 import { useCareLoop } from "@/hooks/useCareLoop";
+import { ensureSession } from "@/services/api";
 import type { ScenarioId } from "@/types/domain";
 
 /**
@@ -11,6 +13,21 @@ import type { ScenarioId } from "@/types/domain";
 export default function DemoPage() {
   const navigate = useNavigate();
   const { runScenario } = useCareLoop();
+
+  /* The world this visitor was given, when the backend gives out worlds at all.
+   *
+   * Shown because the independent check is part of the claim: `docs/judges.md` asks a judge to
+   * read `GET /clinic/slots` and see the appointment in a service CareLoop does not own. Under
+   * per-visitor isolation that URL needs to name a world, and without this line the instruction
+   * would quietly show an untouched clinic — the honest-looking failure, which is the worst kind. */
+  const [world, setWorld] = useState<string | null>(null);
+  useEffect(() => {
+    let showing = true;
+    void ensureSession().then((id) => showing && setWorld(id));
+    return () => {
+      showing = false;
+    };
+  }, []);
 
   const start = (id: ScenarioId) => {
     runScenario(id);
@@ -77,6 +94,32 @@ export default function DemoPage() {
             Demo uses synthetic care data. No real patient information.
           </span>
         </div>
+
+        {world && (
+          <p
+            style={{
+              margin: 0,
+              fontFamily: "var(--font-mono)",
+              fontSize: 11.5,
+              lineHeight: 1.7,
+              letterSpacing: "0.02em",
+              color: "var(--muted-foreground)"
+            }}
+          >
+            YOUR WORLD {world}
+            <br />
+            Cases and clinic are yours alone — check the appointment yourself at{" "}
+            <a
+              href={`/clinic/slots?session=${encodeURIComponent(world)}`}
+              target="_blank"
+              rel="noreferrer"
+              style={{ color: "inherit" }}
+            >
+              /clinic/slots
+            </a>
+            , a service CareLoop does not own.
+          </p>
+        )}
       </div>
     </main>
   );

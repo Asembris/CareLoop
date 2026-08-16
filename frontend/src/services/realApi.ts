@@ -91,6 +91,108 @@ const BASE_URL: string = import.meta.env.VITE_API_BASE_URL ?? "";
 export const CAREGIVER = "Maya";
 
 /* ------------------------------------------------------------------ *
+ * The session — one world per visitor
+ * ------------------------------------------------------------------ *
+ *
+ * The deployed demo gives every visitor their own case store and their own clinic, so two judges
+ * can open the URL at the same time without either noticing the other. This is the client half:
+ * one `POST /api/sessions` at the start, then that id on every request.
+ *
+ * **Nothing is asked of the visitor.** No sign-in, no button: the first request the page makes
+ * mints a world. The id is an isolation namespace and *not* authentication — the backend verifies
+ * nothing — which is the same thing `X-Caregiver` says about audit identity.
+ *
+ * **A backend without sessions answers 404 here, and that is a supported answer.** Local
+ * development and the offline suite serve one world to everybody; the adapter carries no header at
+ * all in that case and behaves exactly as it did before any of this existed.
+ *
+ * **`sessionStorage`, not `localStorage`, and not nothing.** Not nothing, because a page reload
+ * would otherwise abandon a world with the visitor's cases in it. Not `localStorage`, because that
+ * is shared by every tab: a judge with two tabs open would have them writing to one world and
+ * resetting it under each other, which is a smaller copy of the bug this session exists to fix.
+ */
+
+const SESSION_HEADER = "X-CareLoop-Session";
+const SESSION_STORAGE_KEY = "careloop.session";
+
+/** The world this page is using, `null` once we know the backend serves only one. */
+let session: string | null = null;
+
+/** Whether the question above has been answered yet. Distinguishes "no session" from "not asked". */
+let sessionResolved = false;
+
+/** The mint in flight, so concurrent first requests produce one world rather than several. */
+let minting: Promise<string | null> | null = null;
+
+function storedSession(): string | null {
+  try {
+    return window.sessionStorage.getItem(SESSION_STORAGE_KEY);
+  } catch {
+    // Private-mode browsers throw on storage access. A world that does not survive a reload is a
+    // great deal better than a page that does not load.
+    return null;
+  }
+}
+
+function rememberSession(value: string | null): void {
+  session = value;
+  sessionResolved = true;
+  try {
+    if (value === null) window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
+    else window.sessionStorage.setItem(SESSION_STORAGE_KEY, value);
+  } catch {
+    /* see storedSession */
+  }
+}
+
+/** Forget the current world, so the next request mints another. Used on a 410, and by tests. */
+export function forgetSession(): void {
+  session = null;
+  sessionResolved = false;
+  minting = null;
+  try {
+    window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
+  } catch {
+    /* see storedSession */
+  }
+}
+
+async function mint(): Promise<string | null> {
+  const held = storedSession();
+  if (held) {
+    rememberSession(held);
+    return held;
+  }
+
+  try {
+    const response = await fetch(`${BASE_URL}/api/sessions`, {
+      method: "POST",
+      headers: { Accept: "application/json" }
+    });
+    if (!response.ok) {
+      // 404 is "this backend serves one world"; anything else is a backend in trouble, and
+      // carrying no session is the same honest degradation — the next request says what is wrong.
+      rememberSession(null);
+      return null;
+    }
+    const body = (await response.json()) as { session?: string };
+    rememberSession(body.session ?? null);
+    return session;
+  } catch {
+    // Offline. Not remembered: this is not an answer about the backend's shape, and a blip must
+    // not leave the page permanently session-less against a backend that requires one.
+    return null;
+  }
+}
+
+/** The world to name on requests, minting one the first time it is needed. */
+export async function ensureSession(): Promise<string | null> {
+  if (sessionResolved) return session;
+  if (!minting) minting = mint().finally(() => (minting = null));
+  return minting;
+}
+
+/* ------------------------------------------------------------------ *
  * HTTP
  * ------------------------------------------------------------------ */
 
@@ -104,16 +206,31 @@ export interface HttpResult<T> {
  *
  *  A thrown network error is caught and reported as status 0, because the UI has nowhere to show
  *  an exception: `useCareLoop` calls every verb as `void api.x()`. A screen that keeps showing the
- *  last good state through a blip is better than a screen that goes blank. */
+ *  last good state through a blip is better than a screen that goes blank.
+ *
+ *  **410 is the one status this retries**, and only once. It means the world this page was using
+ *  is gone — the backend restarted, or it went idle and was forgotten — and the remedy is entirely
+ *  mechanical: mint another and ask again. It is a distinct status from the 409 a busy case
+ *  returns precisely so this can tell them apart without reading any prose. */
 export async function request<T>(
   path: string,
-  init: RequestInit = {}
+  init: RequestInit = {},
+  remint = true
 ): Promise<HttpResult<T>> {
+  const world = await ensureSession();
   try {
     const response = await fetch(`${BASE_URL}${path}`, {
       ...init,
-      headers: { Accept: "application/json", ...(init.headers ?? {}) }
+      headers: {
+        Accept: "application/json",
+        ...(world ? { [SESSION_HEADER]: world } : {}),
+        ...(init.headers ?? {})
+      }
     });
+    if (response.status === 410 && remint) {
+      forgetSession();
+      return request<T>(path, init, false);
+    }
     if (!response.ok) return { status: response.status };
     const text = await response.text();
     return { status: response.status, data: text ? (JSON.parse(text) as T) : undefined };
@@ -609,10 +726,10 @@ export const POLL_INTERVAL_MS = 1000;
  *  world is at rest and stop one tick before the run it just started became visible. */
 export const SETTLE_GRACE_MS = 4000;
 
-/** Gap between attempts when a reset is refused because a run is in flight. */
+/** Gap between attempts when a scenario or a reset is refused because a run is in flight. */
 export const RESET_RETRY_MS = 400;
 
-/** How many times to re-attempt a refused reset.
+/** How many times to re-attempt a refused scenario or reset.
  *
  *  `RESET_ATTEMPTS * RESET_RETRY_MS` has to exceed the longest a run can take, and the original
  *  3 x 300ms did not come close. Session E measured this against the deployed backend: a run
@@ -751,20 +868,32 @@ export class RealCareLoopApi implements CareLoopApi {
     };
   }
 
-  /** Press one of the three scenarios.
+  /** Press one of the four scenarios.
    *
-   *  Reset first, exactly as the mock adapter did, and for a reason the mock could not have
-   *  known: `referral` and `injection` both carry the same referral document, so both propose the
-   *  same slot. Pressing the second without a reset gets a correct 409 from a clinic that already
-   *  holds it — which surfaces as a FAILED case and reads, in front of a judge, like the
-   *  injection defence failing at something that has nothing to do with injection. */
+   *  **One request, and the reset is the server's half of it.** `referral` and `injection` carry
+   *  the same referral document and therefore ask for the same slot, so a scenario pressed on top
+   *  of another gets a correct 409 from a clinic that already holds it — which reads, in front of
+   *  a judge, like the injection defence failing at something unrelated to injection. This used to
+   *  be `resetDemo()` and then the scenario, which is two requests with a window between them: the
+   *  reset lands, the start is refused, and the screen is left empty with nothing running. A client
+   *  cannot close that window, so the backend does the pair under this world's own lock.
+   *
+   *  A 409 here means this visitor's *own* previous run has not settled, which is exactly when
+   *  pressing again should wait — so the retry budget stays, now guarding one call rather than
+   *  bridging two. */
   async runScenario(id: ScenarioId): Promise<ScenarioRun> {
-    await this.resetDemo();
+    this.forget();
     this.scenario = id;
 
-    const result = await request<RunView>(`/api/demo/scenarios/${encodeURIComponent(id)}`, {
-      method: "POST"
-    });
+    let result: HttpResult<RunView> = { status: 0 };
+    for (let attempt = 0; attempt < RESET_ATTEMPTS; attempt += 1) {
+      result = await request<RunView>(`/api/demo/scenarios/${encodeURIComponent(id)}`, {
+        method: "POST"
+      });
+      if (result.status !== 409) break;
+      await new Promise((resolve) => setTimeout(resolve, RESET_RETRY_MS));
+    }
+
     if (result.data) this.adopt(result.data);
     this.kick();
     return {

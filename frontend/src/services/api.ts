@@ -1,6 +1,15 @@
 import type { CareLoopApi, DashboardState } from "@/types/domain";
 import { emptyRun, realApi } from "./realApi";
 
+/** Which world this browser is using, or `null` when the backend serves one to everybody.
+ *
+ *  Re-exported here rather than reached for inside a component, so `services/` stays the only
+ *  place that knows the backend has a shape. The deployed demo gives every visitor their own case
+ *  store and their own clinic; a page shows the id so that `GET /clinic/slots?session=…` — the
+ *  check `docs/judges.md` asks a judge to run for themselves — reaches the same world they have
+ *  been watching rather than an untouched one. */
+export { ensureSession } from "./realApi";
+
 /* ------------------------------------------------------------------ *
  * THE INTEGRATION SEAM — now pointed at the real backend.
  *

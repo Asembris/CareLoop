@@ -112,6 +112,11 @@ function serve(cards: CaseCard[], timelines: Record<string, TimelineEventView[]>
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
+      // A backend serving one world to everybody, which is what these screens are about. The
+      // adapter takes the 404 as "carry no session" — and the mint is not one of the verbs a
+      // button issues, so it is answered before `posts` is written to rather than filtered out of
+      // it afterwards.
+      if (url.endsWith("/api/sessions")) return new Response("", { status: 404 });
       if (init?.method === "POST") {
         world.posts.push({ url, headers: (init.headers ?? {}) as Record<string, string> });
         return new Response(

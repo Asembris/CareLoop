@@ -821,16 +821,162 @@ describe("approve and reject", () => {
   });
 });
 
+describe("one world per visitor", () => {
+  /** A backend that mints worlds and refuses anything that does not name one it knows. */
+  function isolatedBackend(minted: string[] = ["world-one", "world-two"]) {
+    const calls: Call[] = [];
+    const live = new Set<string>();
+    let next = 0;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const headers = (init?.headers ?? {}) as Record<string, string>;
+        calls.push({ url, method: init?.method ?? "GET", headers });
+
+        if (url.endsWith("/api/sessions")) {
+          const id = minted[Math.min(next, minted.length - 1)];
+          next += 1;
+          live.add(id);
+          return new Response(JSON.stringify({ session: id }), { status: 201 });
+        }
+        const named = headers["X-CareLoop-Session"];
+        if (!named) return new Response("", { status: 400 });
+        if (!live.has(named)) return new Response("", { status: 410 });
+        return new Response(
+          JSON.stringify({ needs_you: [], working: [], completed: [] }),
+          { status: 200 }
+        );
+      })
+    );
+
+    return { calls, live };
+  }
+
+  it("mints a world before the first read and names it on every request", async () => {
+    const world = isolatedBackend();
+    const api = new RealCareLoopApi();
+
+    await api.getDashboard();
+    await api.getDashboard();
+
+    expect(world.calls.filter((c) => c.url.endsWith("/api/sessions"))).toHaveLength(1);
+    const named = world.calls.filter((c) => c.url.endsWith("/api/cases"));
+    expect(named).toHaveLength(2);
+    expect(named.every((c) => c.headers["X-CareLoop-Session"] === "world-one")).toBe(true);
+  });
+
+  it("mints once even when several reads start at the same moment", async () => {
+    // The dashboard fires the case list and each detail together, so the first paint is where a
+    // careless implementation mints a world per in-flight request and then keeps the last one.
+    const world = isolatedBackend();
+    const api = new RealCareLoopApi();
+
+    await Promise.all([api.getDashboard(), api.getDashboard(), api.getDashboard()]);
+
+    expect(world.calls.filter((c) => c.url.endsWith("/api/sessions"))).toHaveLength(1);
+  });
+
+  it("re-mints and retries when its world has been forgotten", async () => {
+    // 410 is its own status precisely so this is mechanical: the backend restarted or the world
+    // went idle, and the remedy is a new one. A judge sees a fresh dashboard rather than an error.
+    const world = isolatedBackend();
+    const api = new RealCareLoopApi();
+    await api.getDashboard();
+
+    world.live.delete("world-one");
+    const after = await api.getDashboard();
+
+    expect(after.cases).toEqual([]);
+    expect(world.calls.filter((c) => c.url.endsWith("/api/sessions"))).toHaveLength(2);
+    const last = world.calls[world.calls.length - 1];
+    expect(last.headers["X-CareLoop-Session"]).toBe("world-two");
+  });
+
+  it("re-mints at most once per request rather than looping", async () => {
+    const world = isolatedBackend();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        world.calls.push({
+          url,
+          method: init?.method ?? "GET",
+          headers: (init?.headers ?? {}) as Record<string, string>
+        });
+        if (url.endsWith("/api/sessions")) {
+          return new Response(JSON.stringify({ session: "always-stale" }), { status: 201 });
+        }
+        return new Response("", { status: 410 });
+      })
+    );
+
+    await new RealCareLoopApi().getDashboard();
+
+    expect(world.calls.filter((c) => c.url.endsWith("/api/cases"))).toHaveLength(2);
+  });
+
+  it("carries no session against a backend that serves one world to everybody", async () => {
+    // Local development and the offline suite. 404 on the mint is a supported answer, not a fault.
+    const world = fakeBackend();
+    await new RealCareLoopApi().getDashboard();
+
+    const read = world.calls.filter((c) => c.url.endsWith("/api/cases"));
+    expect(read).toHaveLength(1);
+    expect(read[0].headers["X-CareLoop-Session"]).toBeUndefined();
+  });
+
+  it("keeps its world across a reload", async () => {
+    // Not `localStorage`: two tabs sharing one world would reset it under each other, which is a
+    // smaller copy of the bug per-visitor isolation exists to fix. And not nothing, because a
+    // reload would otherwise abandon a world with the visitor's cases still in it.
+    const world = isolatedBackend();
+    await new RealCareLoopApi().getDashboard();
+
+    // A reload is fresh module state over the same tab storage, so the module is genuinely
+    // re-executed rather than a private reset being exposed to fake one.
+    vi.resetModules();
+    const reloaded = await import("./realApi");
+    await new reloaded.RealCareLoopApi().getDashboard();
+
+    expect(world.calls.filter((c) => c.url.endsWith("/api/sessions"))).toHaveLength(1);
+    expect(window.sessionStorage.getItem("careloop.session")).toBe("world-one");
+  });
+});
+
 describe("the demo control surface", () => {
-  it("resets before pressing a scenario", async () => {
+  it("presses a scenario in one request and lets the server reset", async () => {
     // referral and injection both carry the same referral document and propose the same slot;
     // pressing the second without a reset gets a correct 409 from a clinic that already holds it.
+    // This used to be a client-side reset followed by the scenario — two requests with a window
+    // between them, where the reset can land and the start be refused, leaving an empty dashboard
+    // and nothing running. No client can make that pair atomic, so the backend owns it now.
     const world = fakeBackend();
     const api = new RealCareLoopApi();
     await api.runScenario("injection");
 
     const order = world.calls.filter((c) => c.url.startsWith("/api/demo/")).map((c) => c.url);
-    expect(order).toEqual(["/api/demo/reset", "/api/demo/scenarios/injection"]);
+    expect(order).toEqual(["/api/demo/scenarios/injection"]);
+  });
+
+  it("waits out a scenario refused because its own run is in flight", async () => {
+    // The retry budget did not go away with the client-side reset — it moved onto the one call.
+    // A 409 here is this visitor's previous run, which is exactly when pressing again should wait.
+    vi.useFakeTimers();
+    try {
+      const world = fakeBackend();
+      world.status["/api/demo/scenarios/referral"] = 409;
+
+      const api = new RealCareLoopApi();
+      const settled = api.runScenario("referral");
+      await vi.advanceTimersByTimeAsync(RESET_ATTEMPTS * RESET_RETRY_MS + 1000);
+      await settled;
+
+      expect(
+        world.calls.filter((c) => c.url === "/api/demo/scenarios/referral")
+      ).toHaveLength(RESET_ATTEMPTS);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("waits out a reset refused because a run is in flight", async () => {

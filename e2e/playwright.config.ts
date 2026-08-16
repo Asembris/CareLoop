@@ -74,6 +74,11 @@ export default defineConfig({
   // constraint is memory, so a 12-core box with a full RAM disk gets the worst of both. It also
   // matches what a two-core GitHub runner can actually do. The fix for a slow suite is fewer,
   // better tests — never a retry that hides this.
+  //
+  // **This is a local memory measurement, not a correctness constraint.** It was taken on a machine
+  // with 2.9 GB of 16 GB free; a CI runner has more headroom, and nothing about the suite breaks at
+  // a higher number. Raise it if your machine can take it — but re-measure rather than assume, and
+  // do not read a failure at 6 workers as a defect in the thing being tested.
   workers: 2,
 
   // A spec that only passes on the second attempt is a spec nobody can trust. The local stack is

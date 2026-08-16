@@ -122,7 +122,16 @@ export default function UnderTheHoodDrawer() {
                           : "color-mix(in oklab, currentColor 25%, transparent)"
                     }}
                   />
-                  <span style={{ fontSize: 14.5, opacity: active ? 1 : past ? 0.75 : 0.35 }}>{name}</span>
+                  {/* 0.65 / 0.85 / 1, not 0.35 / 0.75 / 1. These are informational text, not
+                      controls — no role, no handler, nothing focusable — so WCAG 1.4.3's
+                      "inactive user interface component" exemption does not reach them, and the
+                      dimming is itself the information that a stage has not been reached. At 0.35
+                      a future stage rendered 2.08:1 in light and 2.80:1 in dark against a 4.5:1
+                      requirement; 0.65 gives 4.71 and 6.56. `past` rose from 0.75 to 0.85 for the
+                      hierarchy rather than for contrast: with the floor at 0.65 the old value left
+                      a 0.10 gap between "not yet" and "done", which is not a distinction anybody
+                      could see. The dot's colour and the "running"/"done" label carry it too. */}
+                  <span style={{ fontSize: 14.5, opacity: active ? 1 : past ? 0.85 : 0.65 }}>{name}</span>
                   <span
                     style={{
                       marginLeft: "auto",

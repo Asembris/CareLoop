@@ -30,8 +30,12 @@ export default function SecurityEvidencePanel() {
           flexWrap: "wrap",
           fontFamily: "var(--font-mono)",
           fontSize: 13,
-          color: "var(--muted-foreground)",
-          opacity: 0.7
+          // `--muted-foreground` alone, with no opacity on top of it. The token already *is* the
+          // de-emphasised colour — 7.36:1 in light, 5.48:1 in dark — and multiplying it by 0.7
+          // dropped this row to 3.56 and 3.32 against a 4.5:1 requirement. Double-muting is what
+          // broke it, on the one page whose whole job is credibility. The row still reads as
+          // secondary to the paragraph above through 13px uppercase mono against 15px sans.
+          color: "var(--muted-foreground)"
         }}
       >
         <span>UNAUTHORIZED EXTERNAL ACTIONS &nbsp; —</span>

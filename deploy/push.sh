@@ -30,6 +30,9 @@ echo "== packing"
 #           needs no key at all; see deploy/careloop.env.
 #   *.sqlite3*  the server's durable source of truth, WAL sidecars included. Shipping a local
 #           copy would overwrite it with a developer's scratch database.
+#   e2e/    the end-to-end suite. Test code has no business on the instance: it is not what is
+#           being served, it names ports and hosts the deployment does not use, and the one thing
+#           worse than shipping it is shipping it and having somebody run it there.
 #
 # The patterns are unanchored on purpose: `./**/__pycache__` is a bashism tar does not expand,
 # so a leading `./` here would have matched only the repository root.
@@ -44,6 +47,7 @@ tar --exclude='.keys' \
     --exclude='*.sqlite3*' \
     --exclude='*.pem' \
     --exclude='frontend/reference' \
+    --exclude='e2e' \
     -czf "$TAR" .
 
 echo "== confirming nothing secret is in the tarball"

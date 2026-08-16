@@ -54,12 +54,18 @@ def test_failed_is_reachable_from_every_state_still_in_flight(state: CaseState) 
 def test_verification_can_never_return_a_case_to_planning() -> None:
     """**The state-machine half of the post-effect safety property.**
 
-    Every entry into ``VERIFYING`` is post-effect: it is reachable only from ``EXECUTING`` and
-    ``WAITING_EXTERNAL``, the execute node moves a case here after recording an action or
-    suppressing a duplicate of one, and the verify node fails the case outright when no
-    ``ActionRecord`` exists. So a verification failure is never "that did not work, try again" — an
-    action has been carried out — and returning the case to the planner meant planning on top of an
-    outcome nobody had established.
+    Every entry into ``VERIFYING`` is post-effect, and that survived gaining a third source. The
+    execution entries — ``EXECUTING`` and ``WAITING_EXTERNAL`` — are the execute node moving on
+    after recording an action or suppressing a duplicate of one, and the verify node fails the case
+    outright when no ``ActionRecord`` exists. The third is the caregiver's re-check from
+    ``AWAITING_HUMAN``, which :func:`careloop.graph.context.recheck_target` permits only when the
+    case's post-effect handoff is bound to an existing ``ActionRecord`` — so a case with nothing
+    carried out cannot take it either. See :func:`test_verification_is_still_only_entered_after_an_
+    effect` below.
+
+    So a verification failure is never "that did not work, try again" — an action has been carried
+    out — and returning the case to the planner meant planning on top of an outcome nobody had
+    established.
 
     Measured before the repair: an identical reproposal was suppressed and re-verified into the same
     failure until the SDK's node bound stopped the run, and a reproposal differing in one free-text
@@ -95,6 +101,41 @@ def test_verifying_can_reach_exactly_three_states() -> None:
     """
     assert TRANSITIONS[CaseState.VERIFYING] == frozenset(
         {CaseState.DONE, CaseState.AWAITING_HUMAN, CaseState.FAILED}
+    )
+
+
+def test_verification_is_still_only_entered_after_an_effect() -> None:
+    """The three sources of ``VERIFYING``, pinned as a set so a fourth is a deliberate edit.
+
+    ``AWAITING_HUMAN`` joined for the caregiver's re-check and it is the one entry no node makes.
+    What keeps the post-effect claim true is not the table but the guard behind that source:
+    :func:`careloop.graph.context.recheck_target` refuses unless the case's current handoff names an
+    existing ``ActionRecord``, so the new edge cannot be taken by a case where nothing happened.
+    ``tests/test_recheck_writers.py`` is where the writer restriction is enforced.
+    """
+    sources = {state for state, targets in TRANSITIONS.items() if CaseState.VERIFYING in targets}
+
+    assert sources == {
+        CaseState.EXECUTING,
+        CaseState.WAITING_EXTERNAL,
+        CaseState.AWAITING_HUMAN,
+    }
+
+
+def test_a_parked_case_can_be_sent_back_to_verification_but_nowhere_new() -> None:
+    """``AWAITING_HUMAN``'s exact target set. Nothing currently guarded this before Patch 2C.
+
+    Measured while planning it: adding ``VERIFYING`` to this row moved none of the suite's 2279
+    assertions, so the legality was entirely unpinned. It is pinned here and in
+    ``tests/test_recheck_writers.py``, which asserts the same set from the other direction.
+    """
+    assert TRANSITIONS[CaseState.AWAITING_HUMAN] == frozenset(
+        {
+            CaseState.READY_TO_EXECUTE,
+            CaseState.PLANNING,
+            CaseState.VERIFYING,
+            CaseState.FAILED,
+        }
     )
 
 

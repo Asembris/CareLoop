@@ -1,0 +1,95 @@
+# Is the live demo still working? Asked every hour, by something that is not a person.
+#
+# The judging window is three weeks long and nobody will be watching for most of it. A demo that
+# died on a Tuesday and is discovered on a Friday has cost more than anything else on the roadmap,
+# and the failure modes are quiet ones: the instance reboots and a unit does not come back, Bedrock
+# starts refusing, a CDN behaviour is edited, the clinic process dies while the API keeps answering.
+#
+# **No credentials, no SSH, no deploy.** It runs `scripts/verify_deploy.py`, which speaks public
+# HTTP only and mints its own two worlds — the same isolation it asserts is what makes it safe to
+# run against a demo somebody is using. This workflow deliberately cannot change anything: with
+# `contents: read` and `issues: write` it has no way to touch the instance even if it wanted to.
+#
+# It is emphatically **not** a deploy pipeline. Deploying is manual on purpose: a deploy hands every
+# live visitor a fresh world, so an automatic one would reintroduce, through a different channel,
+# exactly the failure per-visitor isolation was built to remove.
+
+name: Demo health
+
+on:
+  schedule:
+    # Hourly, on the half hour to stay off the crowded top-of-hour queue. GitHub delays scheduled
+    # runs under load, which is fine: this is a smoke alarm, not a clock.
+    - cron: "30 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: demo-health
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # No install step: the script imports the standard library and nothing else, on purpose. A
+      # health check that needs a dependency tree is a health check that can fail for reasons that
+      # have nothing to do with the thing it is checking.
+      - name: Verify the live demo through CloudFront
+        id: probe
+        run: python scripts/verify_deploy.py
+
+      # Only when it actually broke. An issue per failing hour would train everyone to ignore them,
+      # so an existing open one is updated instead of a second being filed.
+      - name: Raise or update an issue
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = "Live demo is failing its deployed checks";
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              `The hourly probe of https://d2heuwvhvrdyig.cloudfront.net failed.`,
+              ``,
+              `Log: ${run}`,
+              ``,
+              `This is public-HTTP only — it asserts that a world can be minted, that a scenario`,
+              `runs and is verified against the clinic, that two visitors stay isolated, and that`,
+              `nothing is cacheable at the edge. It changes nothing and cannot deploy.`,
+              ``,
+              `Reproduce locally with: \`python scripts/verify_deploy.py\``,
+            ].join("\n");
+
+            const open = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              labels: "demo-health",
+            });
+
+            if (open.data.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: open.data[0].number,
+                body: `Still failing. ${run}`,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ["demo-health"],
+              });
+            }

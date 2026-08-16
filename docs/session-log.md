@@ -5345,7 +5345,7 @@ editable source and an export is never edited, exactly as with the fixture PDFs.
 
 ### Results
 
-**2451 passed, 37 skipped** (2396 before). `ruff check` and `ruff format --check` clean. Frontend:
+**2485 passed, 37 skipped** (2396 before). `ruff check` and `ruff format --check` clean. Frontend:
 **119 passed across 6 files**, typecheck and build clean. Replay **unchanged at 0 of 320 / 320 of
 320**, run before and after rather than asserted — nothing about isolation touches case identity, so
 idempotency keys and confirmation ids are byte-identical to before. Two visitors pressing the same
@@ -5430,12 +5430,108 @@ judge watching at that moment sees their dashboard stop moving.
 **`/opt/careloop/state/demo.sqlite3` is dormant**, holding pre-isolation cases and written by
 nothing. It stays so that dropping `--isolate-sessions` restores the durable single world exactly.
 
+### A filming constraint, which is what the timing finding really is
+
+`SLOWEST_OBSERVED_RUN_MS` is a retry-budget number, but the measurement behind it is a *video* fact:
+
+```
+warm, solo                              1.9 – 2.9s
+three visitors at once                  2.1 / 2.2 / 2.4s
+minutes after a redeploy, two at once   10.7s and 14.6s
+```
+
+**Do not redeploy on filming day.** Deploy the night before, or press every scenario once and let
+them settle before recording — a cold process turns a five-second beat into fifteen, and the
+dashboard's pacing cannot hide it. Concurrency is *not* the risk: three simultaneous runs cost no
+more than one, so a second person using the demo while filming is fine.
+
+### Deployment gets its own check, and it is not a deploy pipeline
+
+**Auto-deploy on green was considered and refused.** After this session a deploy is destructive to
+live visitors — every world becomes a 410 — so deploying on every green `main` would reintroduce,
+through a different channel, exactly the failure isolation was built to remove: somebody else's
+action wiping the world a judge is looking at. It would also mean opening port 22 to GitHub's runner
+ranges and moving the deploy key into secrets in a repository that goes public in a month, in
+exchange for automating three to five more runs of a three-minute command.
+
+Two things were built instead.
+
+**`scripts/verify_deploy.py`**, run by `push.sh` at the end of every deploy. It asserts, *through the
+distribution*, what CI structurally cannot see because CI runs the code and not the deployment: a
+world can be minted and survives the CDN, a scenario runs and is verified against the clinic, two
+visitors stay isolated across cases and clinics, a reset reaches one world only, `/api/*` and
+`/clinic/*` are `no-store` at the edge, and the shell names a fingerprinted bundle that carries the
+session code. Public HTTP only, no credentials, and read-only apart from the two worlds it mints —
+the isolation it asserts is what makes it safe to run against a demo somebody is using.
+
+**Its own vacuity proof, run rather than argued**: pointed at a single-world deployment it fails at
+`a request naming no world is 400` and exits 1; pointed at a dead port it exits 2.
+
+**`.github/workflows/demo-health.yml`** runs the same script hourly, with `contents: read` and
+`issues: write` and no secrets, so it cannot deploy or touch the instance even in principle. A
+failure opens one issue and comments on it thereafter rather than filing a new one every hour. The
+judging window is three weeks and nobody will be watching; a demo that died on a Tuesday and is
+found on a Friday costs more than anything left on the roadmap.
+
+### Secrets: the history was scanned, and gitleaks was measured rather than assumed
+
+**The scan first, because the repository goes public and that publishes the whole history.** Every
+blob reachable from any ref, tag or the reflog — **891 of them** — read once and scanned two ways:
+by credential shape, and by the *exact literal values* currently in `.env` and `.keys/`, which is
+the only pass that can answer "is anything of mine already in there" with no false positives and no
+false negatives.
+
+```
+shape hits    3, all the same deliberate fixture in tests/test_llm_providers.py
+exact hits    0 of the live credentials, out of AWS id, AWS secret, OpenAI, NVIDIA, the deploy key
+              (the one "found" value is NVIDIA_BASE_URL, a public URL, in providers.py and .env.example)
+```
+
+The history is clean. Nothing to rotate for cause, nothing to rewrite.
+
+**Then the standing guard: `tests/test_nothing_secret_is_tracked.py`, in the suite rather than in
+CI.** Two halves, because the two accidents are different — a forbidden *path* being tracked
+(`git add -f .env`, a stray `.pem`) and a credential *shape* pasted into a file that is already
+tracked. Both have planted-path and planted-value vacuity proofs, and the second has the other kind
+too: the strings this repository is full of — 64-hex idempotency keys, `apr-…`, `apt-…`, cache
+digests — are asserted **not** to fire.
+
+**gitleaks was run before deciding, and the numbers are why it is not in CI:**
+
+| | |
+|---|---|
+| findings over the full history | **230** |
+| true positives among them | **0** |
+| all 230 from | `generic-api-key` on `"key": "<hash>"` in `bench/cache/` and `evals/cache/` |
+| true positives in any *tracked* file | **0** |
+| what it did find | `.env` and `.keys/*.pem` — untracked, gitignored, already covered by the path sweep |
+
+Quieting it would mean allowlisting the two cache directories wholesale — which are captured model
+I/O, the most valuable thing here to scan — or carrying a 230-entry baseline that grows with every
+new fixture. That is the shape of a check somebody eventually switches off. So the vendor prefixes
+were kept, the entropy heuristic dropped, and the result runs in the suite at **zero false positives
+over 412 tracked text files**.
+
+**One thing worth recording because it was funny and load-bearing.** The content sweep flagged
+*itself*: its vacuity proofs contained real credential shapes. Allowlisting the file would have made
+a genuine key pasted there invisible, so the planted strings are assembled at runtime instead and
+the module stays honestly scannable. **A detector that has to exempt itself has told you something
+about the exemption, not about the detector.**
+
+The AWS account id in this log stays. It is in every ARN in the IAM policies already, it is not a
+secret, and rewriting history for it buys nothing.
+
 ### Open decisions
 
 31. **New.** Whether the isolated demo should persist worlds — a SQLite file per session, evicted
     with the world — so a redeploy does not empty every visitor's dashboard. Deliberately not done:
     it adds file lifecycle to a demo that is otherwise ephemeral by design, and the 410 path is
     clean. Revisit only if judging produces a restart people notice.
+
+32. **New, and closed by decision rather than by work.** No auto-deploy on green, for the reasons
+    above. If deploying from more than one machine ever becomes necessary, it is `workflow_dispatch`
+    only — a human decides *when*, CI decides *how* — and reached through SSM rather than by opening
+    22.
 
 29, 30, 22, 25, 26, 28. **Unchanged.**
 

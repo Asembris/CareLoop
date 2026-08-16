@@ -43,7 +43,7 @@ from careloop.graph.builder import (
     NODE_TIMEOUT,
     build_graph,
 )
-from careloop.graph.context import RunContext
+from careloop.graph.context import RunContext, recheck_target
 from careloop.graph.trusted import trusted_facts
 from careloop.state.case import ApprovalStatus, Case, CaseState, TimelineKind
 from careloop.state.machine import append_event, transition
@@ -84,6 +84,22 @@ class AmbiguousApproval(Exception):
     Refusing rather than repairing is the point. Rewriting persisted records to make them unique
     would be a migration that edits history to make history tidy, which is the opposite of what an
     append-only audit trail is for.
+    """
+
+
+class CaseNotRecheckable(Exception):
+    """Raised when a case is not in a shape where re-observing an existing effect means anything.
+
+    **One exception and one message for every refused precondition**, which is deliberate rather
+    than lazy. The reasons a re-check may be refused — wrong state, a decision still outstanding,
+    the other kind of handoff, a handoff that recorded no action identity, a key naming no record,
+    an action type nothing can observe independently, a proposal that keys to a different action —
+    are all *"this case is not one where looking again is a thing that can be done"*, and a caller
+    who can tell them apart by probing has been handed a map of the preconditions. The closed
+    :class:`careloop.policy.verdicts.ReasonCode` vocabulary exists for the same reason one layer
+    down. The full picture is on the case's own timeline, which is the audit surface.
+
+    Tests distinguish the causes by constructing them, which is where the distinction belongs.
     """
 
 
@@ -365,6 +381,85 @@ def reject(
     )
 
 
+def request_recheck(
+    store: CaseStore,
+    case_id: str,
+    *,
+    requested_by: str,
+    now: datetime | None = None,
+) -> Case:
+    """Record that a caregiver asked for an existing effect to be observed again.
+
+    ``AWAITING_HUMAN`` → ``VERIFYING``. The next :func:`run_case` enters through the dispatch node,
+    which routes on the state this leaves behind — so the re-check needs no new graph edge, and
+    ``outgoing(verify)`` stays empty.
+
+    **This recovers knowledge, never authority**, and every line of it is shaped by that. It
+    proposes nothing, asks no model, evaluates no policy, raises no :class:`Approval`, dispatches no
+    tool, and performs no external read itself; the graph run the caller schedules afterwards does
+    the looking. What it writes is one audit entry and one transition.
+
+    The target is resolved entirely from durable server-side state by
+    :func:`careloop.graph.context.recheck_target` — **there is deliberately no parameter through
+    which a caller could name one.** That is the client trust boundary made structural rather than
+    validated: a browser cannot pass a tool, an argument, a digest, a confirmation id or an action
+    index because the signature has nowhere to put them.
+
+    Note what is *not* checked here. Whether a run is already in flight is execution context and
+    belongs to the API layer, which refuses before calling this; whether the run that follows
+    actually has an observer bound is a fact about a :class:`~careloop.graph.context.RunContext`
+    that only :class:`careloop.graph.nodes.VerifyNode` can establish, and it fails closed there.
+    Keeping *"is this case bound to a re-checkable action"* apart from *"can this request be
+    scheduled right now"* is what lets the projector answer the first without pretending to answer
+    the second.
+
+    Everything is checked before anything moves, so a refusal cannot mean "half recorded" — no
+    timeline entry, no transition, no version bump.
+
+    Raises:
+        CaseNotFound: if the store does not hold ``case_id``.
+        CaseNotRecheckable: if the case carries no post-effect handoff bound to an existing,
+            independently observable action whose identity the current proposal re-derives.
+    """
+    at = now or _utcnow()
+    case = store.get(case_id)
+    base = case.version
+
+    target = recheck_target(case)
+    if target is None:
+        raise CaseNotRecheckable(
+            f"case {case_id!r} carries no confirmable external effect to observe again; a re-check "
+            f"needs a case stopped on an unconfirmed action that is durably identified and can be "
+            f"read back independently"
+        )
+
+    case = append_event(
+        case,
+        kind=TimelineKind.EXTERNAL_RECHECK_REQUESTED,
+        actor=f"human:{requested_by}",
+        summary=f"{requested_by} asked for {target.tool_name} to be checked again",
+        diagnostic=(
+            f"{requested_by} asked CareLoop to independently observe the effect recorded under "
+            f"idempotency key {target.idempotency_key} once more. Nothing is authorised by this: "
+            f"the effect already happened, the recorded action is unchanged, and the only thing "
+            f"that follows is another read of the external system's own record of it."
+        ),
+        payload={
+            "tool_name": target.tool_name,
+            "idempotency_key": target.idempotency_key,
+        },
+        now=at,
+    )
+    case = transition(
+        case,
+        CaseState.VERIFYING,
+        reason=f"{requested_by} asked for the external record of {target.tool_name} to be re-read",
+        actor=f"human:{requested_by}",
+        now=at,
+    )
+    return store.save(case, expected_version=base)
+
+
 def _decide(
     store: CaseStore,
     case_id: str,
@@ -479,6 +574,7 @@ def _decide(
 __all__ = [
     "AmbiguousApproval",
     "ApprovalAlreadyDecided",
+    "CaseNotRecheckable",
     "CaseNotReopenable",
     "NoSuchApproval",
     "NotAnApprovableAction",
@@ -488,5 +584,6 @@ __all__ = [
     "open_case",
     "reject",
     "reopen_case",
+    "request_recheck",
     "run_case",
 ]

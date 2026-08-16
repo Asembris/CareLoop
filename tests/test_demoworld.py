@@ -25,8 +25,14 @@ from fastapi.testclient import TestClient
 import demoworld
 from careloop.graph.trusted import configured
 from careloop.tools.document_source import DOCUMENT_SOURCES
-from demoworld.app import IDEMPOTENCY_HEADER, create_clinic_app
-from demoworld.clinic import SEEDED_SLOTS, Clinic
+from demoworld.app import (
+    IDEMPOTENCY_HEADER,
+    SESSION_HEADER,
+    SESSION_PARAM,
+    create_clinic_app,
+    demo_session,
+)
+from demoworld.clinic import SEEDED_SLOTS, Clinic, Clinics
 
 KEY = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
 OTHER_KEY = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
@@ -49,11 +55,16 @@ def client(world: Clinic) -> TestClient:
     return TestClient(create_clinic_app(world))
 
 
-def book(client: TestClient, key: str = KEY, **changes: str):
+def book(
+    client: TestClient,
+    key: str = KEY,
+    headers: dict[str, str] | None = None,
+    **changes: str,
+):
     return client.post(
         "/clinic/appointments",
         json={**BOOKING, **changes},
-        headers={IDEMPOTENCY_HEADER: key},
+        headers={IDEMPOTENCY_HEADER: key, **(headers or {})},
     )
 
 
@@ -175,6 +186,140 @@ class TestReset:
         assert book(client).status_code == 201
         client.post("/demo/reset")
         assert book(client, key=OTHER_KEY).status_code == 201
+
+
+class TestOneWorldPerSession:
+    """Two visitors, one seeded slot each, and neither can see or empty the other's clinic.
+
+    Every demo scenario books the slot the referral offers, so a shared clinic makes the second
+    visitor's booking fail with a correct refusal that reads, on screen, like the agent breaking.
+    """
+
+    def test_two_sessions_book_the_same_slot_and_both_succeed(self, client: TestClient) -> None:
+        first = book(client, headers={SESSION_HEADER: "session-a"})
+        second = book(client, headers={SESSION_HEADER: "session-b"})
+
+        assert [first.status_code, second.status_code] == [201, 201]
+        # The same case in two worlds derives the same key, so the two confirmations agree. That is
+        # determinism rather than a collision: they are appointments in different clinics.
+        assert first.json() == second.json()
+
+    def test_a_session_sees_only_its_own_slots(self, client: TestClient) -> None:
+        book(client, headers={SESSION_HEADER: "session-a"})
+
+        mine = client.get("/clinic/slots", headers={SESSION_HEADER: "session-a"}).json()["slots"]
+        theirs = client.get("/clinic/slots", headers={SESSION_HEADER: "session-b"}).json()["slots"]
+
+        assert len(mine) == len(SEEDED_SLOTS) - 1
+        assert theirs == [slot.model_dump() for slot in SEEDED_SLOTS]
+
+    def test_a_session_cannot_read_another_sessions_appointment(self, client: TestClient) -> None:
+        confirmation = book(client, headers={SESSION_HEADER: "session-a"}).json()["confirmation_id"]
+        path = f"/clinic/appointments/{confirmation}"
+
+        assert client.get(path, headers={SESSION_HEADER: "session-a"}).status_code == 200
+        assert client.get(path, headers={SESSION_HEADER: "session-b"}).status_code == 404
+
+    def test_a_reset_empties_only_the_world_that_asked(self, client: TestClient) -> None:
+        book(client, headers={SESSION_HEADER: "session-a"})
+        book(client, headers={SESSION_HEADER: "session-b"})
+
+        assert client.post("/demo/reset", headers={SESSION_HEADER: "session-a"}).status_code == 200
+
+        gone = client.get("/clinic/slots", headers={SESSION_HEADER: "session-a"}).json()["slots"]
+        kept = client.get("/clinic/slots", headers={SESSION_HEADER: "session-b"}).json()["slots"]
+        assert gone == [slot.model_dump() for slot in SEEDED_SLOTS]
+        assert len(kept) == len(SEEDED_SLOTS) - 1
+
+    def test_a_caller_naming_no_session_reaches_the_default_world(
+        self, client: TestClient, world: Clinic
+    ) -> None:
+        """The developer's world and the judge's browser, unchanged by any of this."""
+        book(client)
+        assert len(world.appointments()) == 1
+        assert client.get("/clinic/slots").json()["slots"] == [
+            slot.model_dump() for slot in SEEDED_SLOTS[1:]
+        ]
+
+    def test_a_browser_can_name_a_world_in_the_query_string(self, client: TestClient) -> None:
+        """``?session=`` exists because ``GET /clinic/slots`` is meant to be checked by a person."""
+        book(client, headers={SESSION_HEADER: "session-a"})
+
+        by_query = client.get(f"/clinic/slots?{SESSION_PARAM}=session-a").json()["slots"]
+        by_header = client.get("/clinic/slots", headers={SESSION_HEADER: "session-a"}).json()[
+            "slots"
+        ]
+        assert by_query == by_header
+
+    def test_the_header_wins_when_both_name_a_world(self) -> None:
+        assert demo_session(x_demo_session="from-header", session="from-query") == "from-header"
+        assert demo_session(session="from-query") == "from-query"
+        assert demo_session() is None
+        assert demo_session(x_demo_session="   ") is None
+
+
+class TestWorldsAreForgottenLeastRecentlyUsedFirst:
+    """Bounded, and bounded without a clock — Demo World reads no time and no random source."""
+
+    def test_a_world_survives_being_used(self) -> None:
+        worlds = Clinics(limit=2)
+        first = worlds.world("a")
+        assert worlds.world("a") is first
+
+    def test_the_oldest_is_dropped_when_the_limit_is_passed(self) -> None:
+        worlds = Clinics(limit=2)
+        original = worlds.world("a")
+        worlds.world("b")
+        worlds.world("c")
+
+        assert worlds.sessions() == ("b", "c")
+        assert len(worlds) == 2
+        # Not an error, and not the same clinic: a forgotten world is a world that reseeds.
+        assert worlds.world("a") is not original
+
+    def test_using_a_world_moves_it_to_the_back_of_the_queue(self) -> None:
+        worlds = Clinics(limit=2)
+        worlds.world("a")
+        worlds.world("b")
+        worlds.world("a")
+        worlds.world("c")
+
+        assert worlds.sessions() == ("a", "c")
+
+    def test_the_default_world_is_not_one_of_them(self) -> None:
+        worlds = Clinics(limit=1)
+        worlds.world("a")
+        assert len(worlds) == 1
+        assert worlds.default is worlds.world(None)
+
+
+class TestNothingHereIsCacheable:
+    """A cached read-back is the one failure that deletes the evidence and still shows green.
+
+    CareLoop verifies a booking with a *separate* ``GET`` on the confirmation id. Answered out of a
+    CDN's memory, that read confirms CareLoop's own earlier request rather than the clinic's state,
+    reports ``read_back: true``, and passes while the clinic holds something else. Session F found
+    that this origin set no ``Cache-Control`` at all; it sets one now, so no cache policy in front
+    of it gets a vote.
+    """
+
+    def test_every_route_says_no_store(self, client: TestClient) -> None:
+        booked = book(client)
+        paths = [
+            "/clinic/slots",
+            f"/clinic/appointments/{booked.json()['confirmation_id']}",
+        ]
+        for path in paths:
+            assert client.get(path).headers["Cache-Control"] == "no-store", path
+
+        assert booked.headers["Cache-Control"] == "no-store"
+        assert client.post("/demo/reset").headers["Cache-Control"] == "no-store"
+
+    def test_a_refusal_says_it_too(self, client: TestClient) -> None:
+        """The 404 a read-back gets when the clinic holds nothing is an answer worth not caching."""
+        missing = client.get("/clinic/appointments/apt-nothing")
+        assert missing.status_code == 404
+        assert missing.headers["Cache-Control"] == "no-store"
 
 
 class _NoLock:

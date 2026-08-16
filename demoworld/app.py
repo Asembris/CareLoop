@@ -10,19 +10,37 @@ The routes translate :mod:`demoworld.clinic`'s vocabulary into status codes and 
 else. A missing ``Idempotency-Key`` is a **400**, for the same reason a missing ``X-Caregiver`` is
 in CareLoop: a required field is absent, and saying anything more would claim a check that is not
 happening.
+
+**Every route is scoped to a world, and the scope is optional.** ``X-Demo-Session`` names one; so
+does ``?session=``, because a person checking the clinic in a browser cannot set a header and the
+whole point of ``GET /clinic/slots`` is that somebody can look for themselves. The header wins where
+both are given, and a caller who names neither reaches the default world — which is what a developer
+running this by hand has always reached. The id is a namespace and not a credential: Demo World
+mints none, verifies none, and will keep a world under whatever string it is handed.
+
+**Nothing here is cacheable, and that is load-bearing rather than tidy.** CareLoop's verification
+performs a *separate* ``GET /clinic/appointments/{id}`` and compares it against what it executed,
+which is the only thing in the system that observes an external effect independently. Behind a CDN
+with no ``Cache-Control``, that read can be answered out of the CDN's memory — so the read-back
+would confirm the response to CareLoop's own earlier request, report ``read_back: true``, and show
+green while the clinic held something else entirely. Session F recorded the hazard against the
+deployed distribution; this is the origin closing it, so a cache policy anywhere in front no longer
+gets a vote.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel
 
 from demoworld.clinic import (
     Appointment,
     BookingRequest,
     Clinic,
+    Clinics,
     KeyReused,
     Slot,
     SlotAlreadyTaken,
@@ -34,6 +52,12 @@ CLINIC_PREFIX = "/clinic"
 
 #: The header CareLoop's idempotency key arrives in.
 IDEMPOTENCY_HEADER = "Idempotency-Key"
+
+#: The header naming which world a caller is booking against.
+SESSION_HEADER = "X-Demo-Session"
+
+#: The same thing as a query parameter, for a browser that cannot send a header.
+SESSION_PARAM = "session"
 
 
 class SlotList(BaseModel):
@@ -66,24 +90,56 @@ def idempotency_key(idempotency_key: Annotated[str | None, Header()] = None) -> 
     return idempotency_key.strip()
 
 
+def demo_session(
+    x_demo_session: Annotated[str | None, Header()] = None,
+    session: Annotated[str | None, Query()] = None,
+) -> str | None:
+    """Which world this request is about, or ``None`` for the default one.
+
+    The header first, then the query parameter. Two ways in rather than one because the two callers
+    are different: CareLoop sends a header on every clinic call, and a judge checking the booking
+    for themselves has a browser address bar and nothing else. One resolution, read in one place, so
+    the routes never have to know there were two.
+    """
+    return (x_demo_session or session or "").strip() or None
+
+
+def world_for(request: Request, session: Annotated[str | None, Depends(demo_session)]) -> Clinic:
+    """The clinic this request is about.
+
+    Reached through the app's registry rather than through a closure, so the dependency can live at
+    module scope where FastAPI can resolve its annotation — and so there is one function, named, in
+    which "which world" is decided.
+    """
+    worlds: Clinics = request.app.state.clinics
+    return worlds.world(session)
+
+
+#: What every route asks for instead of a clinic.
+World = Annotated[Clinic, Depends(world_for)]
+
+
 def create_clinic_app(clinic: Clinic | None = None) -> FastAPI:
     """Build the service over a clinic.
 
     The clinic is injected for the same reason CareLoop's store is: a service that constructs its
     own state can only be tested against the state it constructs, and a test that wants to move an
-    appointment out from under a caller needs to be holding the same object the routes are.
+    appointment out from under a caller needs to be holding the same object the routes are. What is
+    passed here becomes the **default** world — the one a caller who names no session reaches — and
+    session worlds are created beside it on first use.
     """
-    world = clinic if clinic is not None else Clinic()
+    worlds = Clinics(default=clinic)
 
     app = FastAPI(
         title="Demo World — Northgate Cardiology",
         summary="A synthetic outpatient booking service. Not part of CareLoop.",
         version="0.1.0",
     )
-    app.state.clinic = world
+    app.state.clinics = worlds
+    app.state.clinic = worlds.default
 
     @app.get(f"{CLINIC_PREFIX}/slots", response_model=SlotList)
-    def list_slots() -> SlotList:
+    def list_slots(world: World) -> SlotList:
         """Every slot nobody has booked."""
         return SlotList(slots=list(world.available()))
 
@@ -95,6 +151,7 @@ def create_clinic_app(clinic: Clinic | None = None) -> FastAPI:
     def book_appointment(
         request: BookingRequest,
         response: Response,
+        world: World,
         key: Annotated[str, Depends(idempotency_key)],
     ) -> Appointment:
         """Book a slot, or replay the booking already made under this key.
@@ -119,7 +176,7 @@ def create_clinic_app(clinic: Clinic | None = None) -> FastAPI:
         return appointment
 
     @app.get(f"{CLINIC_PREFIX}/appointments/{{confirmation_id}}", response_model=Appointment)
-    def read_appointment(confirmation_id: str) -> Appointment:
+    def read_appointment(confirmation_id: str, world: World) -> Appointment:
         """One booking as the clinic holds it *now*.
 
         Deliberately a separate route from the booking one, and deliberately not a cached echo of
@@ -134,10 +191,28 @@ def create_clinic_app(clinic: Clinic | None = None) -> FastAPI:
             ) from None
 
     @app.post("/demo/reset", response_model=ResetResult)
-    def reset() -> ResetResult:
-        """Put the world back the way it started."""
+    def reset(world: World) -> ResetResult:
+        """Put this caller's world back the way it started.
+
+        Scoped like every other route, and that scoping is the whole reason one visitor's reset
+        cannot empty another visitor's clinic: what is reset is the object the session resolved to,
+        so reaching further is not something this route declines to do — it is something it has no
+        way to express.
+        """
         world.reset()
         return ResetResult(slots=list(world.available()))
+
+    @app.middleware("http")
+    async def never_cache_the_clinic(request: Request, call_next: Callable) -> Response:
+        """Mark every response uncacheable, at the origin. See the module docstring.
+
+        Applied to the whole service rather than to the read-back route alone. The independent
+        ``GET`` is the one that must never be answered from a cache, and a stale slot list or a
+        stale reset would each be their own quiet lie about a world somebody is being shown.
+        """
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     return app
 
@@ -145,8 +220,11 @@ def create_clinic_app(clinic: Clinic | None = None) -> FastAPI:
 __all__ = [
     "CLINIC_PREFIX",
     "IDEMPOTENCY_HEADER",
+    "SESSION_HEADER",
+    "SESSION_PARAM",
     "ResetResult",
     "SlotList",
     "create_clinic_app",
+    "demo_session",
     "idempotency_key",
 ]

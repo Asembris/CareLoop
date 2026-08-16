@@ -19,6 +19,14 @@ three to ``create_app``. Whether a case books, parks or is refused is the graph'
 
 ``--clinic-url`` is optional: without it every effect is simulated, exactly as it was before this
 session, and ``read_back`` on a verification says ``false`` rather than lying.
+
+``--isolate-sessions`` gives **every visitor their own world** — their own case store, their own
+run registry, their own clinic — which is what a public URL two judges may open at the same moment
+needs. It is off by default, because a developer wants one world they can point ``sqlite3`` at, and
+on in the deployed unit. With it on ``--db`` is not used at all: a world lives in memory and lasts
+as long as somebody is using it. That is a real trade and it is stated where a judge will meet it —
+durable, cross-process ownership of a case is demonstrated by ``scripts/resume_demo.py``, not by
+the public URL.
 """
 
 from __future__ import annotations
@@ -28,6 +36,7 @@ import os
 from pathlib import Path
 
 from careloop.api.app import create_app
+from careloop.api.sessions import DEFAULT_SESSION_LIMIT, demo_session_worlds
 from careloop.state.sqlite_store import SqliteCaseStore
 from careloop.tools.clinic import ClinicClient
 
@@ -68,6 +77,11 @@ def main() -> None:
     )
     parser.add_argument("--env-file", default=".env", help="key=value file to load first")
     parser.add_argument(
+        "--isolate-sessions",
+        action="store_true",
+        help="give every visitor their own world; --db is unused when this is on",
+    )
+    parser.add_argument(
         "--static-dir",
         default=os.environ.get("CARELOOP_STATIC_DIR", ""),
         help="a built frontend to serve from this same origin; empty means API only",
@@ -76,16 +90,24 @@ def main() -> None:
 
     load_env_file(Path(arguments.env_file))
 
-    store = SqliteCaseStore(arguments.db)
-    clinic = ClinicClient(arguments.clinic_url) if arguments.clinic_url else None
-    app = create_app(
-        store,
-        clinic=clinic,
-        demo=True,
-        static_dir=arguments.static_dir or None,
-    )
+    if arguments.isolate_sessions:
+        app = create_app(
+            sessions=demo_session_worlds(clinic_url=arguments.clinic_url),
+            demo=True,
+            static_dir=arguments.static_dir or None,
+        )
+        where = f"per visitor, in memory (up to {DEFAULT_SESSION_LIMIT} worlds)"
+    else:
+        clinic = ClinicClient(arguments.clinic_url) if arguments.clinic_url else None
+        app = create_app(
+            SqliteCaseStore(arguments.db),
+            clinic=clinic,
+            demo=True,
+            static_dir=arguments.static_dir or None,
+        )
+        where = arguments.db
 
-    print(f"case store    {arguments.db}")
+    print(f"case store    {where}")
     print(f"clinic        {arguments.clinic_url or '(simulated)'}")
     print(f"frontend      {arguments.static_dir or '(API only)'}")
     print(f"triage model  {os.environ.get('CARELOOP_MODEL_TRIAGE', '(mock)')}")

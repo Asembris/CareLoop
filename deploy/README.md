@@ -31,6 +31,34 @@ AgentCore runtime reaches it — `credential_method: iam-role`, no access keys a
 environment. `careloop.env` therefore holds only model ids and URLs and is committed; there is
 nothing in it worth hiding.
 
+## One world per visitor
+
+The API unit runs with `--isolate-sessions`, and that is what makes the URL safe to hand to more
+than one person at a time. Every visitor is minted an opaque id on their first request and gets
+their **own** case store, run registry and clinic; one visitor's reset cannot reach another's
+cases, and two visitors booking the same seeded slot both succeed, because they are booking in
+different clinics.
+
+The id travels in `X-CareLoop-Session`, and Demo World reads the same value out of
+`X-Demo-Session` or `?session=`. A **header rather than a cookie** because header forwarding
+through this distribution is measured — `X-Caregiver` reaches the origin — and cookie forwarding
+is not, so a cookie would be an assumption that fails in production rather than in a test. It is
+an isolation namespace and **not authentication**: nothing is verified, exactly as nothing about
+`X-Caregiver` is.
+
+**What this costs, stated plainly.** A per-visitor world lives in memory and does not survive a
+restart of the API process; `CARELOOP_DB` is unused while the flag is on. A visitor whose world
+has been forgotten — a redeploy, or half an hour idle — gets a `410`, and the page mints a new one
+and carries on with an empty dashboard. So **the deployed URL no longer demonstrates durable
+ownership of a case across processes**. That claim belongs to `scripts/resume_demo.py` and
+`tests/test_resume.py`, which drive one case across three processes over a SQLite file, and it is
+the single-session path — this same script without the flag — that they exercise.
+
+Bounded at 64 worlds, measured at about 300 KB each with all four demo scenarios run, and never
+more than Demo World's own cap: if this side held more, a live visitor's clinic could be evicted
+underneath them and a read-back would report an appointment missing for a reason that has nothing
+to do with the outside world.
+
 ## Files
 
 | File | What it is |
@@ -62,6 +90,11 @@ takes a few seconds.
 curl -fsS https://<distribution>.cloudfront.net/api/health          # {"status":"ok"}
 curl -fsSI https://<distribution>.cloudfront.net/api/health | grep -i cache-control   # no-store
 curl -fsS https://<distribution>.cloudfront.net/clinic/slots        # the seeded world
+
+# Isolation, end to end: a world of your own, and a case list that is yours.
+S=$(curl -fsS -X POST https://<distribution>.cloudfront.net/api/sessions | jq -r .session)
+curl -fsS -H "X-CareLoop-Session: $S" https://<distribution>.cloudfront.net/api/cases
+curl -fsS https://<distribution>.cloudfront.net/api/cases           # 400: names no world
 ```
 
 The second one matters more than it looks. The dashboard polls `GET /api/cases` to watch a run

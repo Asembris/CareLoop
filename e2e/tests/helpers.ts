@@ -4,7 +4,7 @@
  * wait and return. What is true about a response is stated in the spec that cares.
  */
 
-import type { APIRequestContext, Page } from "@playwright/test";
+import { expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 
 /** The header a request carries its world in. `careloop.api.sessions.SESSION_HEADER`. */
 export const SESSION_HEADER = "X-CareLoop-Session";
@@ -48,6 +48,45 @@ export async function runScenario(
   return request.post(`/api/demo/scenarios/${key}?wait=${seconds}`, {
     headers: withSession(session)
   });
+}
+
+/** Wait until an element has stopped moving.
+ *
+ *  **Never a fixed sleep.** A scan taken mid-transit reports whatever was under the element at that
+ *  instant, and `elmPartiallyObscured` and `bgOverlap` are exactly the review items a moving panel
+ *  produces — so a sleep long enough to be safe today is a flake tomorrow and a false green in
+ *  between.
+ *
+ *  Built on `getAnimations()` rather than an `animationend` listener, and the difference is a real
+ *  race: the drawer mounts on open and runs a 320ms CSS *animation* (`clSlide`), so a listener
+ *  attached after that animation has already finished never fires and the wait hangs until timeout.
+ *  `Animation.finished` resolves immediately for an animation that is already done, which is the
+ *  behaviour a wait actually wants. `transitionend` would never fire here at all — there is no
+ *  transition on this element.
+ *
+ *  The stable-bounding-box poll is the backstop, for anything animated by a means the Web
+ *  Animations API does not report.
+ */
+export async function settled(locator: Locator): Promise<void> {
+  await locator.waitFor({ state: "visible" });
+
+  await locator.evaluate(
+    (element) =>
+      Promise.all(element.getAnimations().map((animation) => animation.finished)).then(
+        () => undefined,
+        () => undefined
+      )
+  );
+
+  let previous = "";
+  await expect
+    .poll(async () => {
+      const box = JSON.stringify(await locator.boundingBox());
+      const stable = box === previous;
+      previous = box;
+      return stable;
+    })
+    .toBe(true);
 }
 
 /** The session the *browser* minted, once the page has asked for one.

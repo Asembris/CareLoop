@@ -5346,24 +5346,89 @@ editable source and an export is never edited, exactly as with the fixture PDFs.
 ### Results
 
 **2451 passed, 37 skipped** (2396 before). `ruff check` and `ruff format --check` clean. Frontend:
-**117 passed across 6 files**, typecheck and build clean. Replay **unchanged at 0 of 320 / 320 of
+**119 passed across 6 files**, typecheck and build clean. Replay **unchanged at 0 of 320 / 320 of
 320**, run before and after rather than asserted — nothing about isolation touches case identity, so
-idempotency keys and confirmation ids are byte-identical to before.
+idempotency keys and confirmation ids are byte-identical to before. Two visitors pressing the same
+scenario in different worlds produce the *same* `confirmation_id`, which is that determinism holding
+across the isolation rather than a collision: they are appointments in different clinics.
 
 Nothing was touched in the policy engine, the trust model, the state machine or `rules.yaml`.
 Namespacing stayed a storage and routing concern, which is what the brief said it had to be.
 
+### Deployed, and verified through the edge rather than against the origin
+
+The security-group rule was re-pointed and `deploy/push.sh` ran. Everything below is
+`https://d2heuwvhvrdyig.cloudfront.net`, never `127.0.0.1`.
+
+```
+no header                → 400        unknown world        → 410
+POST /api/sessions       → 201, and the minted id works on later requests through the CDN
+two visitors press 01    → 202 / 202, both DONE, both read_back=true + MATCHED
+their dashboards         → A {completed: [demo-referral]}   B {needs_you: [demo-resume]}
+their clinics            → A 2 free   B 3 free   default 3 free
+A resets                 → cases_cleared 1, B's case still 200
+B's parked decision      → approve 202 → DONE, after A's reset
+cache-control            → no-store on /api/* and on /clinic/*, X-Cache: Miss at the edge
+host caps                → careloop 64 ≤ demoworld 64, read out of the deployed interpreter
+host memory              → 1231 MB available; api 144 MB, demoworld 39 MB
+```
+
+**The header survives the CDN, and that is shown rather than inferred.** The pre-build probe only
+established that *some* custom header reaches the origin; this is two worlds, minted and driven
+through CloudFront, staying apart across `/api/cases`, `/api/cases/{id}`, the demo control surface
+and `/clinic/slots?session=`. If the distribution had stripped `X-CareLoop-Session` every request
+would have been a 400, and if it had cached `/api/cases` across sessions the two dashboards would
+have agreed.
+
+### Two findings in the "the configuration you ship is not the configuration you test" class
+
+**1. A restarting backend was read as a backend without sessions, and it stuck.** Measured by
+restarting the API while polling: `POST /api/sessions` answers **504 for about seven seconds**. The
+client treated *any* non-OK mint as "this backend serves one world", remembered it, and carried no
+session from then on — so every later request was refused 400, with no retry, and the dashboard sat
+empty looking like a hung backend until somebody reloaded. **A judge opening the URL during a
+redeploy is exactly who that happens to**, and it is the shape the session brief predicted:
+per-session state under a real systemd restart is not what an offline suite exercises.
+
+Only **404** answers "does this backend have sessions"; everything else is a backend that could not
+answer, which is a reason to ask again. `request()` now also re-mints and retries once on a **400
+that carried no session** — the other side of the same recovery. Two tests written first, both
+failing against the shipped code, both green after: 119 frontend tests.
+
+**A restart itself is clean.** A live world answers 410 afterwards, a fresh mint works immediately,
+and the case runs to `DONE`. Demo World is a separate unit and is not restarted, so the dead
+session's clinic world lingers until LRU pushes it out — bounded, invisible, and reseeded when it
+goes.
+
+**2. `SLOWEST_OBSERVED_RUN_MS` was stale by more than a factor of two.** Session E measured 6.7s;
+this session saw **14.6s**. The retry budget is asserted to exceed twice that, so 16s no longer
+satisfied its own invariant and a scenario press could be dropped in silence. Re-measured through
+CloudFront in one sitting on one host:
+
+| | |
+|---|---|
+| solo, warm, `referral` | 1.9 – 2.9s |
+| three visitors at once | 2.1 / 2.2 / 2.4s |
+| `injection_only`, warm | 6.8s — every tool proposed and refused, so many planner calls |
+| two at once, minutes after a redeploy | 10.7s and **14.6s** |
+
+**Concurrency is not what costs.** Three simultaneous runs are as quick as one, which is worth
+knowing on its own: the isolation did not buy contention. What costs is the scenario's own shape and
+a process that has just started. `SLOWEST_OBSERVED_RUN_MS` is now 14.6s and `RESET_ATTEMPTS` 80, so
+the budget is 32s against a 29.2s floor.
+
 ### Still open, deliberately
 
-**The deployed verification did not happen this session.** `ssh` to the instance times out from this
-machine — port 22 is not open to this network's address — while CloudFront keeps serving, so the
-origin is healthy and only the deploy path is shut. Everything above is verified locally against
-real models and a real clinic; **"two judges through CloudFront at once" remains asserted rather than
-measured** until `deploy/push.sh` can run.
+**A tab that was already open on the pre-isolation frontend keeps 400ing until it is reloaded.**
+That bundle is already in browsers and cannot be reached; `index.html` is `no-cache` so any reload
+or new visit gets the new one. Nothing to fix, and worth knowing before redeploying mid-judging: a
+judge watching at that moment sees their dashboard stop moving.
 
 **Sessions do not survive an API restart**, by construction. A redeploy hands every live visitor a
-410 and a fresh world. That is correct behaviour and it is also the thing to watch when redeploying
-mid-judging.
+410 and a fresh world; the client now recovers on its next poll rather than needing a reload.
+
+**`/opt/careloop/state/demo.sqlite3` is dormant**, holding pre-isolation cases and written by
+nothing. It stays so that dropping `--isolate-sessions` restores the durable single world exactly.
 
 ### Open decisions
 

@@ -65,9 +65,10 @@ CLINIC_SESSION_HEADER: Final[str] = "X-Demo-Session"
 #: Measured rather than guessed. A world that has run **all four** demo scenarios — an in-memory
 #: SQLite store holding four cases with their timelines, a run registry, a clinic client and its
 #: transport — costs **300 KB** of resident memory, averaged over 32 of them built and driven end to
-#: end. So the whole cap is about **19 MB**, against a ``t4g.small`` with 2 GB of which roughly
-#: 330 MB is in use: about 1% of what is free. This is a bound on unbounded growth rather than a
-#: rationing decision, which is why it is set well above any plausible number of simultaneous
+#: end. So the whole cap is about **19 MB**. Measured on the deployed ``t4g.small`` after this
+#: shipped: 1841 MB total, **1231 MB available**, the API process at 144 MB and Demo World at 39 MB.
+#: The cap is therefore about 1.5% of what is free. This is a bound on unbounded growth rather than
+#: a rationing decision, which is why it is set well above any plausible number of simultaneous
 #: judges instead of at it.
 #:
 #: **It may not exceed Demo World's own cap**, and ``tests/test_session_isolation.py`` fails if it

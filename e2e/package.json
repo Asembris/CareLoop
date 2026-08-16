@@ -1,0 +1,18 @@
+{
+  "name": "careloop-e2e",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "End-to-end and accessibility suite. Deliberately outside frontend/ — see README.md.",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:deployed": "playwright test -c playwright.deployed.config.ts",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
+    "@playwright/test": "^1.62.1",
+    "@types/node": "^22.7.4"
+  }
+}

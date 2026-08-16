@@ -131,6 +131,12 @@ def build_graph(
     builder.add_edge(DISPATCH, EVIDENCE, when_case_is(context, CaseState.GATHERING_EVIDENCE))
     builder.add_edge(DISPATCH, PLAN, when_case_is(context, CaseState.PLANNING))
     builder.add_edge(DISPATCH, EXECUTE, when_case_is(context, CaseState.READY_TO_EXECUTE))
+    # This edge also carries a caregiver's re-check. careloop.graph.runner.request_recheck commits
+    # AWAITING_HUMAN -> VERIFYING before a run is scheduled, so the resume routes here exactly as it
+    # would for a case persisted mid-verification. That is why Patch 2C added no edge: re-entering
+    # verification is already what dispatch does, and giving the re-check its own route — or a
+    # verify self-edge — would have been a second way into the same node with its own conditions to
+    # get wrong.
     builder.add_edge(DISPATCH, VERIFY, when_case_is(context, CaseState.VERIFYING))
 
     builder.add_edge(TRIAGE, EVIDENCE, when_case_is(context, CaseState.GATHERING_EVIDENCE))

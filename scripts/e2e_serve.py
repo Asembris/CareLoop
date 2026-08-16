@@ -1,8 +1,13 @@
 """Serve CareLoop for the end-to-end suite: scripted agents, a real clinic, everything else real.
 
     python -m demoworld --port 8100
-    python scripts/e2e_serve.py --clinic-url http://127.0.0.1:8100 --port 8000 \
+    python scripts/e2e_serve.py --clinic-url http://127.0.0.1:8100 --port 8010 \
         --static-dir frontend/dist
+
+Normally the suite starts both itself — see ``e2e/playwright.config.ts``, which passes ``8010``
+rather than the ``8000`` this defaults to. Measured reason: something unrelated already held 8000
+on the development machine, and uvicorn's failure there is an opaque WinError about socket
+permissions rather than "that port is taken".
 
 **Why this exists rather than ``scripts/demo_serve.py``.** That script resolves its models from the
 environment, and unset means the mock — which :func:`careloop.llm.providers.build_model` constructs

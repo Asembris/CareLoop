@@ -160,16 +160,22 @@ One page of caption, including what each zone means and why there are exactly tw
 
 ## Honest limits
 
-- Approving a *"nothing safe left to do"* parking does the wrong thing: it releases the case to
-  execution, where the last refused proposal is refused again and the case fails.
 - Approval expiry is unmodelled — a case can sit in `AWAITING_HUMAN` indefinitely.
 - `WAITING_EXTERNAL` is reserved: it is in the state machine and has no producer.
+- `book_appointment`'s `reason` is planner-authored free text. It carries no trust key, no content
+  constraint and no human review before an autonomous booking, and document evidence can influence
+  it. Verification compares it against the clinic's record, which is fidelity rather than
+  provenance.
 - The offline suite only ever sees the mock model, so green means the spine is correct, not that a
   provider is well-behaved. Three separate sessions found bugs that no offline test could catch.
 - Cost per case is not reported. Nothing stamps token usage on a case, and the API inventing one
   would be worse than its absence.
 - The API's run registry is in memory — execution context, not a business fact, so a restart costs
   the node trace and nothing the store owns.
+- The **deployed** demo gives each visitor an ephemeral world so two people can use it at once, so
+  that URL does not demonstrate durable ownership of a case across processes. `scripts/resume_demo.py`
+  and `tests/test_resume.py` do, over a SQLite file and three processes; the store itself is
+  unchanged either way.
 
 ## Where to read more
 

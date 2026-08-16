@@ -8,6 +8,13 @@ The diagram is the deliverable; this page is its caption. Depth lives in the ADR
 *Click to open full size. Hand-authored SVG — it is text, so it diffs and it is edited rather than
 re-exported.*
 
+[`architecture.png`](architecture.png) (3720 × 2850) and [`architecture.pdf`](architecture.pdf)
+are **derived** from that SVG by [`scripts/export_diagram.py`](../scripts/export_diagram.py), which
+renders it through a headless Chromium — the same engine the SVG was drawn against, so the system
+font stacks and text anchoring land where they were placed. They exist because Devpost's
+architecture field takes PDF, PPT, PPTX, PNG or JPG and not SVG. Edit the SVG, re-run the script,
+commit all three; never edit an export.
+
 ## The three zones
 
 **UNTRUSTED — what the world sends, and what the models say.** Inbound email, its PDF attachments,

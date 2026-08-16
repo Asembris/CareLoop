@@ -5222,6 +5222,34 @@ from it.
   reset gets a correct refusal from a clinic that already holds the slot, and it *reads* like the
   injection defence failing. Nothing is wrong; the sequence is. Reset between scenarios, and check
   `GET /clinic/slots` before filming.
+- **A safe dead end is still a dead end, and it took a patch to notice.** Patch 1 stopped a failed
+  certification from replanning, which was right, and left the case permanently parked — measured,
+  every mutation path refuses: `approve`/`reject` raise `NoSuchApproval` because the parking raises
+  no approval, `reopen_case` refuses anything not `DONE`, and a bare `run_case` executes
+  `("dispatch",)` and commits nothing. A caregiver who *fixed the clinic record* had no way to say
+  so. The generalisable lesson: **"the system cannot do anything unsafe here" and "the system can do
+  the right thing here" are different properties, and closing the first can quietly leave the second
+  at zero.** Look for the liveness gap every time a safety patch adds a stop.
+
+- **The dangerous part of a recovery operation was not the authority it might restore — it was the
+  evidence it might drop.** Patch 2C's obvious hazards (a re-check that plans, executes, or lets a
+  browser pick the target) were all closed by construction. The one that actually reproduced was
+  subtler: a re-check run in a process with no clinic bound reaches `DONE` on the closed-loop
+  checks, because those always passed — the booking *response* was correct and only the world had
+  diverged. So removing the observer does not make verification fail, it makes it **stop looking**,
+  and the case is certified on strictly less evidence than the one that already refused it. It is a
+  deployment-wiring mistake, not a code mistake, which is exactly why it needs a structural guard
+  and its own mutant. **Ask of any recovery path: what does it certify on when the thing that was
+  supposed to check is absent?**
+
+- **A guard that reads a mode needs a durable source for that mode.** The re-check guard has to fire
+  for a caregiver-requested verification and not for an ordinary simulated one. The tempting
+  mechanisms — a `RunContext` flag, a boolean threaded through the node — both die at a process
+  boundary and describe a *run* rather than an *episode*. Reading the most recent
+  `STATE_TRANSITION` into `VERIFYING` and asking where it came from costs one backwards scan, is
+  written by the only writer of `Case.state`, and answers about *this* episode. Same instinct as
+  edge conditions reading the store rather than node output.
+
 - **`strands-agents` is pinned to `==1.51.0`** deliberately. A bump must re-run the spike — the
   four verified facts are version-specific, and two of them (the `MultiAgentBase` node contract and
   the async-generator `structured_output`) fail loudly but confusingly if they shift.

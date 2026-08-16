@@ -184,6 +184,8 @@ Same name, different shape.
 | `facts[]` | `DecisionView.args` (`dict[str, str]`) | derived — the `label`s are presentation, the values are the arguments the approval's digest covers |
 | `after` | — | **absent**, pure copy |
 | `approveLabel` / `rejectLabel` | — | **absent**, pure copy |
+| `recheckable` | `DecisionView.recheckable` | direct — **server truth, never derived here.** It says the *stored case* is structurally eligible for a caregiver to request an external re-check: the right handoff shape, a recorded action identity that resolves, an independently observable action type, and a proposal whose derived key agrees with the handoff's. It promises nothing about the run that follows. |
+| `recheckLabel` | — | **absent**, pure copy |
 
 `args` is the load-bearing one: an `Approval` stores `(tool_name, args_digest)` rather than the
 arguments themselves, so `graph.context.proposal_for(case, tool_name, digest)` walks back to the
@@ -377,6 +379,15 @@ below is really about:
 | `decision` | a card with `approval_id: ""` | a card with `approval_id: ""` |
 | what happened | every action was refused; **nothing was done** | an action **was carried out** and could not be confirmed |
 | approve affordance | none | none |
+| re-check affordance | none — there is no external effect to observe | one, **when `recheckable` is true** |
+
+`recheckable` is a second axis and not a second kind. `kind` says whether the card may offer
+*authority*, and only `REQUIRES_HUMAN_APPROVAL` ever may; `recheckable` says whether it may offer
+*another look*, which is not authority at all. The `EXTERNAL_STATE_NOT_CONFIRMED` card therefore
+renders a button and still renders no Approve and no Reject. Rendering it off the reason code
+instead would draw it on a handoff persisted before the action identity was recorded, on one whose
+key names no recorded effect, and on an action type nothing can observe — all three of which the
+backend refuses with a `409`.
 
 The last two rows are why `decisionCopy` branches on the code rather than only on
 `decisionKindFor`. The *kind* is the same and must be — neither may offer Approve — but telling a
@@ -547,6 +558,14 @@ out of scope.** It is the reason divergence 1 cannot resolve to B.
 > branches on the code. `statusCopy` was already correct — `mismatch` outranks the state, so the case
 > reads "The clinic's record disagrees" whatever state it is in — and it now says that about a case
 > in `needs_you` rather than one filed under `completed`.
+>
+> **Patch 2C added the way out, and one line of that copy became false.** The card said "CareLoop
+> will not retry", which was true while the case was permanently parked and stopped being true the
+> moment a caregiver could ask for another observation. It now says CareLoop will not repeat the
+> *action* and that you can ask it to look again — the distinction the whole operation turns on, and
+> the one sentence on this card that is dangerous in both directions. The affordance itself is
+> `Check the clinic again`, gated on `recheckable`, deliberately not labelled Approve, Retry, Run
+> again, Resume or Continue: it communicates observation, never action.
 >
 > **Divergence 1 is unblocked on this axis and still not resolved to B.** The two remaining
 > obstacles are unchanged and are the ones that always mattered: `Clinic.amend()` has no HTTP route,

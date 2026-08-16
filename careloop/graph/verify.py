@@ -295,6 +295,28 @@ RESULT_TYPES: Final[Mapping[str, type[ActionResult]]] = {
 }
 
 
+#: Action types with a real external system that can be read back independently.
+#:
+#: **Capability, not availability.** This says an action type *can* be observed by something other
+#: than CareLoop's own receipt; whether a particular run has that observer bound is
+#: ``RunContext.readbacks``, and the two are different questions. A case may be structurally
+#: re-checkable while a misconfigured run has no clinic bound at all — see
+#: :class:`careloop.graph.nodes.VerifyNode`, which fails closed on exactly that.
+#:
+#: Deliberately a **subset** of ``REGISTRY.external_effect_tools`` rather than equal to it. Three of
+#: the four effect tools are simulated on purpose — one action made genuinely external is the proof
+#: and four is scope creep with a rationale — so requiring equality would either force three fake
+#: observers into existence or make this declaration unmaintainable. What it must never do is name
+#: a tool the registry does not have, which is what :func:`check_observable_tools_are_declared`
+#: refuses.
+#:
+#: It lives here, beside :data:`VERIFIERS` and :data:`RESULT_TYPES`, because this module already
+#: owns what verification means per action type. It deliberately does **not** live in
+#: ``runner.py``, in the state machine or in an API route: a tool name in lifecycle code is the
+#: thing ``check_verifiers_cover_the_registry`` exists to prevent one layer down.
+INDEPENDENTLY_OBSERVABLE: Final[frozenset[str]] = frozenset({"book_appointment"})
+
+
 class UnverifiableAction(Exception):
     """Raised at import when an external-effect tool has no verifier or no result type."""
 
@@ -337,7 +359,30 @@ def check_verifiers_cover_the_registry() -> None:
         )
 
 
+def check_observable_tools_are_declared() -> None:
+    """Fail at import if :data:`INDEPENDENTLY_OBSERVABLE` names a tool the registry does not have.
+
+    A **subset** check rather than an equality one, unlike the two above, and the asymmetry is the
+    point: a verifier is required for every effectful tool because a tool that could reach ``DONE``
+    unchecked would make invariant 4 hollow, whereas an independent observer exists only where
+    there is a real external system to observe. Three tools deliberately have none.
+
+    What a superset would mean is worse than untidy: a re-check accepted for an action type nothing
+    can observe would run a verification episode that reads nothing, which is the false-``DONE``
+    hazard this declaration exists to close.
+
+    Raises:
+        UnverifiableAction: naming every declared type the registry does not carry.
+    """
+    if unknown := sorted(INDEPENDENTLY_OBSERVABLE - REGISTRY.external_effect_tools):
+        raise UnverifiableAction(
+            f"independently observable action type(s) {unknown} are not effect tools the registry "
+            f"declares; a capability naming nothing cannot be observed"
+        )
+
+
 check_verifiers_cover_the_registry()
+check_observable_tools_are_declared()
 
 
 def verify_action(
@@ -433,6 +478,7 @@ def verify_action(
 
 
 __all__ = [
+    "INDEPENDENTLY_OBSERVABLE",
     "RESULT_TYPES",
     "VERIFIERS",
     "ObservationAbsent",
@@ -443,6 +489,7 @@ __all__ = [
     "UnverifiableAction",
     "Verification",
     "Verifier",
+    "check_observable_tools_are_declared",
     "check_verifiers_cover_the_registry",
     "rehydrate",
     "verify_action",

@@ -97,6 +97,26 @@ evals = [
     "strands-agents[openai]==1.51.0",
 ]
 
+# Property-based schema testing over careloop/api/ only — tests/test_api_schema.py. Offline and
+# $0: schemathesis drives the FastAPI app in-process over ASGI, so there is no server, no port and
+# no model call. Separate from `dev` for a reason that is not install size.
+#
+# schemathesis hard-depends on `pytest>=9,<10` — a runtime dependency of the library, not a test
+# extra of ours. Putting it in `dev` would write that `<10` ceiling into the dependency set the
+# whole suite resolves, so one module would silently block a future pytest 10 bump for 2492 tests.
+# Isolated here, the ceiling applies to the job that needs it and to nothing else.
+#
+# CI installs `.[dev,schema]` in its own job rather than folding this into `check`. That job's
+# contract is "no provider SDK is reachable", asserted by inspecting the installed tree, and
+# standing this transitive install (hypothesis, jsonschema, werkzeug, starlette-testclient, rich)
+# in front of that claim is the same reasoning that already keeps `frontend` and `e2e` separate.
+schema = [
+    # Pinned to the release the plan was measured against, with a major-version ceiling. `st run
+    # --app` was removed in v4 and the CLI now requires a live server, so the in-process ASGI
+    # entrypoint used here — schemathesis.openapi.from_asgi — is the pytest API and nothing else.
+    "schemathesis>=4.24.3,<5",
+]
+
 # No [project.scripts] yet. The `careloop` console script comes back with careloop/cli.py in
 # commit 9; declaring it now installs a launcher that fails on invocation for anyone following
 # the README.
@@ -133,6 +153,7 @@ filterwarnings = ["error::DeprecationWarning:careloop.*"]
 # stopped existing.
 markers = [
     "live: runs against a real paid model provider; skipped unless CARELOOP_LIVE=1 and .env carries credentials",
+    "schema: property-based schema testing over the HTTP API; skipped unless the `schema` extra is installed",
 ]
 
 [tool.ruff]

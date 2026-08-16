@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any, Final
 
 from fastapi import FastAPI, HTTPException, Request, Response, status
 
@@ -52,6 +53,92 @@ from careloop.state.store import CaseNotFound, CaseStore
 from careloop.tools.clinic import ClinicClient
 
 API_PREFIX = "/api"
+
+
+# -- what each route can answer -------------------------------------------------------------------
+#
+# Every status a route can really return is declared, because an undeclared one is a lie a generated
+# request finds immediately: `tests/test_api_schema.py` fails an operation that answers a status its
+# own schema does not name. Before that suite existed, ten of the eleven operations declared nothing
+# but their success code and 422 while between them reaching 400, 404, 409, 410 and 503.
+#
+# **Descriptions, deliberately without a body schema.** Every error here is FastAPI's own
+# ``{"detail": <string>}``, assembled from a stringified domain exception. Declaring a model for it
+# would mean either plumbing a new response model through the import-time projection invariants in
+# careloop/api/projections.py — which govern projections of stored cases, which an exception message
+# is not — or hand-writing an inline schema here, which is a second source of truth for a shape
+# FastAPI already owns. Neither is a declaration fix. What matters about those bodies is that they
+# never carry a withheld field, and the recursive sweep in `tests/schema_checks.py` asserts that
+# over every response whatever its declared schema, so nothing is lost by leaving the shape
+# undeclared.
+
+_SESSION_HEADER_MISSING: Final[str] = (
+    "The X-CareLoop-Session header is absent. Reachable only on an app built with `sessions=`, "
+    "where every request belongs to one visitor's world and a request naming none belongs to "
+    "nobody; a single-world app needs no session and never answers this."
+)
+
+_CAREGIVER_HEADER_MISSING: Final[str] = (
+    "The X-Caregiver header is absent. An audit identity rather than authentication, which is why "
+    "this is a 400 and never a 401 — see careloop.api.deps."
+)
+
+#: The one status session resolution can answer that is not about the request being wrong.
+#:
+#: 410 is used nowhere else in this API, so a client can tell "your world is gone, mint another"
+#: from the 409 that means a run is in flight.
+_GONE: Final[dict[int | str, dict[str, Any]]] = {
+    status.HTTP_410_GONE: {
+        "description": (
+            "The presented session was never minted here, or has been idle long enough to be "
+            "forgotten. Reachable only on an app built with `sessions=`."
+        )
+    }
+}
+
+#: Declared on every route taking :data:`~careloop.api.deps.Deps`, which is what resolves a session.
+#:
+#: Not declared globally on the app: ``GET /api/health`` and ``POST /api/sessions`` take no
+#: dependencies and cannot answer either, and naming a status a route cannot produce is the same
+#: kind of dishonesty as omitting one it can. One schema describes both app shapes, so these are
+#: declared unconditionally and a single-world app simply never emits them.
+SESSION_ERRORS: Final[dict[int | str, dict[str, Any]]] = {
+    status.HTTP_400_BAD_REQUEST: {"description": _SESSION_HEADER_MISSING},
+    **_GONE,
+}
+
+#: The same, for the three routes that also record who decided.
+#:
+#: One 400 with two causes rather than two declarations, because a status may be declared once per
+#: operation and both causes really are "a required header is absent".
+CAREGIVER_ERRORS: Final[dict[int | str, dict[str, Any]]] = {
+    status.HTTP_400_BAD_REQUEST: {
+        "description": f"{_CAREGIVER_HEADER_MISSING} Or: {_SESSION_HEADER_MISSING}"
+    },
+    **_GONE,
+}
+
+#: Shared by ``approve`` and ``reject``, whose reachable statuses are identical.
+#:
+#: The 409 covers several refusals on purpose and the wording says so: which one applies is a fact
+#: about the case's own history, and a caller able to tell them apart by status has been handed a
+#: map of the preconditions. The bodies differ; the status does not.
+DECISION_ERRORS: Final[dict[int | str, dict[str, Any]]] = CAREGIVER_ERRORS | {
+    status.HTTP_404_NOT_FOUND: {
+        "description": (
+            "No such case, no approval under that id, or no inbound delivery to resume the case "
+            "under."
+        )
+    },
+    status.HTTP_409_CONFLICT: {
+        "description": (
+            "The request is well formed and names a record the case really carries; what it "
+            "conflicts with is the state of that record — a run already in flight, an approval "
+            "already decided, an identifier naming two undecided records, a manual handoff that "
+            "authorises no call, or a transition the state machine forbids."
+        )
+    },
+}
 
 
 def load_case(store: CaseStore, case_id: str) -> Case:
@@ -211,7 +298,24 @@ def create_app(
         """
         return {"status": "ok"}
 
-    @app.post(f"{API_PREFIX}/sessions", status_code=status.HTTP_201_CREATED)
+    @app.post(
+        f"{API_PREFIX}/sessions",
+        status_code=status.HTTP_201_CREATED,
+        responses={
+            status.HTTP_404_NOT_FOUND: {
+                "description": (
+                    "This CareLoop serves one world to everybody, so there is no session to mint. "
+                    "A frontend takes this as 'carry no session' rather than as an error."
+                )
+            },
+            status.HTTP_503_SERVICE_UNAVAILABLE: {
+                "description": (
+                    "Every world is taken. 503 rather than 429: nothing about this caller is being "
+                    "rate limited, and the answer is 'come back in a minute'."
+                )
+            },
+        },
+    )
     def open_session() -> dict[str, str]:
         """Be given a world of your own. The first thing a browser does, and the only thing it does.
 
@@ -240,12 +344,17 @@ def create_app(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(full)
             ) from None
 
-    @app.get(f"{API_PREFIX}/cases", response_model=CaseSections)
+    @app.get(f"{API_PREFIX}/cases", response_model=CaseSections, responses=SESSION_ERRORS)
     def list_cases(deps: Deps) -> CaseSections:
         """The dashboard: every case, in the section its state puts it in."""
         return case_sections(sections_from(deps.store, dict(SECTIONS)))
 
-    @app.get(f"{API_PREFIX}/cases/{{case_id}}", response_model=CaseDetail)
+    @app.get(
+        f"{API_PREFIX}/cases/{{case_id}}",
+        response_model=CaseDetail,
+        responses=SESSION_ERRORS
+        | {status.HTTP_404_NOT_FOUND: {"description": "The store holds no case under that id."}},
+    )
     def get_case(case_id: str, deps: Deps) -> CaseDetail:
         """One case in full: state, evidence with provenance, decisions, effects, audit trail."""
         return case_detail(load_case(deps.store, case_id))
@@ -254,6 +363,18 @@ def create_app(
         f"{API_PREFIX}/events",
         response_model=RunView,
         status_code=status.HTTP_202_ACCEPTED,
+        responses=SESSION_ERRORS
+        | {
+            status.HTTP_404_NOT_FOUND: {
+                "description": "The simulator holds no event under that id."
+            },
+            status.HTTP_409_CONFLICT: {
+                "description": (
+                    "The case cannot take this delivery: it already has a run in flight, or it is "
+                    "in a state no inbound event may reopen."
+                )
+            },
+        },
     )
     async def deliver_event(body: DeliverEventRequest, deps: Deps, wait: float = 0.0) -> RunView:
         """ "An email just arrived." Deliver an inbound event and start a run.
@@ -272,6 +393,7 @@ def create_app(
         f"{API_PREFIX}/cases/{{case_id}}/decisions/{{approval_id}}/approve",
         response_model=RunView,
         status_code=status.HTTP_202_ACCEPTED,
+        responses=DECISION_ERRORS,
     )
     async def approve_decision(
         case_id: str, approval_id: str, deps: Deps, who: Caregiver, wait: float = 0.0
@@ -290,6 +412,7 @@ def create_app(
         f"{API_PREFIX}/cases/{{case_id}}/decisions/{{approval_id}}/reject",
         response_model=RunView,
         status_code=status.HTTP_202_ACCEPTED,
+        responses=DECISION_ERRORS,
     )
     async def reject_decision(
         case_id: str, approval_id: str, deps: Deps, who: Caregiver, wait: float = 0.0
@@ -306,6 +429,25 @@ def create_app(
         f"{API_PREFIX}/cases/{{case_id}}/recheck",
         response_model=RunView,
         status_code=status.HTTP_202_ACCEPTED,
+        responses=CAREGIVER_ERRORS
+        | {
+            status.HTTP_404_NOT_FOUND: {
+                "description": (
+                    "No such case, or no inbound delivery to resume the case under. The event a "
+                    "re-check resumes under comes from the case's own trail, never from the caller."
+                )
+            },
+            status.HTTP_409_CONFLICT: {
+                "description": (
+                    "The case is not in a shape where asking for another read means anything — "
+                    "wrong state, a run in flight, a pending approval, the other kind of handoff, "
+                    "a handoff naming no recorded action, a key naming no record, an identity "
+                    "mismatch, or an action type nothing can independently observe. One generic "
+                    "message for all of them, because a caller who can tell the preconditions "
+                    "apart by probing has been handed a map of them."
+                )
+            },
+        },
     )
     async def recheck_case(case_id: str, deps: Deps, who: Caregiver, wait: float = 0.0) -> RunView:
         """ "I checked the clinic." Ask CareLoop to observe an existing effect again.
@@ -346,7 +488,20 @@ def create_app(
 
         return await schedule(deps, case_id, inbound, wait=wait)
 
-    @app.get(f"{API_PREFIX}/runs/{{run_id}}", response_model=RunView)
+    @app.get(
+        f"{API_PREFIX}/runs/{{run_id}}",
+        response_model=RunView,
+        responses=SESSION_ERRORS
+        | {
+            status.HTTP_404_NOT_FOUND: {
+                "description": (
+                    "This process never scheduled a run under that id. Held in memory only, so a "
+                    "restart forgets it — which costs a caller the answer to 'how did that run go' "
+                    "and nothing durable."
+                )
+            }
+        },
+    )
     async def get_run(run_id: str, deps: Deps, wait: float = 0.0) -> RunView:
         """One run: whether it settled, and which graph nodes it went through.
 
@@ -408,7 +563,19 @@ def mount_demo(app: FastAPI) -> None:
     lies.
     """
 
-    @app.post(f"{API_PREFIX}/demo/reset")
+    @app.post(
+        f"{API_PREFIX}/demo/reset",
+        responses=SESSION_ERRORS
+        | {
+            status.HTTP_409_CONFLICT: {
+                "description": (
+                    "A run is in flight. Clearing the store underneath a live graph is a version "
+                    "conflict wearing a costume; waiting a second and pressing again is the whole "
+                    "remedy."
+                )
+            }
+        },
+    )
     async def reset(deps: Deps) -> dict[str, object]:
         """Clear this world's cases, and put its clinic back to the seeded world.
 
@@ -425,6 +592,21 @@ def mount_demo(app: FastAPI) -> None:
         f"{API_PREFIX}/demo/scenarios/{{key}}",
         response_model=RunView,
         status_code=status.HTTP_202_ACCEPTED,
+        responses=SESSION_ERRORS
+        | {
+            status.HTTP_404_NOT_FOUND: {
+                "description": (
+                    "No demo scenario under that key, or the simulator holds no event the scenario "
+                    "names."
+                )
+            },
+            status.HTTP_409_CONFLICT: {
+                "description": (
+                    "A run is in flight, so the reset this scenario begins with is refused; or the "
+                    "case it delivers to is in a state no inbound event may reopen."
+                )
+            },
+        },
     )
     async def run_scenario(key: str, deps: Deps, wait: float = 0.0) -> RunView:
         """Put this world back and trigger one scenario, through the ordinary delivery path.

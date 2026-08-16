@@ -204,7 +204,8 @@ careloop/
   api/         FastAPI read surface + approve/reject/deliver; projections and withholding;
                the demo control surface, mounted only when create_app is asked for it
 demoworld/     A synthetic clinic in its own process. Never imports careloop.
-scripts/       generate_documents.py (renders the fixture PDFs), resume_demo.py, demo_serve.py
+scripts/       generate_documents.py (renders the fixture PDFs), resume_demo.py, demo_serve.py,
+               export_diagram.py (renders docs/architecture.{png,pdf} from the SVG)
 tests/
 docs/
 ```

@@ -127,6 +127,63 @@ jobs:
       - name: Adversarial replay and vacuity proof
         run: python -m evals.replay
 
+  # Property-based schema testing over the HTTP API — tests/test_api_schema.py. Offline and $0: the
+  # FastAPI app is driven in-process over ASGI, so there is no server, no port and no model call.
+  #
+  # **A separate job rather than a step in `check`, for `check`'s own reason.** That job's contract is
+  # that no provider SDK is reachable, and it asserts it by inspecting the installed tree. Schemathesis
+  # brings hypothesis, jsonschema, werkzeug, starlette-testclient and rich with it, and standing that
+  # install in front of a claim about what is importable is the same reasoning that already keeps
+  # `frontend` and `e2e` out of `check`.
+  #
+  # It also installs `.[dev,schema]`, which is the only job that does. The `schema` extra is kept out
+  # of `dev` because Schemathesis hard-depends on `pytest>=9,<10`: in `dev` that ceiling would apply
+  # to the whole suite, so one module would block a future pytest 10 bump for 2500 tests.
+  #
+  # **This blocks, from day one**, the same as `e2e` and for the reason written there: a report-only
+  # suite decays into noise, and a guard which cannot fail proves nothing.
+  #
+  # Note what stays green in `check` regardless: tests/test_schema_checks.py holds the response-sweep
+  # property as pure predicates importing no Schemathesis, so `check` covers it and this job adds the
+  # fuzzing over every declared operation on top.
+  schema:
+    runs-on: ubuntu-latest
+
+    # The same zero-credential contract as every other Python job here.
+    env:
+      AWS_EC2_METADATA_DISABLED: "true"
+      AWS_CONFIG_FILE: /nonexistent
+      AWS_SHARED_CREDENTIALS_FILE: /nonexistent
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: pip install -e ".[dev,schema]"
+
+      # The counterpart of `check`'s assertion, in the other direction: that job proves the extra is
+      # absent by never installing it, and this one must prove it is *present*. Without this, a
+      # resolution failure would leave pytest.importorskip skipping the whole module and the job
+      # would go green having tested nothing — which is precisely the silent-death failure mode the
+      # visible skip was chosen to avoid.
+      - name: Assert Schemathesis is installed
+        run: |
+          if ! python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('schemathesis') else 1)"; then
+            echo "::error::'schemathesis' is not importable, so tests/test_api_schema.py would skip and this job would pass without testing anything. Fix the 'schema' extra rather than deleting this assertion."
+            exit 1
+          fi
+          echo "Schemathesis is present - correct."
+
+      # Only this file. The rest of the suite is `check`'s job and running it twice buys nothing.
+      - name: Schema tests
+        run: python -m pytest tests/test_api_schema.py -q
+
   # A separate job rather than a step in `check`, deliberately. The Python job's whole contract is
   # that it runs with no credentials and no provider SDK reachable, and adding a Node toolchain to
   # it would put that claim behind an unrelated install. The two share nothing: `pyproject.toml`

@@ -35,8 +35,21 @@ TRANSITIONS: Final[dict[CaseState, frozenset[CaseState]]] = {
     # pre-effect — nothing has been carried out — which is what makes another attempt meaningful.
     #
     # A failed verification used to return here too and no longer may; see VERIFYING below.
+    # VERIFYING joined this set for the caregiver's re-check, and it is the only entry into
+    # VERIFYING that is not an execution path. It is legal here and reachable in production through
+    # exactly one writer, careloop.graph.runner.request_recheck, which refuses unless the case's
+    # current post-effect handoff is durably bound to an existing ActionRecord of an independently
+    # observable action type whose identity the current proposal re-derives. The transition table
+    # says the move is legal; a structural sweep in tests/test_recheck_writers.py says nothing the
+    # agent drives can make it. Both halves are needed, exactly as they are for the reopen out of
+    # DONE — and see VERIFYING below for why this does not weaken the post-effect property.
     CaseState.AWAITING_HUMAN: frozenset(
-        {CaseState.READY_TO_EXECUTE, CaseState.PLANNING, CaseState.FAILED}
+        {
+            CaseState.READY_TO_EXECUTE,
+            CaseState.PLANNING,
+            CaseState.VERIFYING,
+            CaseState.FAILED,
+        }
     ),
     CaseState.READY_TO_EXECUTE: frozenset({CaseState.EXECUTING, CaseState.FAILED}),
     CaseState.EXECUTING: frozenset(
@@ -44,11 +57,15 @@ TRANSITIONS: Final[dict[CaseState, frozenset[CaseState]]] = {
     ),
     # **VERIFYING cannot reach PLANNING, and that is the point rather than an omission.**
     #
-    # Every entry into VERIFYING is post-effect. It is reachable only from EXECUTING and
-    # WAITING_EXTERNAL, careloop.graph.nodes.ExecuteNode transitions here after recording an action
-    # or suppressing a duplicate of one, and VerifyNode fails the case outright when no ActionRecord
-    # exists. There is no such thing as a verification failure before the effect, so "a proposal
-    # that did not verify deserves another attempt" was never a description of a reachable state.
+    # Every entry into VERIFYING is post-effect, and that is still true now that there are three
+    # sources rather than two. The execution paths — EXECUTING and WAITING_EXTERNAL — enter here
+    # after careloop.graph.nodes.ExecuteNode has recorded an action or suppressed a duplicate of
+    # one, and VerifyNode fails the case outright when no ActionRecord exists. The one non-execution
+    # entry is the guarded human re-check from AWAITING_HUMAN, which careloop.graph.context.
+    # recheck_target permits only when the case's current post-effect handoff is bound to an
+    # existing ActionRecord; a case with nothing carried out cannot reach it. So there is still no
+    # such thing as a verification failure before the effect, and "a proposal that did not verify
+    # deserves another attempt" was never a description of a reachable state.
     #
     # What it cost was measured rather than argued. With PLANNING legal, a failed verification sent
     # the case back to the planner; an identical reproposal was suppressed and re-verified into the

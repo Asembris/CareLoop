@@ -29,6 +29,7 @@ from careloop.api.deps import (
 from careloop.api.models import CaseDetail, CaseSections, DeliverEventRequest, RunView
 from careloop.api.projections import SECTIONS, case_detail, case_sections, run_view
 from careloop.api.runs import RunAlreadyInFlight, UnknownRun
+from careloop.api.sessions import SessionsAtCapacity, SessionWorlds
 from careloop.events.inbound import InboundEvent
 from careloop.events.simulator import EventSimulator
 from careloop.graph.context import latest_delivery
@@ -67,9 +68,68 @@ def load_case(store: CaseStore, case_id: str) -> Case:
         ) from None
 
 
-def create_app(
-    store: CaseStore,
+def build_dependencies(
+    store: CaseStore | None,
     *,
+    sessions: SessionWorlds | None,
+    events: EventSimulator | None,
+    context_factory: ContextFactory | None,
+    graph_runner: GraphRunner | None,
+    clinic: ClinicClient | None,
+    demo: bool,
+) -> ApiDeps | SessionWorlds:
+    """What an app is bound to: one set of dependencies, or one per visitor.
+
+    Separate from :func:`create_app` so the exclusivity is a function a test can call rather than an
+    argument check buried in route construction. It returns the registry *itself* in isolated mode
+    — there is no wrapper holding a shared store beside it, because a shared store that exists is a
+    shared store something can reach.
+
+    Raises:
+        ValueError: if the two modes are mixed, or neither is chosen.
+    """
+    if (store is None) == (sessions is None):
+        raise ValueError(
+            "create_app needs exactly one of store= (one world for everybody) or sessions= (one "
+            "world per visitor); it was given both or neither"
+        )
+
+    if sessions is not None:
+        per_world = {
+            "events": events,
+            "context_factory": context_factory,
+            "graph_runner": graph_runner,
+            "clinic": clinic,
+        }
+        if named := sorted(name for name, value in per_world.items() if value is not None):
+            raise ValueError(
+                f"sessions= builds each visitor's world, so {', '.join(named)} belongs to the "
+                f"builder rather than to the app; passing it here would bind something no route "
+                f"would ever reach"
+            )
+        return sessions
+
+    factory = context_factory
+    if factory is None:
+        factory = clinic_context_factory(clinic) if clinic is not None else default_context_factory
+
+    # Resolved before construction rather than assigned onto the instance afterwards: the local
+    # graph runner is built from whichever factory this app ended up with, and a field patched in
+    # after ``__post_init__`` would have been built from the default one.
+    return ApiDeps(
+        store=store,
+        events=events or EventSimulator(),
+        context_factory=factory,
+        graph_runner=graph_runner,
+        clinic=clinic,
+        demo=demo,
+    )
+
+
+def create_app(
+    store: CaseStore | None = None,
+    *,
+    sessions: SessionWorlds | None = None,
     events: EventSimulator | None = None,
     context_factory: ContextFactory | None = None,
     graph_runner: GraphRunner | None = None,
@@ -77,11 +137,18 @@ def create_app(
     demo: bool = False,
     static_dir: str | Path | None = None,
 ) -> FastAPI:
-    """Build the app over a store.
+    """Build the app over a store, or over a world per visitor.
 
     Everything the routes need arrives here. Nothing is read from module scope and nothing is
     constructed lazily on first request, so two apps in one process cannot share a store neither of
     them was given.
+
+    ``sessions`` replaces ``store`` rather than layering on it: an isolated app holds a
+    :class:`~careloop.api.sessions.SessionWorlds` and **no app-scoped dependencies whatsoever**, so
+    there is no shared store for a request to reach by forgetting to name a session. Exactly one of
+    the two must be given, and everything a world owns — the store, the events, the context factory,
+    the graph runner, the clinic — belongs to the builder in that mode and is refused here. An app
+    half-bound to both would be an app where "which store did that write go to" has two answers.
 
     ``clinic`` binds every run to a real external clinic — its bookings are performed over HTTP and
     verified by reading the clinic back. Composition, not decision: the routes are identical either
@@ -99,18 +166,16 @@ def create_app(
     ``graph_runner`` says *where* a run happens rather than what it is bound to, and supplying one
     replaces local execution entirely — including ``context_factory``, which a remote runner has no
     use for. See :data:`careloop.api.deps.GraphRunner`.
-    """
-    factory = context_factory
-    if factory is None:
-        factory = clinic_context_factory(clinic) if clinic is not None else default_context_factory
 
-    # Resolved before construction rather than assigned onto the instance afterwards: the local
-    # graph runner is built from whichever factory this app ended up with, and a field patched in
-    # after ``__post_init__`` would have been built from the default one.
-    bound = ApiDeps(
-        store=store,
-        events=events or EventSimulator(),
-        context_factory=factory,
+    Raises:
+        ValueError: if neither ``store`` nor ``sessions`` is given, if both are, or if a per-world
+            collaborator is passed alongside ``sessions``.
+    """
+    bound = build_dependencies(
+        store,
+        sessions=sessions,
+        events=events,
+        context_factory=context_factory,
         graph_runner=graph_runner,
         clinic=clinic,
         demo=demo,
@@ -123,10 +188,11 @@ def create_app(
         A run killed mid-flight leaves a case in whatever state its last committed node put it in —
         recoverable, because the store is the truth and the next run dispatches on it, but a graph
         that was two nodes from ``DONE`` would need a human to notice. Draining is cheap and the
-        bound on how long it can take is the SDK's own execution timeout.
+        bound on how long it can take is the SDK's own execution timeout. Every world drains, for
+        the same reason: they are separate stores, not separate importances.
         """
         yield
-        await bound.runs.drain()
+        await bound.drain()
 
     app = FastAPI(
         title="CareLoop",
@@ -144,6 +210,35 @@ def create_app(
         there is no stored field for it to name as its source.
         """
         return {"status": "ok"}
+
+    @app.post(f"{API_PREFIX}/sessions", status_code=status.HTTP_201_CREATED)
+    def open_session() -> dict[str, str]:
+        """Be given a world of your own. The first thing a browser does, and the only thing it does.
+
+        Not a response model, for the reason ``/api/health`` is not: it projects no stored case, so
+        there is no stored field for a response field to name as its source.
+
+        **404 when the app is not isolated**, rather than a route that exists and answers something
+        unusable. A frontend takes that as "this backend has one world" and carries no session at
+        all, which is exactly right for local development and for the offline suite — and it is the
+        same treatment the demo control surface gets, for the same reason.
+
+        The id is an isolation namespace and not authentication: nothing is verified and anyone
+        holding one may use it. See :mod:`careloop.api.sessions`.
+        """
+        if not isinstance(bound, SessionWorlds):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="this CareLoop serves one world to everybody; no session is needed",
+            )
+        try:
+            return {"session": bound.mint()}
+        except SessionsAtCapacity as full:
+            # 503 rather than 429: nothing about this caller is being rate limited, and the answer
+            # is "come back in a minute" rather than "you asked too often".
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(full)
+            ) from None
 
     @app.get(f"{API_PREFIX}/cases", response_model=CaseSections)
     def list_cases(deps: Deps) -> CaseSections:

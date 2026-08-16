@@ -124,10 +124,62 @@ class ApiDeps:
         if self.graph_runner is None:
             self.graph_runner = local_graph_runner(self.context_factory)
 
+    async def drain(self) -> None:
+        """Wait for this world's runs to finish.
 
-def deps(request: Request) -> ApiDeps:
-    """The app's dependencies, as the routes receive them."""
-    return request.app.state.careloop
+        Here so that shutdown asks the same question of one world and of a registry of them —
+        :meth:`careloop.api.sessions.SessionWorlds.drain` is the same method over every world it
+        holds, and the lifespan does not have to know which shape it got.
+        """
+        await self.runs.drain()
+
+
+def deps(
+    request: Request,
+    x_careloop_session: Annotated[str | None, Header()] = None,
+) -> ApiDeps:
+    """The dependencies this request's routes receive.
+
+    One app, two shapes. A single-world app holds an :class:`ApiDeps` and every request gets it —
+    which is what local development and the offline suite use, and nothing about them changed. An
+    isolated app holds a :class:`~careloop.api.sessions.SessionWorlds` instead and **no app-scoped
+    dependencies at all**, so the only way to a store is through the session the request presented.
+    That is the isolation: not a filter every query has to remember, but the absence of anything
+    else to reach.
+
+    A missing header is a **400** — the ``X-Caregiver`` reasoning, a required field is absent — and
+    an unknown one a **410**, which is used nowhere else in this API so a client can tell "your
+    world is gone, mint another" from the 409 that means a run is in flight.
+    """
+    # Imported here rather than at module scope: sessions.py builds on ApiDeps, so the dependency
+    # runs one way between these two modules and this is the direction that would close the loop.
+    from careloop.api.sessions import SESSION_HEADER, SessionWorlds, UnknownSession
+
+    held = request.app.state.careloop
+    if not isinstance(held, SessionWorlds):
+        return held
+
+    session_id = (x_careloop_session or "").strip()
+    if not session_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"the {SESSION_HEADER} header is required: this demo gives every visitor their own "
+                f"world so two people can use it at once, and a request that names none belongs to "
+                f"nobody. POST /api/sessions to be given one."
+            ),
+        )
+
+    try:
+        return held.world(session_id)
+    except UnknownSession:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail=(
+                "that world is gone — it was never minted here, or it has been idle long enough "
+                "to be forgotten. POST /api/sessions for a new one and start again."
+            ),
+        ) from None
 
 
 Deps = Annotated[ApiDeps, Depends(deps)]

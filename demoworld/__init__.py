@@ -23,10 +23,19 @@ from demoworld.app import (
     SESSION_PARAM,
     create_clinic_app,
 )
-from demoworld.clinic import SEEDED_SLOTS, Appointment, BookingRequest, Clinic, Clinics, Slot
+from demoworld.clinic import (
+    DEFAULT_WORLD_LIMIT,
+    SEEDED_SLOTS,
+    Appointment,
+    BookingRequest,
+    Clinic,
+    Clinics,
+    Slot,
+)
 
 __all__ = [
     "CLINIC_PREFIX",
+    "DEFAULT_WORLD_LIMIT",
     "IDEMPOTENCY_HEADER",
     "SEEDED_SLOTS",
     "SESSION_HEADER",

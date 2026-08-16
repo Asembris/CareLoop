@@ -29,12 +29,17 @@ from pydantic import BaseModel, ConfigDict
 
 from careloop.agents.planner import PlannerAgent
 from careloop.agents.triage import TriageAgent
-from careloop.graph.verify import ObservationAbsent, ObservationUnavailable, ReadBack
+from careloop.graph.verify import (
+    INDEPENDENTLY_OBSERVABLE,
+    ObservationAbsent,
+    ObservationUnavailable,
+    ReadBack,
+)
 from careloop.policy.gate import PolicyGate
 from careloop.policy.gated import GatedToolSet
 from careloop.policy.hook import PolicyHook, policy_registry
 from careloop.policy.verdicts import ReasonCode
-from careloop.state.case import Approval, Case, CaseState, TimelineKind
+from careloop.state.case import ActionRecord, Approval, Case, CaseState, TimelineKind
 from careloop.state.store import CaseStore
 from careloop.tools.callables import ToolSet
 from careloop.tools.clinic import (
@@ -46,7 +51,7 @@ from careloop.tools.clinic import (
 )
 from careloop.tools.documents import DocumentStore
 from careloop.tools.executor import MockExternalExecutor
-from careloop.tools.idempotency import args_digest
+from careloop.tools.idempotency import args_digest, idempotency_key
 from careloop.tools.results import ActionResult
 
 
@@ -142,19 +147,61 @@ def proposal_for(case: Case, tool_name: str, digest: str) -> Proposal | None:
 
 
 class Handoff(BaseModel):
-    """A case CareLoop has stopped on, with no safe action left to take.
+    """A case CareLoop has stopped on and handed to a person.
 
     The counterpart of an :class:`~careloop.state.case.Approval` and deliberately not one. An
     approval is a capability — it releases exactly the call its digest covers. This is a status:
-    every tool was proposed and refused, so there is no call, nothing to authorise, and nothing any
-    decision could mean. It carries a reason code and a time, which is all a caregiver's card needs
-    and all the audit trail has to say.
+    CareLoop stopped, and no decision a caregiver posts against it authorises anything.
+
+    **Two different stoppings share this shape**, told apart by :attr:`reason_code`.
+    ``NO_SAFE_ACTION_AVAILABLE`` means every tool was proposed and refused and *nothing was carried
+    out*; ``EXTERNAL_STATE_NOT_CONFIRMED`` means something *was* carried out and could not be
+    certified. The two identity fields below exist for the second and are absent for the first,
+    which is why both are optional.
     """
 
     model_config = ConfigDict(frozen=True)
 
     reason_code: str
     at: datetime
+
+    tool_name: str | None
+    """Which tool the handoff is about, or ``None`` when it is about no single call.
+
+    Optional because :func:`careloop.graph.nodes._park_with_nothing_safe_to_do` writes a payload of
+    ``{"reason_code": ...}`` and nothing else — *every* tool was refused, so naming one would be
+    false. Modelled as ``str | None`` rather than defaulted to ``""`` so that "this handoff is about
+    no particular call" and "somebody forgot to record which" stay distinguishable, and so that a
+    handoff persisted before this field existed stays readable rather than acquiring an identity it
+    never had.
+    """
+
+    idempotency_key: str | None
+    """The exact action this handoff could not certify, or ``None`` when there is none.
+
+    ``None`` is correct and expected for two entirely different populations, and neither is a
+    defect: a ``NO_SAFE_ACTION_AVAILABLE`` handoff never performed an action, and a handoff written
+    before the key was recorded never observed one. Both are refused a re-check by
+    :func:`recheck_target`, with no fallback — see its docstring for why deriving one would be
+    worse than refusing.
+    """
+
+
+class RecheckTarget(BaseModel):
+    """The exact recorded effect a caregiver's re-check would observe again.
+
+    **A read model, never persisted.** It is derived from the timeline and the case's own action
+    ledger every time it is asked for, so it cannot drift from them the way a stored field could;
+    it appears in no store, in no API response and in no projection sweep. What crosses the API
+    boundary is one boolean — see :attr:`careloop.api.models.DecisionView.recheckable` — and never
+    this object or the :class:`~careloop.state.case.ActionRecord` inside it.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    tool_name: str
+    idempotency_key: str
+    action: ActionRecord
 
 
 def manual_handoff(case: Case) -> Handoff | None:
@@ -175,8 +222,118 @@ def manual_handoff(case: Case) -> Handoff | None:
         return None
     for event in reversed(case.timeline):
         if event.kind is TimelineKind.MANUAL_HANDOFF_REQUIRED:
-            return Handoff(reason_code=event.payload["reason_code"], at=event.at)
+            return Handoff(
+                reason_code=event.payload["reason_code"],
+                at=event.at,
+                # ``.get`` rather than subscription, because these two keys are legitimately absent
+                # from two different populations of entry — see the fields' own docstrings. The
+                # reason code is subscripted because every writer has always emitted it and a
+                # handoff without one is a malformed record rather than an older shape.
+                tool_name=event.payload.get("tool_name"),
+                idempotency_key=event.payload.get("idempotency_key"),
+            )
     return None
+
+
+def entered_verifying_from(case: Case) -> CaseState | None:
+    """The state ``case``'s most recent entry into ``VERIFYING`` came from, or ``None``.
+
+    **The re-check episode discriminator**, and the reason it is shaped this way is worth stating.
+    :class:`careloop.graph.nodes.VerifyNode` has to know whether the verification it is performing
+    is a first pass or a caregiver's re-check, because a re-check that reads nothing must not
+    certify while an ordinary simulated run legitimately does. That is a fact about *this episode*,
+    not about the case as a whole — a case can be re-checked, park, and be re-checked again.
+
+    Read from the ``STATE_TRANSITION`` entry :func:`careloop.state.machine.transition` wrote, for
+    the reasons every other reader in this module reads the timeline: it is durable, so it survives
+    the process boundary a resume crosses; it is written by the only writer of ``Case.state``, so
+    nothing else can forge it; and it is not a run-scoped flag, which
+    :mod:`careloop.graph.conditions` and this module's own docstring both refuse. It is emphatically
+    not parsed out of any diagnostic.
+
+    ``AWAITING_HUMAN`` is the answer if and only if
+    :func:`careloop.graph.runner.request_recheck` made the move, since that is the only writer of
+    that transition and a structural sweep in ``tests/test_recheck_writers.py`` keeps it so.
+    ``EXECUTING`` and ``WAITING_EXTERNAL`` are the ordinary post-effect entries.
+    """
+    for event in reversed(case.timeline):
+        if event.kind is not TimelineKind.STATE_TRANSITION:
+            continue
+        if event.payload["to"] == str(CaseState.VERIFYING):
+            return CaseState(event.payload["from"])
+    return None
+
+
+def recheck_target(case: Case) -> RecheckTarget | None:
+    """The exact effect a caregiver may ask CareLoop to observe again, or ``None``.
+
+    **The single source of truth for static re-check eligibility.** Both
+    :func:`careloop.graph.runner.request_recheck` and
+    :func:`careloop.api.projections.decision_view` read this and nothing else, so the button a
+    caregiver is shown and the endpoint that validates their click cannot answer *"is this handoff
+    bound to a valid re-check target?"* differently. Reimplementing either half would be two
+    answers to one question, which is the shape of defect this repository has closed three times.
+
+    **Durable and static only.** It reads the stored case and nothing else, so it deliberately
+    cannot and does not answer two things that matter just as much and belong elsewhere: whether a
+    run is in flight right now — execution context, checked by the API — and whether the run that
+    follows will actually have an observer bound — a fact about a :class:`RunContext` that only the
+    verify node can establish. See :attr:`careloop.api.models.DecisionView.recheckable` for exactly
+    what the resulting boolean does and does not claim.
+
+    Every clause below is necessary and each refuses a different thing:
+
+    ``AWAITING_HUMAN`` with nothing pending, and a handoff — the case really is stopped and waiting
+    for a person, rather than mid-flight or waiting on a decision. The first two are re-stated here
+    rather than left to :func:`manual_handoff`'s own guards, so that a later change to what
+    "outstanding" means cannot silently widen what may be re-checked.
+
+    ``EXTERNAL_STATE_NOT_CONFIRMED`` — a ``NO_SAFE_ACTION_AVAILABLE`` handoff means every tool was
+    refused and *nothing happened*, so there is no external result for an observation to be about.
+
+    A recorded ``idempotency_key`` naming a real :class:`~careloop.state.case.ActionRecord` — the
+    identity chain the whole operation rests on. **No fallback of any kind**: not the latest action,
+    not the latest booking, not the tool name, not the argument digest. A handoff written before the
+    key was recorded cannot truthfully support an operation whose defining property is exact action
+    identity, and inventing one would make the audit trail assert something nobody observed.
+
+    An action type in :data:`careloop.graph.verify.INDEPENDENTLY_OBSERVABLE` — re-reading a
+    simulated effect would compare CareLoop's record against CareLoop's record and certify on the
+    strength of it, which is the no-observer hazard with its paperwork in order.
+
+    A current proposal whose derived key equals the handoff's — **the consistency clause, and the
+    subtle one.** :class:`careloop.graph.nodes.VerifyNode` resolves its own target by re-deriving
+    ``idempotency_key(case_id, latest_proposal.tool_name, latest_proposal.args)``, and that
+    derivation is deliberately *not* overridden by this operation: handing the node a target would
+    make the re-check a second, competing way to say which action is being verified. Instead this
+    proves the two agree before anything is scheduled, so "the action the handoff names" and "the
+    action the verifier will read" are the same object by construction. If they disagree, the
+    disagreement is the finding — refuse, and never silently prefer one.
+    """
+    if case.state is not CaseState.AWAITING_HUMAN or case.pending_approval() is not None:
+        return None
+
+    handoff = manual_handoff(case)
+    if handoff is None or handoff.reason_code != str(ReasonCode.EXTERNAL_STATE_NOT_CONFIRMED):
+        return None
+    if handoff.idempotency_key is None:
+        return None
+
+    record = case.action_for(handoff.idempotency_key)
+    if record is None or record.action_type not in INDEPENDENTLY_OBSERVABLE:
+        return None
+
+    proposal = latest_proposal(case)
+    if proposal is None:
+        return None
+    if idempotency_key(case.case_id, proposal.tool_name, proposal.args) != handoff.idempotency_key:
+        return None
+
+    return RecheckTarget(
+        tool_name=record.action_type,
+        idempotency_key=handoff.idempotency_key,
+        action=record,
+    )
 
 
 class Delivery(BaseModel):
@@ -431,13 +588,16 @@ __all__ = [
     "Delivery",
     "Handoff",
     "Proposal",
+    "RecheckTarget",
     "RunContext",
     "approval_for",
     "approval_id_for",
+    "entered_verifying_from",
     "is_approved",
     "latest_delivery",
     "latest_proposal",
     "manual_handoff",
     "prior_denials",
     "proposal_for",
+    "recheck_target",
 ]

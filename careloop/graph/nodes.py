@@ -36,6 +36,12 @@ not and may not: by the time it runs an effect has been carried out, so its fail
 cannot be certified" rather than "this did not work", and the case goes to a person.
 :data:`careloop.state.machine.TRANSITIONS` refuses ``VERIFYING → PLANNING`` outright, so that is a
 property of the state machine rather than of this module remembering.
+
+**A caregiver may send a parked case back to ``verify``, and to nowhere else.**
+:func:`careloop.graph.runner.request_recheck` moves ``AWAITING_HUMAN → VERIFYING`` so ``dispatch``
+routes into this node again — no new edge, no new node, and pointedly not back to ``plan`` or
+``execute``. It is the one entry into ``VERIFYING`` no node writes, and no node may: nothing in this
+module names that function, which ``tests/test_recheck_writers.py`` enforces.
 """
 
 from __future__ import annotations
@@ -51,10 +57,17 @@ from careloop.graph.context import (
     RunContext,
     approval_for,
     approval_id_for,
+    entered_verifying_from,
     latest_proposal,
 )
 from careloop.graph.extract import record_document, validate_and_promote
-from careloop.graph.verify import ReadBackFailed, Verification, rehydrate, verify_action
+from careloop.graph.verify import (
+    ObservationOutcome,
+    ReadBackFailed,
+    Verification,
+    rehydrate,
+    verify_action,
+)
 from careloop.policy.gate import PolicyDenied
 from careloop.policy.hook import fire_before_tool_call, tool_use_id
 from careloop.policy.verdicts import Decision, ReasonCode, Verdict
@@ -517,6 +530,15 @@ class VerifyNode(DeterministicNode):
     is post-effect, so a verification failure is never "that did not work, try again" — it is
     "something was carried out and cannot be certified", and the planner is the wrong thing to hand
     that to. See :func:`_park_with_nothing_certifiable` for what it cost while it was.
+
+    **This node runs for a caregiver's re-check too, and it is the same code either way.** A
+    re-check re-enters ``VERIFYING`` from ``AWAITING_HUMAN`` through
+    :func:`careloop.graph.runner.request_recheck`, and everything below then does exactly what it
+    does on a first pass: the same target derivation, the same read-back, the same comparison, the
+    same two outcomes. Nothing is handed a target and nothing takes a different path — which is why
+    a re-check cannot certify anything a first pass could not. One thing does differ, and only one:
+    a re-check that has **no independent observer bound** fails closed rather than falling back to
+    the closed-loop checks. See :meth:`_nothing_was_observed`.
     """
 
     async def run(self) -> str:
@@ -549,7 +571,7 @@ class VerifyNode(DeterministicNode):
             return "verify: no action recorded"
 
         result = rehydrate(record.action_type, record.result)
-        verification = self._verify(proposal, record, result)
+        verification = self._verify(case, proposal, record, result)
 
         if verification.passed:
             case = append_event(
@@ -591,7 +613,7 @@ class VerifyNode(DeterministicNode):
         self.context.commit(case, expected_version=base)
         return f"verify: {'passed' if verification.passed else 'failed'}"
 
-    def _verify(self, proposal: Proposal, record: ActionRecord, result) -> Verification:
+    def _verify(self, case: Case, proposal: Proposal, record: ActionRecord, result) -> Verification:
         """Verify the recorded effect, reading the external system back where there is one.
 
         A read-back failure is a *verification* failure, not an exception out of the node. Every
@@ -605,9 +627,16 @@ class VerifyNode(DeterministicNode):
         carried onto the ``Verification`` and from there to the timeline. Read from the type and
         never from the message, so a clinic whose error text claims the observation matched changes
         nothing: see ``tests/test_observation_outcome.py::TestTheOutcomeIsNotReadOutOfText``.
+
+        **A re-check that reads nothing certifies nothing**, and that branch is first. See
+        :meth:`_nothing_was_observed` for the hazard it closes and why it is scoped to this one
+        episode rather than to ``NOT_OBSERVED`` everywhere.
         """
-        observed = None
         readback = self.context.readbacks.get(record.action_type)
+        if readback is None and entered_verifying_from(case) is CaseState.AWAITING_HUMAN:
+            return self._nothing_was_observed(record)
+
+        observed = None
         if readback is not None:
             try:
                 observed = readback(result)
@@ -626,6 +655,59 @@ class VerifyNode(DeterministicNode):
             record=record,
             result=result,
             observed=observed,
+        )
+
+    def _nothing_was_observed(self, record: ActionRecord) -> Verification:
+        """A caregiver asked for another look and this run had nothing to look with.
+
+        **The hazard, measured before this guard existed.** Park a booking the clinic diverged on,
+        re-check it in a run with no clinic bound, and the case reaches ``DONE`` reporting
+        ``read_back=false`` and ``observation=NOT_OBSERVED`` while the external record is still
+        wrong. Nothing is broken in the closed-loop checks and that is exactly the problem: the
+        booking *response* was always correct, only the world diverged, so removing the observer
+        does not make verification fail — it makes it stop looking. The case would be certified on
+        strictly less evidence than the one that already refused it.
+
+        The rule this enforces, stated so it reads as a property rather than a special case:
+
+            a verification may not certify a case whose own trail already records that an
+            independent read of this action was attempted and did not confirm it, unless an
+            independent read is performed now.
+
+        Certifying without one would be certifying by *removing* evidence, which is the one
+        direction a system built on an audit trail must not move.
+
+        **Scoped to the re-check episode, deliberately.** ``NOT_OBSERVED`` is not redefined as
+        failure globally: three of the four effect tools have no external system at all, and a
+        first-pass simulated run still verifies closed-loop and still reaches ``DONE`` saying
+        plainly that it read nothing. ``tests/test_recheck.py::TestTheGuardIsScopedToReChecks`` is
+        the control that keeps it that way.
+
+        The reported outcome is literally true on both fields. Nothing was read, so
+        ``externally_observed`` is ``False`` — it means *attempted*, and no attempt was possible —
+        and :attr:`~careloop.graph.verify.ObservationOutcome.NOT_OBSERVED` means no independent
+        observer took part, which is a fact about CareLoop's own wiring rather than a claim about
+        the world. Reporting ``UNAVAILABLE`` here would assert an external system was consulted and
+        did not answer, by a run that never touched one.
+
+        **This decides nothing about lifecycle**, and that is why it returns rather than
+        transitions: :meth:`run` remains the single writer, so a re-check with no observer parks
+        through the same ``VERIFICATION_FAILED`` → ``MANUAL_HANDOFF_REQUIRED`` → ``AWAITING_HUMAN``
+        path as every other way of failing to certify. No new state and no new reason code —
+        ``EXTERNAL_STATE_NOT_CONFIRMED`` already covers it exactly, because what CareLoop knows is
+        once again that it cannot confirm the result.
+        """
+        return Verification(
+            passed=False,
+            externally_observed=False,
+            outcome=ObservationOutcome.NOT_OBSERVED,
+            diagnostic=(
+                f"a re-check of {record.action_type} was requested, and this run has no "
+                f"independent observer bound for it. Nothing was read from any external system, so "
+                f"nothing about the recorded effect can be confirmed — and this case is already "
+                f"stopped because an earlier independent read failed to confirm it. Certifying it "
+                f"now would mean certifying on less evidence than was already refused."
+            ),
         )
 
 

@@ -45,6 +45,7 @@ from careloop.api.app import create_app
 from careloop.api.demo import DEMO_SCENARIOS
 from careloop.api.deps import ApiDeps
 from careloop.api.sessions import CLINIC_SESSION_HEADER, SessionWorlds
+from careloop.events.simulator import EventSimulator
 from careloop.graph.runner import context_for
 from careloop.llm.mock import MockModel
 from careloop.state.sqlite_store import SqliteCaseStore
@@ -276,8 +277,15 @@ def scripted_worlds(clinic_url: str) -> SessionWorlds:
     The store is SQLite in memory, which is what :func:`careloop.api.sessions.demo_session_worlds`
     builds — keeping the deployed store class is what stops the suite exercising a combination the
     deployment never runs.
+
+    The event simulator is **shared across worlds**, for the same reason and in the same words as
+    the composition this mirrors: its fixtures are read-only documents, so there is nothing there
+    for one visitor to change under another. Letting each world default to its own would be a
+    quiet divergence from the shape being tested.
     """
     import httpx
+
+    shared_events = EventSimulator()
 
     def build(session_id: str) -> ApiDeps:
         clinic = (
@@ -293,6 +301,7 @@ def scripted_worlds(clinic_url: str) -> SessionWorlds:
         )
         return ApiDeps(
             store=SqliteCaseStore(":memory:"),
+            events=shared_events,
             context_factory=scripted_factory(clinic),
             clinic=clinic,
         )

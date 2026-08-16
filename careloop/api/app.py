@@ -18,6 +18,7 @@ from fastapi import FastAPI, HTTPException, Request, Response, status
 
 from careloop.api.demo import DEMO_SCENARIOS
 from careloop.api.deps import (
+    CAREGIVER_HEADER,
     ApiDeps,
     Caregiver,
     ContextFactory,
@@ -30,7 +31,7 @@ from careloop.api.deps import (
 from careloop.api.models import CaseDetail, CaseSections, DeliverEventRequest, RunView
 from careloop.api.projections import SECTIONS, case_detail, case_sections, run_view
 from careloop.api.runs import RunAlreadyInFlight, UnknownRun
-from careloop.api.sessions import SessionsAtCapacity, SessionWorlds
+from careloop.api.sessions import SESSION_HEADER, SessionsAtCapacity, SessionWorlds
 from careloop.events.inbound import InboundEvent
 from careloop.events.simulator import EventSimulator
 from careloop.graph.context import latest_delivery
@@ -139,6 +140,53 @@ DECISION_ERRORS: Final[dict[int | str, dict[str, Any]]] = CAREGIVER_ERRORS | {
         )
     },
 }
+
+
+def declare_required_headers(spec: dict[str, Any], required: frozenset[str]) -> dict[str, Any]:
+    """Mark the headers the API really requires as ``required`` in ``spec``, in place.
+
+    **Two layers disagreeing on purpose, reconciled here.** ``X-Caregiver`` and — on an isolated app
+    — ``X-CareLoop-Session`` are required: a request without one is refused. But the dependencies
+    that enforce them declare ``str | None = None`` and raise :class:`~fastapi.HTTPException`
+    themselves, because that is what produces the deliberate **400**. Typing them as required
+    parameters instead would hand the refusal to FastAPI's own validation and make it a **422**,
+    which is the behaviour change ``careloop.api.deps`` argues against for ``X-Caregiver`` and would
+    lose the 400/410 distinction for the session header.
+
+    So the signature stays optional and the *schema* says what is true. Without this the generated
+    document declared ``required: false`` for both, and a check that a missing required header is
+    rejected had nothing to fire on — vacuous against the one header worth checking.
+
+    Applied by rewriting the generated document rather than by ``openapi_extra`` on each route.
+    Measured: ``openapi_extra`` **appends**, so the operation carries two ``x-caregiver`` entries
+    with contradictory ``required`` values, which the OpenAPI specification forbids. This is also
+    one place rather than one per route, so a fourth route taking the dependency cannot forget it.
+
+    The ``null`` arm is dropped from the schema alongside. ``str | None`` emits
+    ``anyOf: [string, null]``, and a header that may not be absent may not be null either; leaving
+    it would let a generated request satisfy a required parameter with the value the handler exists
+    to refuse.
+
+    Args:
+        spec: a generated OpenAPI document. Mutated and returned.
+        required: header names, matched case-insensitively.
+    """
+    wanted = {name.lower() for name in required}
+    for operations in spec.get("paths", {}).values():
+        for operation in operations.values():
+            for parameter in operation.get("parameters", []):
+                if parameter.get("in") != "header":
+                    continue
+                if parameter.get("name", "").lower() not in wanted:
+                    continue
+                parameter["required"] = True
+                schema = parameter.get("schema", {})
+                if arms := schema.get("anyOf"):
+                    kept = next((arm for arm in arms if arm.get("type") != "null"), None)
+                    parameter["schema"] = (kept or {"type": "string"}) | {
+                        key: value for key, value in schema.items() if key == "title"
+                    }
+    return spec
 
 
 def load_case(store: CaseStore, case_id: str) -> Case:
@@ -538,6 +586,22 @@ def create_app(
             response.headers["Cache-Control"] = "no-store"
         return response
 
+    # Which headers this app really requires, which is not the same question for both of them.
+    # X-Caregiver is required of every app. X-CareLoop-Session is required only when there is a
+    # world per visitor: on a single-world app it is genuinely optional, and declaring it required
+    # there would have the schema claim something false — a generated request omitting it would be
+    # answered 200 and a missing-required-header check would fail the API for being right.
+    required_headers = frozenset(
+        {CAREGIVER_HEADER} | ({SESSION_HEADER} if isinstance(bound, SessionWorlds) else set())
+    )
+
+    def openapi() -> dict[str, Any]:
+        if app.openapi_schema is None:
+            app.openapi_schema = declare_required_headers(FastAPI.openapi(app), required_headers)
+        return app.openapi_schema
+
+    app.openapi = openapi
+
     if demo:
         mount_demo(app)
     if static_dir is not None:
@@ -780,6 +844,7 @@ __all__ = [
     "build_dependencies",
     "create_app",
     "decide",
+    "declare_required_headers",
     "deliver",
     "load_case",
     "load_event",

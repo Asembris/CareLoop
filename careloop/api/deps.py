@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Annotated
+from typing import Annotated, Final
 
 from fastapi import Depends, Header, HTTPException, Request, status
 
@@ -30,6 +30,12 @@ from careloop.graph.runner import RunResult, context_for, run_case
 from careloop.state.case import Case, CaseState
 from careloop.state.store import CaseStore
 from careloop.tools.clinic import ClinicClient
+
+#: Who is recording a decision. An audit identity, never a credential — see the module docstring.
+#:
+#: Named here rather than spelled inline so the message below, the schema declaration in
+#: :func:`careloop.api.app.declare_required_headers` and the tests all read one spelling.
+CAREGIVER_HEADER: Final[str] = "X-Caregiver"
 
 #: Builds the run context one graph run is driven through.
 #:
@@ -204,8 +210,8 @@ def caregiver(x_caregiver: Annotated[str | None, Header()] = None) -> str:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                "the X-Caregiver header is required: a decision is recorded against whoever made "
-                "it, and the audit trail has nowhere to put an anonymous one"
+                f"the {CAREGIVER_HEADER} header is required: a decision is recorded against "
+                f"whoever made it, and the audit trail has nowhere to put an anonymous one"
             ),
         )
     return x_caregiver.strip()
@@ -238,6 +244,7 @@ def sections_from(
 
 
 __all__ = [
+    "CAREGIVER_HEADER",
     "ApiDeps",
     "Caregiver",
     "ContextFactory",

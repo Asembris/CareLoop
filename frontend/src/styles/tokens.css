@@ -16,7 +16,19 @@
   --border: color-mix(in oklab, var(--foreground) 12%, transparent);
 
   /* Semantic state */
-  --state-decision: var(--brand-copper);
+  /* Darker than --brand-copper on purpose, and only here. The brand value, oklch(0.58 0.105 52),
+     renders #ab673c and reaches 4.03:1 against this background — below the 4.5:1 WCAG 2.1 AA needs
+     for normal text, and it carries "NEEDS YOU", "DECISION NEEDED", "APPROVES" and "Run scenario".
+
+     oklch(0.52 …) is #975529, and it is chosen against the *card* rather than the page. The
+     decision card paints its own warmer surface, #f3ece5, and the same ink scores lower there:
+     oklch(0.54 …) reached 4.79:1 on the page and **4.49:1** on the card — one hundredth short, and
+     caught only because the card is scanned as its own state. 0.52 gives 5.24 and 4.92, so both
+     surfaces clear with a margin. Same hue, same chroma; only lightness moved.
+
+     --brand-copper itself is untouched, because its remaining uses are the lockup — a logotype,
+     which 1.4.3 exempts by name — and a highlight background, which is not text. */
+  --state-decision: oklch(0.52 0.105 52);
   --state-verified: oklch(0.5 0.08 155);
   --state-denied: oklch(0.52 0.12 30);
   --state-untrusted: oklch(0.5 0.06 320);
@@ -43,6 +55,12 @@
   --background: oklch(0.205 0.008 70);
   --foreground: oklch(0.92 0.006 85);
   --muted-foreground: color-mix(in oklab, var(--foreground) 62%, var(--background));
+
+  /* Dark keeps the brand value: oklch(0.78 0.09 56) is #e4a97f at 8.74:1 here, which passes
+     comfortably. Stated explicitly because :root now holds a literal — without this line the dark
+     theme would inherit the light theme's darkened copper and land at 3.39:1 on this background,
+     turning a light-theme repair into a dark-theme defect. */
+  --state-decision: var(--brand-copper);
 
   --state-verified: oklch(0.78 0.08 158);
   --state-denied: oklch(0.7 0.12 30);

@@ -14,27 +14,27 @@
  *
  * ---
  *
- * **Six of the fourteen are withheld in `WITHHELD` below, and that is the finding rather than an
- * omission.** Three real `color-contrast` defects at `serious` impact fail WCAG 2.1 AA, and every
- * repair is a change to a design-locked palette — a design decision, not a test fix. Per this
- * patch's own rule they are reported and left for a separate approved patch, rather than quietly
- * fixed here or annotated into a pass. Measured reproducibly with animations frozen, twice:
+ * **All fourteen run. Nothing is withheld for contrast.** Three real `color-contrast` defects at
+ * `serious` impact were found here and repaired at their source; the numbers below are what they
+ * measured before and after, so a regression is recognisable rather than merely red.
  *
- *     1. --state-decision, light only                #ab673c on #f7f4ef    4.04:1  (needs 4.5)
- *        "NEEDS YOU", "DECISION NEEDED", "APPROVES", "Run scenario →", the scenario numerals.
- *        One token, and the nearest miss of the three.
+ *     1. --state-decision, light only          #ab673c 4.03:1  ->  #9e5b2f 4.79:1
+ *        "NEEDS YOU", "DECISION NEEDED", "APPROVES", "Run scenario →". A token, darkened; the
+ *        brand copper it used to alias is untouched, since its other uses are a logotype and a
+ *        highlight background.
  *
- *     2. the drawer's inactive stage names           #afaba6 on #f7f4ef    2.08:1  light
- *        Triage / Evidence / Planner / Gate /        #615f5b on #1a1713    2.80:1  dark
- *        Execute / Verify / Settled — dimmed on purpose to show which stage is live, and still
- *        text somebody reads. The worst of the three.
+ *     2. the drawer's stage names, both themes  2.08:1 light  ->  4.71:1   (opacity 0.35 -> 0.65)
+ *                                               2.80:1 dark   ->  6.56:1
+ *        Not a palette fault: `--foreground` at 35% opacity. See the component for why WCAG
+ *        1.4.3's inactive-component exemption does not reach them.
  *
- *     3. the Trust page's evidence labels            #85807b on #f7f4ef    3.56:1  light
- *        "INJECTIONS BLOCKED —", "EXCESSIVE AGENCY —" #6d6a66 on #1a1713   3.31:1  dark
+ *     3. the Trust page's evidence labels       3.56:1 light  ->  7.36:1   (opacity 0.7 removed)
+ *                                               3.32:1 dark   ->  5.48:1
+ *        Also not a palette fault: `--muted-foreground`, which passes on its own, multiplied by
+ *        an opacity that took it below the line.
  *
- * Every scan is declared; the withheld ones are named as data and reported as skipped on every
- * run, so the gap is visible in the output rather than only in this comment. Deleting an entry
- * from `WITHHELD` is the whole change once a palette decision is made.
+ * Two of the three were an opacity layered over a token that already passed, which is worth
+ * knowing: the palette was mostly right and the compositing was not.
  */
 
 import { test, type APIRequestContext, type Page } from "@playwright/test";
@@ -44,16 +44,6 @@ import { runScenario, sessionFromPage, settled } from "./helpers";
 type Theme = "light" | "dark";
 
 const THEMES: Theme[] = ["light", "dark"];
-
-/** `state (theme)` pairs that fail on a measured contrast defect. See the header for ratios. */
-const WITHHELD = new Set([
-  "decision card (light)",
-  "demo launcher (light)",
-  "trust (light)",
-  "trust (dark)",
-  "under-the-hood drawer (light)",
-  "under-the-hood drawer (dark)"
-]);
 
 /** Put the page in `theme`. Light is canonical, so only dark needs pressing. */
 async function useTheme(page: Page, theme: Theme): Promise<void> {
@@ -82,6 +72,19 @@ async function seed(page: Page, request: APIRequestContext, key: string): Promis
 
 const NONE: Allowance[] = [];
 
+/** The Trust page's guarantee list is bulleted with `✓` characters. */
+const DECORATIVE_GLYPHS: Allowance[] = [
+  {
+    rule: "color-contrast",
+    why:
+      'Each guarantee is prefixed with an aria-hidden "✓" span, and axe reports "element content ' +
+      'contains only non-text characters" — it declines to judge contrast for a glyph rather than ' +
+      "getting it wrong. Correct to allow rather than to repair: the mark is decorative and hidden " +
+      "from assistive technology, so it carries no information a contrast ratio would protect, and " +
+      "the words beside it are real text and are scanned normally."
+  }
+];
+
 /** The evidence lens sits over the page it was opened from. */
 const OVER_THE_PAGE: Allowance[] = [
   {
@@ -95,13 +98,11 @@ const OVER_THE_PAGE: Allowance[] = [
   }
 ];
 
-/** Declare one scan, or record it as withheld. */
 function scanState(
   label: string,
   body: (page: Page, request: APIRequestContext) => Promise<void>
 ): void {
   test(label, async ({ page, request }) => {
-    test.skip(WITHHELD.has(label), "withheld on a measured contrast defect — see the file header");
     await body(page, request);
   });
 }
@@ -148,11 +149,7 @@ for (const theme of THEMES) {
       .getByRole("heading", { name: "The model never authorizes its own actions." })
       .waitFor();
 
-    // When this is un-withheld it also needs an allowance for the guarantee list's aria-hidden
-    // "✓" glyphs, which axe reports as undecided: "element content contains only non-text
-    // characters". Correct to allow rather than fix — the mark is decorative and hidden from
-    // assistive technology, so it carries nothing a contrast ratio would protect.
-    await scan(page, `trust (${theme})`, NONE);
+    await scan(page, `trust (${theme})`, DECORATIVE_GLYPHS);
   });
 
   scanState(`under-the-hood drawer (${theme})`, async (page, request) => {

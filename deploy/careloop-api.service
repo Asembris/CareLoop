@@ -13,9 +13,15 @@ User=careloop
 Group=careloop
 WorkingDirectory=/opt/careloop/app
 EnvironmentFile=/opt/careloop/app/deploy/careloop.env
+# --isolate-sessions is what lets two judges open the URL at the same moment. Every visitor gets
+# their own case store, run registry and clinic, so neither can see or reset the other's world.
+# With it on, --db is not used: a world lives in memory for as long as somebody is using it, and
+# durable cross-process ownership is demonstrated by scripts/resume_demo.py rather than here.
+# --db stays on the line so that dropping the flag restores the single durable world exactly.
 ExecStart=/opt/careloop/venv/bin/python scripts/demo_serve.py \
     --host 0.0.0.0 \
     --port 8000 \
+    --isolate-sessions \
     --db ${CARELOOP_DB} \
     --clinic-url ${CARELOOP_CLINIC_URL} \
     --static-dir ${CARELOOP_STATIC_DIR} \

@@ -21,7 +21,20 @@ That is the whole loop: a document arrived, an agent read it, proposed one actio
 allowed it, the action was performed against a real external service, and the result was verified
 by reading that service back.
 
-**You never need to press reset.** Pressing a scenario resets the world first, automatically.
+**You never need to press reset.** Pressing a scenario resets the world first, automatically, in
+the same request.
+
+**You have your own world.** Opening the URL mints you one — your own cases, your own clinic — so
+another judge reading this page at the same moment cannot see your cases, reset them, or take the
+appointment slot you are about to book. Nothing is asked of you and there is nothing to sign into;
+the id is an isolation namespace, not a login. It is shown at the bottom of the **Run a scenario**
+page, because the clinic check below needs it.
+
+A world lives as long as you are using it. Leave it for half an hour, or come back after a
+redeploy, and you get a fresh one with an empty dashboard — that is a forgotten world, not a fault.
+**The public URL therefore does not demonstrate durable ownership of a case across processes**; the
+thing that does is `scripts/resume_demo.py`, which carries one case through three separate
+processes over a SQLite file on disk, with `tests/test_resume.py` asserting it.
 
 ---
 
@@ -60,15 +73,20 @@ nothing at all; it is simply never rewarded for proposing something poisoned.
 ## Check the booking yourself
 
 The appointment is booked over real HTTP against a separate service in its own process, which
-CareLoop does not own and which never imports a line of CareLoop's code. You can read it directly:
+CareLoop does not own and which never imports a line of CareLoop's code. You can read it directly —
+the link at the bottom of the **Run a scenario** page is this URL with your own world named on it:
 
 ```
-https://d2heuwvhvrdyig.cloudfront.net/clinic/slots
+https://d2heuwvhvrdyig.cloudfront.net/clinic/slots?session=<your world>
 ```
 
-Three slots are seeded. After scenario 01 books one, two remain. **Verification re-reads this
-service independently** and compares what the clinic holds against what was authorised — never the
-booking's own confirmation, which would only be re-reading CareLoop's own receipt.
+Three slots are seeded. After scenario 01 books one, two remain. Without the `?session=` part you
+are reading the clinic nobody has booked in, which is a different world rather than an empty
+answer — every visitor gets their own, so that two judges do not compete for one slot.
+
+**Verification re-reads this service independently** and compares what the clinic holds against
+what was authorised — never the booking's own confirmation, which would only be re-reading
+CareLoop's own receipt.
 
 ---
 
@@ -99,6 +117,7 @@ outside world agreed. A seal that played on every completion would mean nothing.
 | **Trust** | Facts carry `{source_doc, page, trust_level}`. Instructions found in documents never gain authority, whatever they say. |
 | **Audit** | Every case carries an append-only timeline: what was proposed, what was allowed or denied, which rule matched, and what was verified. |
 | **Hosting** | The Strands agent graph, the API and the dashboard on one host behind CloudFront; the clinic in its own process. |
+| **Isolation** | One world per visitor — your own case store and your own clinic — so the URL is safe to open while somebody else is using it. |
 
 `GET /api/cases` and `GET /api/cases/{id}` are open if you would rather read JSON than click.
 
@@ -106,14 +125,16 @@ outside world agreed. A seal that played on every completion would mean nothing.
 
 ## If something looks wrong
 
-- **A scenario takes a moment to start.** If a previous run is still going, the reset that precedes
-  every scenario is refused until that run settles, and the button waits rather than starting a
-  scenario against a half-finished world. Up to a few seconds, only ever while something really is
-  running.
+- **A scenario takes a moment to start.** If *your* previous run is still going, the scenario is
+  refused until it settles, and the button waits rather than starting against a half-finished
+  world. Up to a few seconds, only ever while something really is running, and never because
+  somebody else is using the demo.
 - **A case says FAILED.** Two scenarios booking the same slot is the usual cause, and pressing a
-  scenario resets first precisely so that cannot happen. `failure_reason` on the case says which it
-  was; `ClinicRefused` means the slot was already taken, not that anything about the safety model
-  gave way.
+  scenario resets your world first precisely so that cannot happen. `failure_reason` on the case
+  says which it was; `ClinicRefused` means the slot was already taken, not that anything about the
+  safety model gave way.
+- **The dashboard is suddenly empty.** Your world was forgotten — half an hour idle, or the host
+  redeployed — and a new one was minted for you. Press a scenario and it runs from the top.
 - **The dashboard seems a beat behind.** It is, deliberately and by about a second. The backend
   reaches `DONE` in roughly two seconds, which is faster than anything worth watching, so the
   display walks forward through the states the case genuinely passed through, in the order the

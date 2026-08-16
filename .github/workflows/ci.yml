@@ -161,3 +161,88 @@ jobs:
       # Last, because a build that succeeds while the types or the tests fail tells us nothing.
       - name: Build
         run: npm run build
+
+  # End to end, against a real backend. The gap this closes: every one of the `frontend` job's 119
+  # tests replaces the network with `vi.stubGlobal("fetch", …)` and asserts against fixtures the
+  # frontend authored, so a backend field rename leaves them green and the demo broken. jsdom also
+  # has no navigation and no origin server, so no test above can express a routing defect, and
+  # axe's `color-contrast` rule is documented as non-functional there.
+  #
+  # **This blocks, from day one.** A report-only suite decays into noise, and the whole position of
+  # this repository is that a guard which cannot fail proves nothing. It is deterministic by
+  # construction: loopback only, scripted agents, no model provider, no CDN.
+  #
+  # It needs both toolchains, which is exactly why it is not a step in `check` or in `frontend` —
+  # adding Node to the Python job would put its zero-provider claim behind an unrelated install.
+  #
+  # The deployed project is **not** run here. It spends real Bedrock tokens and depends on a live
+  # host, so it is `npm run test:deployed`, by hand or on a schedule, and it never gates a merge.
+  e2e:
+    runs-on: ubuntu-latest
+
+    # The same zero-credential contract as `check` and `evals`. The harness binds scripted agents,
+    # so a run that somehow started reaching a provider fails here rather than succeeding quietly.
+    env:
+      AWS_EC2_METADATA_DISABLED: "true"
+      AWS_CONFIG_FILE: /nonexistent
+      AWS_SHARED_CREDENTIALS_FILE: /nonexistent
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - uses: actions/setup-node@v4
+        with:
+          # Matching the `frontend` job. Playwright 1.62 requires Node >= 20.
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            e2e/package-lock.json
+
+      - name: Install CareLoop
+        run: pip install -e ".[dev]"
+
+      - name: Install the e2e suite
+        working-directory: e2e
+        run: npm ci
+
+      # Keyed on the lockfile, which is what pins the Playwright version and therefore the browser
+      # build. A miss downloads (~150 MB) rather than failing — the only step here that is not
+      # offline, stated so it is never discovered rather than expected.
+      - name: Cache the browser
+        id: browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('e2e/package-lock.json') }}
+
+      # `--with-deps` on a miss for the system libraries Chromium needs on a bare runner; on a hit
+      # the browser is already there and only those libraries are ensured.
+      - name: Install Chromium
+        working-directory: e2e
+        run: npx playwright install --with-deps chromium
+
+      # The harness serves this from the API's own origin, which is what keeps the browser
+      # same-origin against `/api` with no CORS middleware anywhere. It refuses to start without it.
+      - name: Build the frontend
+        working-directory: frontend
+        run: npm ci && npm run build
+
+      # Starts Demo World and CareLoop itself — see e2e/playwright.config.ts.
+      - name: Test
+        working-directory: e2e
+        run: npx playwright test
+
+      - name: Keep the report when it fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: e2e/playwright-report/
+          retention-days: 7

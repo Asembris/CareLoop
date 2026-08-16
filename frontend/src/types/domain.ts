@@ -85,6 +85,15 @@ export interface DecisionView {
   after: string;
   approveLabel: string;
   rejectLabel: string;
+  /** Whether this card may offer "check the external system again".
+   *
+   *  Independent of `kind`, deliberately. `kind` says whether the card may offer *authority* —
+   *  only `REQUIRES_HUMAN_APPROVAL` ever may — and this says whether it may offer *another look*,
+   *  which is not authority at all. A card can have neither, and the manual-handoff card that
+   *  gains a re-check button still renders no Approve and no Reject. */
+  recheckable: boolean;
+  /** The label for that affordance. Observation, never action — see `presentation.ts`. */
+  recheckLabel: string;
 }
 
 export interface Readback {
@@ -156,6 +165,12 @@ export interface CareLoopApi {
   getCase(caseId: string): Promise<CareCase | undefined>;
   getRun(runId: string): Promise<AgentRun | undefined>;
   approveAction(input: ApprovalInput): Promise<ApprovalResult>;
+  /** Ask CareLoop to observe an already-recorded effect again.
+   *
+   *  Takes the case and nothing else. There is deliberately no parameter for a tool, arguments, a
+   *  confirmation id or an action: the backend resolves what to read entirely from durable case
+   *  state, and a client that could name it would be choosing what CareLoop looks at. */
+  recheckCase(caseId: string): Promise<ApprovalResult>;
   runScenario(id: ScenarioId): Promise<ScenarioRun>;
   resetDemo(): Promise<void>;
   /** Mock stand-in for run polling. The real adapter should poll /api/runs/:id

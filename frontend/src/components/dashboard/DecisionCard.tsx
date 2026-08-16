@@ -7,15 +7,24 @@ import { useCareLoop } from "@/hooks/useCareLoop";
  * The gap in the loop. Approve / Reject render ONLY for
  * REQUIRES_HUMAN_APPROVAL — NO_SAFE_ACTION_AVAILABLE must never present
  * an approval affordance it does not have authority for.
+ *
+ * The re-check button is a separate axis and deliberately not a third decision.
+ * It renders on `decision.recheckable`, which is server truth, and never on the
+ * reason code — the backend refuses a re-check for handoffs that recorded no
+ * action identity or name an action nothing can observe, and those carry the
+ * same code as ones that can. It asks CareLoop to LOOK again, never to act:
+ * it is styled as an outline rather than the solid primary for that reason, and
+ * it never appears beside Approve.
  */
 export default function DecisionCard({ careCase }: { careCase: CareCase }) {
   const navigate = useNavigate();
-  const { approve, reject } = useCareLoop();
+  const { approve, reject, recheck } = useCareLoop();
   const decision = careCase.decision;
   if (!decision) return null;
 
   const tone = caseTone(careCase);
   const canApprove = decision.kind === "REQUIRES_HUMAN_APPROVAL";
+  const canRecheck = !canApprove && decision.recheckable;
   const kindLabel = canApprove ? "DECISION NEEDED" : "MANUAL FOLLOW-UP REQUIRED";
 
   return (
@@ -103,6 +112,21 @@ export default function DecisionCard({ careCase }: { careCase: CareCase }) {
                 {decision.approveLabel}
               </button>
             </>
+          ) : null}
+          {canRecheck ? (
+            <button
+              className="cl-outline"
+              onClick={() => recheck(careCase.id)}
+              style={{
+                background: "transparent",
+                border: "1px solid color-mix(in oklab, currentColor 20%, transparent)",
+                borderRadius: "var(--radius-control)",
+                padding: "10px 16px",
+                fontSize: 14.5
+              }}
+            >
+              {decision.recheckLabel}
+            </button>
           ) : null}
           <button
             className="cl-outline"

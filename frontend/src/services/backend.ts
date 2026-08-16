@@ -34,13 +34,16 @@ export type CaseState =
 /** The backend's section names. Renamed to the UI's `needs | working | done` in the adapter. */
 export type BackendSection = "needs_you" | "working" | "completed";
 
-/** The nineteen members of `careloop.state.case.TimelineKind`.
+/** The twenty members of `careloop.state.case.TimelineKind`.
  *
- *  `MANUAL_HANDOFF_REQUIRED` is the newest and the one worth reading twice. It is deliberately
- *  *not* `APPROVAL_REQUESTED`: that means "CareLoop has one exact action and needs your authority",
- *  this means "CareLoop has no safe action left". A case parked this way raises no approval at all,
- *  so there is nothing to approve — see `DecisionCard`, which renders no approval affordance for
- *  the matching reason code. */
+ *  `MANUAL_HANDOFF_REQUIRED` is worth reading twice. It is deliberately *not* `APPROVAL_REQUESTED`:
+ *  that means "CareLoop has one exact action and needs your authority", this means "CareLoop has
+ *  stopped". A case parked this way raises no approval at all, so there is nothing to approve —
+ *  see `DecisionCard`, which renders no approval affordance for the matching reason codes.
+ *
+ *  `EXTERNAL_RECHECK_REQUESTED` is the newest, and it is the counterpart rather than the opposite:
+ *  a person asking CareLoop to *look* at an already-recorded effect again. It authorises nothing
+ *  and repeats nothing, which is why it is not `APPROVAL_GRANTED` and not `CASE_REOPENED`. */
 export type TimelineKind =
   | "CASE_CREATED"
   | "CASE_REOPENED"
@@ -57,6 +60,7 @@ export type TimelineKind =
   | "APPROVAL_GRANTED"
   | "APPROVAL_REJECTED"
   | "MANUAL_HANDOFF_REQUIRED"
+  | "EXTERNAL_RECHECK_REQUESTED"
   | "ACTION_EXECUTED"
   | "DUPLICATE_SUPPRESSED"
   | "VERIFICATION_PASSED"
@@ -105,6 +109,17 @@ export interface DecisionView {
   /** The arguments the approval's digest covers, recovered from the PLAN_PROPOSED entry. */
   args: Record<string, string>;
   requested_at: string;
+  /** Whether the stored case is structurally eligible for a caregiver to request a re-check.
+   *
+   *  **Server truth, and the only thing that may render the re-check affordance.** Deriving it
+   *  from `reason_code` here would offer the button on a handoff that recorded no action identity,
+   *  on one whose key names no recorded effect, and on an action type nothing can observe
+   *  independently — three cases the backend refuses with a 409.
+   *
+   *  It is not a promise the re-check will succeed: the backend cannot know from stored state
+   *  whether a run will start first, whether the next run has a clinic bound, or what the clinic
+   *  will say. The endpoint re-validates and the verifier still decides. */
+  recheckable: boolean;
 }
 
 export interface ApprovalView {

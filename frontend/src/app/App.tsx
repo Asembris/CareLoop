@@ -9,6 +9,7 @@ import HomePage from "@/pages/HomePage";
 import DemoPage from "@/pages/DemoPage";
 import CasePage from "@/pages/CasePage";
 import TrustPage from "@/pages/TrustPage";
+import NotFoundPage from "@/pages/NotFoundPage";
 
 export default function App() {
   return (
@@ -32,6 +33,12 @@ export default function App() {
               <Route path="/demo" element={<DemoPage />} />
               <Route path="/case/:caseId" element={<CasePage />} />
               <Route path="/trust" element={<TrustPage />} />
+              {/* Last, and it swallows nothing above it: React Router v6 ranks by specificity
+                  rather than by declaration order, so `/case/:caseId` still wins for a case that
+                  does not exist and answers with its own recovery state. `/case/` has no id to
+                  bind and reaches this instead, which is right — there is no case for the detail
+                  route to be about. */}
+              <Route path="*" element={<NotFoundPage />} />
             </Routes>
             <UnderTheHoodDrawer />
             <EvidenceLens />

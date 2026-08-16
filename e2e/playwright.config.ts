@@ -43,7 +43,12 @@ const CLINIC_URL = `http://127.0.0.1:${CLINIC_PORT}`;
 function python(): string {
   if (process.env.CARELOOP_PYTHON) return process.env.CARELOOP_PYTHON;
   for (const candidate of [".venv/Scripts/python.exe", ".venv/bin/python"]) {
-    if (existsSync(resolve(ROOT, candidate))) return candidate;
+    const absolute = resolve(ROOT, candidate);
+    // Absolute, and quoted at the call site. A *relative* `.venv/Scripts/python.exe` is not a
+    // command any Windows shell will resolve, and the failure is silent in the worst way: with
+    // `reuseExistingServer` on, a stack somebody happened to start by hand is used instead and
+    // the config looks like it works until the day nothing is already running.
+    if (existsSync(absolute)) return absolute;
   }
   return "python";
 }
@@ -57,6 +62,19 @@ export default defineConfig({
   // run registry and clinic, so two specs cannot see each other's cases — the same property that
   // lets two judges open the deployed URL at once.
   fullyParallel: true,
+
+  // **Two, measured, and not the default.** Playwright defaults to half the cores, which is 6 here
+  // and wrong: at 6 and at 4 workers, `page.goto` timed out after 30s on six of ten tests, then
+  // the survivors ran in 300ms once the others gave up. The backend is not what saturates — it
+  // served twelve concurrent page loads in 0.7s total while that was happening — it is browser
+  // memory, on a machine with 2.9 GB free of 16 GB. At two workers the same file runs in 3.4s with
+  // nothing failing.
+  //
+  // Pinned rather than left to the default because the default is a function of core count and the
+  // constraint is memory, so a 12-core box with a full RAM disk gets the worst of both. It also
+  // matches what a two-core GitHub runner can actually do. The fix for a slow suite is fewer,
+  // better tests — never a retry that hides this.
+  workers: 2,
 
   // A spec that only passes on the second attempt is a spec nobody can trust. The local stack is
   // deterministic — loopback only, scripted agents, no real model — so a retry would hide a real
@@ -84,7 +102,7 @@ export default defineConfig({
 
   webServer: [
     {
-      command: `${PY} -m demoworld --port ${CLINIC_PORT}`,
+      command: `"${PY}" -m demoworld --port ${CLINIC_PORT}`,
       cwd: ROOT,
       url: `${CLINIC_URL}/clinic/slots`,
       reuseExistingServer: !process.env.CI,
@@ -96,7 +114,7 @@ export default defineConfig({
       // `--static-dir frontend/dist` is what makes this same-origin. The server refuses to start
       // if the bundle is absent, naming `npm run build` — failing loudly beats serving a 404.
       command:
-        `${PY} scripts/e2e_serve.py --port ${API_PORT} ` +
+        `"${PY}" scripts/e2e_serve.py --port ${API_PORT} ` +
         `--clinic-url ${CLINIC_URL} --static-dir frontend/dist`,
       cwd: ROOT,
       url: `${BASE_URL}/api/health`,

@@ -13,7 +13,11 @@ replay CareLoop asserts on stops holding through the real path.
 from __future__ import annotations
 
 import ast
+import contextlib
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 from fastapi.testclient import TestClient
@@ -171,6 +175,138 @@ class TestReset:
         assert book(client).status_code == 201
         client.post("/demo/reset")
         assert book(client, key=OTHER_KEY).status_code == 201
+
+
+class _NoLock:
+    """A lock that guards nothing, for the mutant below. Not used by anything shipped."""
+
+    def __enter__(self) -> None:
+        return None
+
+    def __exit__(self, *_: object) -> bool:
+        return False
+
+
+class RacingClinic(Clinic):
+    """A clinic that makes the booking race happen rather than hoping for it.
+
+    Every caller waits at a barrier *inside* the guarded region, in the gap between having read
+    that the slot is free and acting on it. That is where a check-then-write is unsafe, and the
+    wait is placed **after** the read rather than before it: released together before the read,
+    the threads still lose the race to whichever one the interpreter happens to run to completion
+    first, and the mutant passes for the wrong reason. Measured, not reasoned about — the first
+    version of this test synced before the read and reported the shipped behaviour.
+
+    With the lock in place the second caller cannot reach that gap until the first has left it, so
+    the barrier times out and the calls are serialised — which is the property. With
+    ``guarded=False`` the lock is replaced by one that guards nothing, both callers hold a reading
+    of "free" at the same moment, and both book.
+
+    Nothing is reimplemented here: the mutant swaps the lock and wraps one named step, so what the
+    vacuity proof exercises is the shipped booking logic minus the shipped lock.
+    """
+
+    def __init__(self, *, callers: int, guarded: bool, timeout: float = 0.25) -> None:
+        super().__init__()
+        if not guarded:
+            self._lock = _NoLock()  # type: ignore[assignment]
+        self._gate = threading.Barrier(callers)
+        self._timeout = timeout
+
+    def _held_by(self, slot):  # type: ignore[no-untyped-def]
+        holder = super()._held_by(slot)
+        with contextlib.suppress(threading.BrokenBarrierError):
+            self._gate.wait(timeout=self._timeout)
+        return holder
+
+
+def book_concurrently(clinic: Clinic, keys: tuple[str, ...]) -> list[int]:
+    """Post one booking per key at the same time, and return the status codes."""
+    client = TestClient(create_clinic_app(clinic))
+    with ThreadPoolExecutor(max_workers=len(keys)) as pool:
+        futures = [pool.submit(lambda k=key: book(client, key=k).status_code) for key in keys]
+        return [future.result() for future in futures]
+
+
+class TestTheBookingLockIsWhatRefusesTheSecondCaller:
+    """One slot, two callers, one appointment — and the proof that the lock is what does it.
+
+    Booking is a check-then-write, and FastAPI runs synchronous handlers in a worker pool, so two
+    judges pressing the same scenario at the same moment really do arrive on two threads. This is
+    the race that produces a second appointment on a slot the clinic offers once.
+    """
+
+    KEYS = (KEY, OTHER_KEY)
+
+    def test_two_callers_asking_for_one_slot_get_one_appointment(self) -> None:
+        clinic = RacingClinic(callers=len(self.KEYS), guarded=True)
+        assert sorted(book_concurrently(clinic, self.KEYS)) == [201, 409]
+        assert len(clinic.appointments()) == 1
+
+    def test_without_the_lock_both_callers_book_it(self) -> None:
+        """The vacuity proof. Remove the lock and the clinic sells one slot twice.
+
+        Named so it survives a tidy-up: it is not testing a mutant for its own sake, it is the
+        evidence that the assertion above is about the lock rather than about two calls that
+        happened not to overlap.
+        """
+        clinic = RacingClinic(callers=len(self.KEYS), guarded=False)
+        assert sorted(book_concurrently(clinic, self.KEYS)) == [201, 201]
+        assert len(clinic.appointments()) == 2
+
+    def test_ten_callers_racing_for_one_slot_still_produce_one(self, world: Clinic) -> None:
+        """The same claim without the barrier, over the shipped clinic and ten real threads."""
+        keys = tuple(f"{index:064x}" for index in range(10))
+        statuses = book_concurrently(world, keys)
+
+        assert statuses.count(201) == 1
+        assert set(statuses) == {201, 409}
+        assert len(world.appointments()) == 1
+
+
+class TestEveryClinicMethodIsSerialised:
+    """The lock is not optional on any of them, and a new method must not be the exception.
+
+    Asserted on the decorator rather than by racing threads, for the reason
+    ``tests/test_store.py::TestEveryStoreMethodIsSerialised`` is: a race that happens to pass is
+    not evidence. The race that *is* evidence is the barrier pair above.
+    """
+
+    METHODS: ClassVar[tuple[str, ...]] = (
+        "amend",
+        "appointment",
+        "appointments",
+        "available",
+        "book",
+        "reset",
+    )
+
+    def test_the_list_covers_every_public_method(self) -> None:
+        """Vacuity: a method missing from this list is a method the sweep never looks at.
+
+        ``slots`` is excluded and is the only exclusion: it is a property over a tuple frozen at
+        construction, so there is no write for a reader to tear.
+        """
+        public = {
+            name
+            for name in dir(Clinic)
+            if not name.startswith("_") and callable(getattr(Clinic, name))
+        }
+        assert public == set(self.METHODS)
+
+    def test_every_one_of_them_holds_the_lock(self) -> None:
+        unguarded = [
+            name for name in self.METHODS if not hasattr(getattr(Clinic, name), "__wrapped__")
+        ]
+        assert unguarded == []
+
+    def test_the_detector_notices_an_undecorated_method(self) -> None:
+        """Vacuity: ``__wrapped__`` is the decorator's fingerprint, so a plain method has none."""
+
+        class Undecorated:
+            def book(self) -> None: ...
+
+        assert not hasattr(Undecorated.book, "__wrapped__")
 
 
 class TestTheSeededWorldMatchesTheReferral:

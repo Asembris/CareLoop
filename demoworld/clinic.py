@@ -23,11 +23,22 @@ executor being rebuilt, which is what the booking claim needs; it does not survi
 restarted. That is a stated limitation rather than a durability claim, and the reset route makes it
 uninteresting — a judge who restarts the service gets the seeded world back, which is what the
 button does anyway.
+
+**Every method holds the clinic's lock**, for the reason every method of ``SqliteCaseStore`` holds
+its own: FastAPI runs synchronous route handlers in a worker pool, so two bookings arriving together
+reach :meth:`Clinic.book` on two threads. Booking is a check-then-write — is the slot offered, is it
+free, then take it — and two of those interleaving both find the slot free and both take it, which
+is a second appointment on a slot the clinic offers once. Reads are guarded too, because ``book``
+writes three dictionaries and a read landing between them would see a slot held by an appointment
+the same clinic says it does not have.
 """
 
 from __future__ import annotations
 
-from typing import Final
+import threading
+from collections.abc import Callable
+from functools import wraps
+from typing import Final, cast
 
 from pydantic import BaseModel, ConfigDict
 
@@ -109,6 +120,26 @@ class UnknownAppointment(Exception):
     """Raised when a read names a confirmation this clinic does not hold."""
 
 
+def serialised[M: Callable[..., object]](method: M) -> M:
+    """Run ``method`` holding the clinic's lock.
+
+    Applied to every public method rather than to :meth:`Clinic.book` alone. The booking is the
+    check-then-write that makes the lock necessary, and a read running between its three writes
+    would report a world that never existed — a slot held by a confirmation the clinic does not
+    list. ``tests/test_demoworld.py::TestEveryClinicMethodIsSerialised`` asserts the decorator is on
+    all of them, so a method added later cannot quietly be the one that is not.
+
+    Re-entrant, because :meth:`Clinic.amend` reads through :meth:`Clinic.appointment`.
+    """
+
+    @wraps(method)
+    def guarded(self: Clinic, *args: object, **kwargs: object) -> object:
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return cast(M, guarded)
+
+
 class Clinic:
     """The clinic's durable-for-this-process state.
 
@@ -118,10 +149,12 @@ class Clinic:
 
     def __init__(self, slots: tuple[Slot, ...] = SEEDED_SLOTS) -> None:
         self._seed: Final[tuple[Slot, ...]] = slots
+        self._lock = threading.RLock()
         self._appointments: dict[str, Appointment] = {}
         self._by_key: dict[str, str] = {}
         self._taken: dict[Slot, str] = {}
 
+    @serialised
     def reset(self) -> None:
         """Restore the seeded world. Every booking is forgotten and every slot is free again."""
         self._appointments = {}
@@ -130,22 +163,33 @@ class Clinic:
 
     @property
     def slots(self) -> tuple[Slot, ...]:
-        """Every slot this clinic offers, taken or not."""
+        """Every slot this clinic offers, taken or not.
+
+        The one member with no lock and the only one that needs none: the seed is frozen at
+        construction and never written, so there is nothing for a concurrent write to tear.
+        """
         return self._seed
 
+    @serialised
     def available(self) -> tuple[Slot, ...]:
         """The slots nobody has booked."""
         return tuple(slot for slot in self._seed if slot not in self._taken)
 
+    @serialised
     def appointments(self) -> tuple[Appointment, ...]:
         """Every booking, in the order the confirmations were minted."""
         return tuple(self._appointments.values())
 
+    @serialised
     def book(self, request: BookingRequest, idempotency_key: str) -> tuple[Appointment, bool]:
         """Book ``request``, or replay the booking already made under ``idempotency_key``.
 
         Returns the appointment and whether this call is what created it, so a caller can tell a
         booking from a replay without comparing records.
+
+        **The whole check-then-write runs under the lock.** Two callers asking for one slot at the
+        same moment are the ordinary case here — the demo's scenarios all name the same slot — and
+        without it both would find it free and both would take it.
 
         Raises:
             KeyReused: if the key is recorded against different arguments.
@@ -167,10 +211,9 @@ class Clinic:
             raise UnknownSlot(
                 f"this clinic offers no slot at {request.slot_start} with {request.provider_id}"
             )
-        if slot in self._taken:
+        if (holder := self._held_by(slot)) is not None:
             raise SlotAlreadyTaken(
-                f"the slot at {request.slot_start} is already held by appointment "
-                f"{self._taken[slot]}"
+                f"the slot at {request.slot_start} is already held by appointment {holder}"
             )
 
         appointment = Appointment(
@@ -185,6 +228,7 @@ class Clinic:
         self._taken[slot] = appointment.confirmation_id
         return appointment, True
 
+    @serialised
     def appointment(self, confirmation_id: str) -> Appointment:
         """One booking as the clinic holds it now.
 
@@ -196,6 +240,7 @@ class Clinic:
             raise UnknownAppointment(f"this clinic holds no appointment {confirmation_id!r}")
         return found
 
+    @serialised
     def amend(self, confirmation_id: str, **changes: str) -> Appointment:
         """Change a booking the way a clinic's own front desk would.
 
@@ -211,6 +256,16 @@ class Clinic:
         amended = self.appointment(confirmation_id).model_copy(update=changes)
         self._appointments[confirmation_id] = amended
         return amended
+
+    def _held_by(self, slot: Slot) -> str | None:
+        """The confirmation holding ``slot``, if any. Read inside the booking's guarded region.
+
+        A named step rather than a dictionary lookup inline, so the moment between "is this slot
+        free" and "take it" is a thing a test can stand in — which is what
+        ``TestTheBookingLockIsWhatRefusesTheSecondCaller`` does to prove the lock is load-bearing
+        rather than hoping a race shows up.
+        """
+        return self._taken.get(slot)
 
     @staticmethod
     def _same(appointment: Appointment, request: BookingRequest) -> bool:
@@ -233,4 +288,5 @@ __all__ = [
     "SlotAlreadyTaken",
     "UnknownAppointment",
     "UnknownSlot",
+    "serialised",
 ]

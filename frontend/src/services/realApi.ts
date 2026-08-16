@@ -749,24 +749,33 @@ export const RESET_RETRY_MS = 400;
 /** How many times to re-attempt a refused scenario or reset.
  *
  *  `RESET_ATTEMPTS * RESET_RETRY_MS` has to exceed the longest a run can take, and the original
- *  3 x 300ms did not come close. Session E measured this against the deployed backend: a run
- *  settles in 2s typically and 6.7s at the slow end, so a judge who presses scenario 02 while 01
- *  is still going exhausts the retries in 900ms, the reset is refused, and 02 then runs against a
- *  clinic that already holds the one seeded slot.
+ *  3 x 300ms did not come close. Session E measured 6.7s at the slow end and widened this to 16s;
+ *  a press that outlives the budget is dropped in silence, which is the failure this guards.
  *
- *  The result is the worst available failure: `ClinicRefused`, a FAILED case, and a Malicious
- *  Document scenario that looks like the injection defence collapsing when nothing of the sort
- *  happened. Reproduced deliberately before this was widened.
- *
- *  16s covers the slowest run seen with room to spare. It only ever elapses while a run really is
- *  in flight, which is exactly when pressing another scenario should wait. */
-export const RESET_ATTEMPTS = 40;
+ *  **Session S re-measured it and it had moved.** 32s, because the slowest run now observed is
+ *  14.6s — see `SLOWEST_OBSERVED_RUN_MS`. It only ever elapses while this visitor's *own* run is
+ *  in flight, which is exactly when pressing another scenario should wait; under isolation another
+ *  visitor's run can no longer refuse this one at all. */
+export const RESET_ATTEMPTS = 80;
 
-/** The slowest run observed end to end against the deployed backend, session E.
+/** The slowest run observed end to end against the deployed backend.
  *
  *  Here so the retry budget can be asserted against the thing it has to outlast, rather than
- *  against a number someone picked. If runs get slower, this moves and the test says so. */
-export const SLOWEST_OBSERVED_RUN_MS = 6700;
+ *  against a number someone picked. If runs get slower, this moves and the test says so.
+ *
+ *  **14.6s, session S, measured through CloudFront.** Session E's 6.7s was a single visitor on a
+ *  warm process. What actually varies, measured in the same sitting on the same host:
+ *
+ *    solo, warm, `referral`          1.9 – 2.9s
+ *    three visitors at once          2.1 / 2.2 / 2.4s
+ *    `injection_only`, warm          6.8s   (every tool proposed and refused, so many planner calls)
+ *    two at once, minutes after a redeploy   10.7s and **14.6s**
+ *
+ *  So concurrency is not what costs — three simultaneous runs are as quick as one — and the two
+ *  things that do are the scenario's own shape and a process that has just started. A number
+ *  measured once under the friendliest conditions is the kind of constant this project keeps
+ *  going stale. */
+export const SLOWEST_OBSERVED_RUN_MS = 14600;
 
 export class RealCareLoopApi implements CareLoopApi {
   /** Case detail by id, keyed on the version it was read at.

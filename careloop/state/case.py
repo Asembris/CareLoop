@@ -67,6 +67,21 @@ class TimelineKind(StrEnum):
     Since a handoff carries no approval, this entry is the whole durable record of it — the case's
     state says a human is needed and this says why.
     """
+    EXTERNAL_RECHECK_REQUESTED = "EXTERNAL_RECHECK_REQUESTED"
+    """A person asked CareLoop to observe an already-recorded effect again.
+
+    The audit fact behind ``AWAITING_HUMAN → VERIFYING``, which without it would be a state change
+    on a parked case that the trail could not explain. It is written only by
+    :func:`careloop.graph.runner.request_recheck` and carries the identity of the exact action to
+    be re-observed.
+
+    **It requests a look, not an act.** It is deliberately not ``APPROVAL_GRANTED`` — nothing is
+    authorised, and the effect it names already happened — and deliberately not ``CASE_REOPENED``,
+    which is an inbound event arriving at a finished case. Recording it as either would put a claim
+    in an append-only trail that is false in both directions: that a caregiver granted authority,
+    or that new work arrived.
+    """
+
     ACTION_EXECUTED = "ACTION_EXECUTED"
     DUPLICATE_SUPPRESSED = "DUPLICATE_SUPPRESSED"
     VERIFICATION_PASSED = "VERIFICATION_PASSED"

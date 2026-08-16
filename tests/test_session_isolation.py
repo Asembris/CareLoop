@@ -17,12 +17,17 @@ against both shapes would be testing nothing.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
+import httpx
 import pytest
-from api_helpers import factory_proposing
+from api_helpers import CARER, EMAIL, factory_proposing, intent, planner_proposing, triage_agent
 from fastapi.testclient import TestClient
+from helpers import FIXED_NOW
 
 import demoworld
 from careloop.api.app import build_dependencies, create_app
+from careloop.api.demo import DEMO_SCENARIOS
 from careloop.api.deps import ApiDeps
 from careloop.api.sessions import (
     CLINIC_SESSION_HEADER,
@@ -33,7 +38,28 @@ from careloop.api.sessions import (
     UnknownSession,
     demo_session_worlds,
 )
+from careloop.graph.runner import context_for
+from careloop.state import CaseState
 from careloop.state.sqlite_store import SqliteCaseStore
+from careloop.tools.clinic import DEFAULT_TIMEOUT, ClinicClient
+
+BOOKING = {
+    "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+    "patient_id": "PT-4417",
+    "slot_start": "2026-09-03T09:30:00",
+    "reason": "cardiology review",
+}
+
+#: What the planner proposes, by the case it is planning for.
+#:
+#: Keyed on the case rather than on the order presses arrive in, so the *same* script drives the
+#: isolated app and the single-world one. The two runs of ``TestTheIsolationProof`` then differ in
+#: exactly one thing — whether the visitors share a world — which is what makes it a proof.
+SCRIPTS = {
+    DEMO_SCENARIOS["referral"].case_id: intent("book_appointment", **BOOKING),
+    DEMO_SCENARIOS["resume"].case_id: intent("send_email", **EMAIL),
+    DEMO_SCENARIOS["injection"].case_id: intent("book_appointment", **BOOKING),
+}
 
 
 def session_worlds(*proposals, **over) -> SessionWorlds:
@@ -53,6 +79,46 @@ def session_worlds(*proposals, **over) -> SessionWorlds:
     return SessionWorlds(build, **over)
 
 
+def scripted_factory(clinic: ClinicClient | None = None):
+    """A context factory whose planner proposes what the case it is planning for needs."""
+
+    def build(store, inbound, case_id: str):
+        return context_for(
+            store,
+            inbound,
+            case_id=case_id,
+            triage=triage_agent(),
+            planner=planner_proposing(SCRIPTS[case_id]),
+            now=lambda: FIXED_NOW,
+            clinic=clinic,
+        )
+
+    return build
+
+
+def scripted_worlds(clinic_url: str = "") -> SessionWorlds:
+    """Worlds shaped like the deployed ones, with scripted agents in place of a model."""
+
+    def build(session_id: str) -> ApiDeps:
+        clinic = (
+            ClinicClient(
+                clinic_url,
+                client=httpx.Client(
+                    timeout=DEFAULT_TIMEOUT, headers={CLINIC_SESSION_HEADER: session_id}
+                ),
+            )
+            if clinic_url
+            else None
+        )
+        return ApiDeps(
+            store=SqliteCaseStore(":memory:"),
+            context_factory=scripted_factory(clinic),
+            clinic=clinic,
+        )
+
+    return SessionWorlds(build)
+
+
 def isolated_client(worlds: SessionWorlds) -> TestClient:
     return TestClient(create_app(sessions=worlds, demo=True))
 
@@ -65,6 +131,186 @@ def open_session(client: TestClient) -> str:
 
 def whose(session_id: str) -> dict[str, str]:
     return {SESSION_HEADER: session_id}
+
+
+class TestTwoVisitorsAtOnce:
+    """The whole target: two people use the demo simultaneously and neither notices the other."""
+
+    def test_neither_sees_the_others_cases(self) -> None:
+        with isolated_client(scripted_worlds()) as client:
+            first, second = open_session(client), open_session(client)
+
+            client.post("/api/demo/scenarios/resume?wait=10", headers=whose(first))
+            client.post("/api/demo/scenarios/referral?wait=10", headers=whose(second))
+
+            mine = client.get("/api/cases", headers=whose(first)).json()
+            theirs = client.get("/api/cases", headers=whose(second)).json()
+
+        assert [card["case_id"] for card in mine["needs_you"]] == ["demo-resume"]
+        assert mine["completed"] == []
+        assert [card["case_id"] for card in theirs["completed"]] == ["demo-referral"]
+        assert theirs["needs_you"] == []
+
+    def test_a_case_belonging_to_another_visitor_is_a_404(self) -> None:
+        """Not a redacted projection — the case is not in this visitor's store to project."""
+        with isolated_client(scripted_worlds()) as client:
+            first, second = open_session(client), open_session(client)
+            client.post("/api/demo/scenarios/referral?wait=10", headers=whose(first))
+
+            assert client.get("/api/cases/demo-referral", headers=whose(first)).status_code == 200
+            assert client.get("/api/cases/demo-referral", headers=whose(second)).status_code == 404
+
+    def test_scenarios_pressed_at_the_same_moment_both_settle(self) -> None:
+        """Two judges pressing together, which is the case the shared demo could not survive."""
+        with isolated_client(scripted_worlds()) as client:
+            sessions = [open_session(client), open_session(client), open_session(client)]
+
+            def press(session_id: str) -> int:
+                return client.post(
+                    "/api/demo/scenarios/referral?wait=20", headers=whose(session_id)
+                ).status_code
+
+            with ThreadPoolExecutor(max_workers=len(sessions)) as pool:
+                statuses = list(pool.map(press, sessions))
+
+            assert statuses == [202] * len(sessions)
+            for session_id in sessions:
+                detail = client.get("/api/cases/demo-referral", headers=whose(session_id)).json()
+                assert detail["state"] == "DONE"
+
+
+class TestAResetReachesOneWorldOnly:
+    """A reset is the sharpest edge on the demo: it deletes every case it can reach.
+
+    Under isolation it can reach one visitor's cases, and that is structural rather than checked —
+    ``deps.store`` *is* the world the request named, so there is no other store in the process a
+    route could pass to ``clear()``.
+    """
+
+    def test_a_reset_leaves_the_other_visitors_settled_case_alone(self) -> None:
+        with isolated_client(scripted_worlds()) as client:
+            first, second = open_session(client), open_session(client)
+            client.post("/api/demo/scenarios/referral?wait=10", headers=whose(first))
+
+            cleared = client.post("/api/demo/reset", headers=whose(second))
+            assert cleared.status_code == 200
+            assert cleared.json()["cases_cleared"] == 0
+
+            kept = client.get("/api/cases/demo-referral", headers=whose(first))
+            assert kept.status_code == 200
+            assert kept.json()["state"] == "DONE"
+
+    def test_a_pending_decision_survives_another_visitors_reset_and_is_still_decidable(
+        self,
+    ) -> None:
+        """The failure that made this worst: a stale card whose Approve silently 404s."""
+        with isolated_client(scripted_worlds()) as client:
+            first, second = open_session(client), open_session(client)
+            client.post("/api/demo/scenarios/resume?wait=10", headers=whose(first))
+
+            parked = client.get("/api/cases/demo-resume", headers=whose(first)).json()
+            approval_id = parked["decision"]["approval_id"]
+            assert parked["state"] == "AWAITING_HUMAN"
+
+            client.post("/api/demo/reset", headers=whose(second))
+            client.post("/api/demo/scenarios/referral?wait=10", headers=whose(second))
+
+            decided = client.post(
+                f"/api/cases/demo-resume/decisions/{approval_id}/approve?wait=10",
+                headers={**whose(first), "X-Caregiver": CARER},
+            )
+
+        assert decided.status_code == 202
+
+
+class TestTheIsolationProof:
+    """The vacuity proof, and the reason every test above is worth reading.
+
+    One script, driven twice: once against an app that gives each visitor a world, and once against
+    an app that serves one world to everybody — which is what the deployed demo was. The isolated
+    run must survive it and the shared run must not. A test that passed against both would be
+    asserting nothing about isolation, and this file would be a description rather than evidence.
+
+    The damage is the one that was actually reachable on the public URL: visitor B presses a
+    scenario, which resets the world it can reach, and visitor A's parked case — with a decision
+    card on screen and an Approve button under a judge's cursor — is gone.
+    """
+
+    def script(self, client: TestClient, first: dict[str, str], second: dict[str, str]) -> int:
+        """A parks for a decision; B presses a scenario; A tries to decide. Returns A's status."""
+        client.post("/api/demo/scenarios/resume?wait=10", headers=first)
+        parked = client.get("/api/cases/demo-resume", headers=first).json()
+        approval_id = parked["decision"]["approval_id"]
+
+        client.post("/api/demo/scenarios/referral?wait=10", headers=second)
+
+        return client.post(
+            f"/api/cases/demo-resume/decisions/{approval_id}/approve?wait=10",
+            headers={**first, "X-Caregiver": CARER},
+        ).status_code
+
+    def test_worlds_apart_the_decision_still_stands(self) -> None:
+        with isolated_client(scripted_worlds()) as client:
+            first, second = whose(open_session(client)), whose(open_session(client))
+            assert self.script(client, first, second) == 202
+
+    def test_one_world_between_them_destroys_it(self) -> None:
+        """Namespacing removed. The same script, and the caregiver's decision is a 404.
+
+        This is the deployed defect reproduced rather than described: nothing errors, nothing is
+        logged, and the judge who lost the race sees a decision card whose button does nothing.
+        """
+        store = SqliteCaseStore(":memory:")
+        app = create_app(store, context_factory=scripted_factory(), demo=True)
+        with TestClient(app) as client:
+            assert self.script(client, {}, {}) == 404
+            assert store.list_by_state(CaseState.AWAITING_HUMAN) == []
+
+
+class TestTwoWorldsBookAgainstTwoClinics:
+    """One seeded slot each, booked over real HTTP, verified by reading each clinic back.
+
+    The clinic is where a shared demo hurt most: every scenario books the slot the referral offers,
+    so the second visitor got a correct ``SlotAlreadyTaken`` and a ``FAILED`` case that reads like
+    the agent breaking. Driven against Demo World on a loopback socket, because the claim is about
+    two visitors reaching a real external service — in-process would exercise everything except
+    the thing being asserted.
+    """
+
+    def test_both_visitors_book_the_same_slot_and_both_are_verified(
+        self, clinic_service, clinic_state
+    ) -> None:
+        clinic, _ = clinic_service
+        with isolated_client(scripted_worlds(clinic)) as client:
+            first, second = open_session(client), open_session(client)
+
+            def press(session_id: str) -> int:
+                return client.post(
+                    "/api/demo/scenarios/referral?wait=20", headers=whose(session_id)
+                ).status_code
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                statuses = list(pool.map(press, [first, second]))
+
+            assert statuses == [202, 202]
+            for session_id in (first, second):
+                detail = client.get("/api/cases/demo-referral", headers=whose(session_id)).json()
+                assert detail["state"] == "DONE"
+                verified = [
+                    event for event in detail["timeline"] if event["kind"] == "VERIFICATION_PASSED"
+                ]
+                # Read back against the clinic itself, not against CareLoop's own receipt.
+                assert verified and verified[-1]["payload"]["read_back"] == "true"
+
+            # Each world holds one appointment and one fewer free slot: two bookings, two clinics.
+            for session_id in (first, second):
+                free = httpx.get(f"{clinic}/clinic/slots?session={session_id}").json()["slots"]
+                assert len(free) == len(demoworld.SEEDED_SLOTS) - 1
+
+            # And the untouched default world proves the two above were genuinely separate.
+            assert len(httpx.get(f"{clinic}/clinic/slots").json()["slots"]) == len(
+                demoworld.SEEDED_SLOTS
+            )
 
 
 class TestTheTwoModesAreExclusive:

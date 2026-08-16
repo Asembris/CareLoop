@@ -925,6 +925,79 @@ describe("one world per visitor", () => {
     expect(read[0].headers["X-CareLoop-Session"]).toBeUndefined();
   });
 
+  it("does not mistake a backend that is restarting for one without sessions", async () => {
+    // Measured against the deployed stack: `POST /api/sessions` answers **504** for about seven
+    // seconds while systemd restarts the API. Taking that as "this backend serves one world" is
+    // sticky and permanent — the page then carries no session, every request is refused 400, and
+    // the dashboard sits empty looking like a hung backend until somebody reloads. A judge who
+    // opens the URL during a redeploy is exactly who this happens to.
+    //
+    // Only 404 answers the question "does this backend have sessions". Everything else is a
+    // backend that could not answer, which is a reason to ask again rather than to conclude.
+    let failing = true;
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push(url);
+        if (url.endsWith("/api/sessions")) {
+          if (failing) return new Response("", { status: 504 });
+          return new Response(JSON.stringify({ session: "world-one" }), { status: 201 });
+        }
+        const named = ((init?.headers ?? {}) as Record<string, string>)["X-CareLoop-Session"];
+        if (!named) return new Response("", { status: 400 });
+        return new Response(
+          JSON.stringify({ needs_you: [], working: [], completed: [] }),
+          { status: 200 }
+        );
+      })
+    );
+
+    const api = new RealCareLoopApi();
+    await api.getDashboard();
+
+    failing = false;
+    await api.getDashboard();
+
+    expect(calls.filter((url) => url.endsWith("/api/sessions")).length).toBeGreaterThan(1);
+    const read = calls.filter((url) => url.endsWith("/api/cases"));
+    expect(read.length).toBeGreaterThan(0);
+  });
+
+  it("mints and retries once when a request is refused for naming no world", async () => {
+    // The other half of the same recovery: the mint failed a moment ago, so this request carries
+    // nothing and is correctly refused. Retrying with a freshly minted world turns a dead page
+    // into one that catches up on its next poll.
+    let minted = false;
+    const seen: { url: string; session?: string }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const session = ((init?.headers ?? {}) as Record<string, string>)["X-CareLoop-Session"];
+        seen.push({ url, session });
+        if (url.endsWith("/api/sessions")) {
+          if (!minted) {
+            minted = true;
+            return new Response("", { status: 503 });
+          }
+          return new Response(JSON.stringify({ session: "world-two" }), { status: 201 });
+        }
+        if (!session) return new Response("", { status: 400 });
+        return new Response(
+          JSON.stringify({ needs_you: [], working: [], completed: [] }),
+          { status: 200 }
+        );
+      })
+    );
+
+    await new RealCareLoopApi().getDashboard();
+
+    const reads = seen.filter((call) => call.url.endsWith("/api/cases"));
+    expect(reads).toHaveLength(2);
+    expect(reads[0].session).toBeUndefined();
+    expect(reads[1].session).toBe("world-two");
+  });
+
   it("keeps its world across a reload", async () => {
     // Not `localStorage`: two tabs sharing one world would reset it under each other, which is a
     // smaller copy of the bug per-visitor isolation exists to fix. And not nothing, because a

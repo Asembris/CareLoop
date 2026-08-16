@@ -169,18 +169,28 @@ async function mint(): Promise<string | null> {
       method: "POST",
       headers: { Accept: "application/json" }
     });
-    if (!response.ok) {
-      // 404 is "this backend serves one world"; anything else is a backend in trouble, and
-      // carrying no session is the same honest degradation — the next request says what is wrong.
+    if (response.status === 404) {
+      // The one status that answers the question: this backend serves one world to everybody, so
+      // stop asking and carry no session. Local development and the offline suite live here.
       rememberSession(null);
+      return null;
+    }
+    if (!response.ok) {
+      // A backend that could not answer is not a backend without sessions, and the difference is
+      // not academic: measured against the deployed stack, this route answers **504 for about
+      // seven seconds** while systemd restarts the API. Remembering that as "no sessions" is
+      // sticky and permanent — the page would carry no session, every later request would be
+      // refused 400, and the dashboard would sit empty looking like a hung backend until somebody
+      // reloaded. A judge opening the URL during a redeploy is precisely who that happens to.
       return null;
     }
     const body = (await response.json()) as { session?: string };
     rememberSession(body.session ?? null);
     return session;
   } catch {
-    // Offline. Not remembered: this is not an answer about the backend's shape, and a blip must
-    // not leave the page permanently session-less against a backend that requires one.
+    // Offline. Not remembered, for the same reason: this is not an answer about the backend's
+    // shape, and a blip must not leave the page permanently session-less against a backend that
+    // requires one.
     return null;
   }
 }
@@ -208,10 +218,16 @@ export interface HttpResult<T> {
  *  an exception: `useCareLoop` calls every verb as `void api.x()`. A screen that keeps showing the
  *  last good state through a blip is better than a screen that goes blank.
  *
- *  **410 is the one status this retries**, and only once. It means the world this page was using
- *  is gone — the backend restarted, or it went idle and was forgotten — and the remedy is entirely
- *  mechanical: mint another and ask again. It is a distinct status from the 409 a busy case
- *  returns precisely so this can tell them apart without reading any prose. */
+ *  **Two statuses are retried, once each, and both mean "you have no usable world".** A **410** is
+ *  the world this page was using being gone — the backend restarted, or it went idle and was
+ *  forgotten. A **400 on a request that carried no session** is the other side of the same coin:
+ *  the mint failed a moment ago (a restarting backend answers 504, not 404), so this page is
+ *  asking anonymously of a backend that hands out worlds. Both remedies are mechanical — mint and
+ *  ask again — and both recover on the next poll rather than needing a reload.
+ *
+ *  A 400 *with* a session held is left alone: that is a different fault and swallowing it would
+ *  hide it. And 410 stays distinct from the 409 a busy case returns, so neither has to be told
+ *  apart by reading prose. */
 export async function request<T>(
   path: string,
   init: RequestInit = {},
@@ -227,7 +243,8 @@ export async function request<T>(
         ...(init.headers ?? {})
       }
     });
-    if (response.status === 410 && remint) {
+    const worldless = response.status === 400 && !world;
+    if ((response.status === 410 || worldless) && remint) {
       forgetSession();
       return request<T>(path, init, false);
     }

@@ -36,6 +36,7 @@ the same clinic says it does not have.
 from __future__ import annotations
 
 import threading
+from collections import OrderedDict
 from collections.abc import Callable
 from functools import wraps
 from typing import Final, cast
@@ -278,11 +279,93 @@ class Clinic:
         )
 
 
+#: How many session worlds one process keeps before the least recently used is forgotten.
+#:
+#: A clinic is three small dictionaries and a lock — a booked one is a few hundred bytes — so the
+#: bound is about not growing without limit rather than about memory pressure. It is well above the
+#: number of people who can be looking at a demo at once, and a forgotten world is a world that
+#: reseeds, which is what the reset button does anyway.
+DEFAULT_WORLD_LIMIT: Final[int] = 64
+
+
+class Clinics:
+    """One clinic per session, and one for anybody who names none.
+
+    **Why a clinic cannot be shared.** Every demo scenario books the slot the referral offers, so
+    two visitors running scenarios at the same time ask one clinic for one slot — and the second
+    gets a correct refusal that looks, on screen, like the agent failing. Separate worlds are what
+    make two visitors independent, and separating the *cases* without separating the *clinic* would
+    leave the two competing over the one thing that is genuinely external.
+
+    **A session id is a namespace, not a credential.** Demo World mints none and verifies none: it
+    is handed an opaque string by whoever is calling and keeps a world under it, exactly as it keeps
+    the default world for a caller who names nothing. Anyone who can reach the port can name any
+    world, which is the same statement CareLoop's own ``X-Caregiver`` makes about identity.
+
+    **Least-recently-used, and no clock.** Demo World reads no time and no random source — a
+    ``booked_at`` or a minted id would break the byte-identical replay CareLoop asserts through the
+    real HTTP path — so worlds are evicted by *order of use* rather than by age. An
+    :class:`~collections.OrderedDict` is the whole mechanism.
+    """
+
+    def __init__(
+        self,
+        *,
+        default: Clinic | None = None,
+        limit: int = DEFAULT_WORLD_LIMIT,
+        slots: tuple[Slot, ...] = SEEDED_SLOTS,
+    ) -> None:
+        self._lock = threading.Lock()
+        self._limit = limit
+        self._slots = slots
+        self._default: Final[Clinic] = default if default is not None else Clinic(slots)
+        self._worlds: OrderedDict[str, Clinic] = OrderedDict()
+
+    @property
+    def default(self) -> Clinic:
+        """The world a caller who names no session reaches."""
+        return self._default
+
+    def world(self, session: str | None) -> Clinic:
+        """The clinic ``session`` books against, created on first use.
+
+        ``None`` is the default world rather than a new one: a developer running Demo World by hand
+        and a judge reading ``GET /clinic/slots`` in a browser both arrive without a session, and
+        minting them a fresh world each time would show them an empty clinic forever.
+        """
+        if session is None:
+            return self._default
+
+        with self._lock:
+            existing = self._worlds.get(session)
+            if existing is not None:
+                self._worlds.move_to_end(session)
+                return existing
+
+            created = Clinic(self._slots)
+            self._worlds[session] = created
+            while len(self._worlds) > self._limit:
+                self._worlds.popitem(last=False)
+            return created
+
+    def sessions(self) -> tuple[str, ...]:
+        """Every session with a world here, least recently used first. For tests and diagnostics."""
+        with self._lock:
+            return tuple(self._worlds)
+
+    def __len__(self) -> int:
+        """How many session worlds are held. The default world is not one of them."""
+        with self._lock:
+            return len(self._worlds)
+
+
 __all__ = [
+    "DEFAULT_WORLD_LIMIT",
     "SEEDED_SLOTS",
     "Appointment",
     "BookingRequest",
     "Clinic",
+    "Clinics",
     "KeyReused",
     "Slot",
     "SlotAlreadyTaken",

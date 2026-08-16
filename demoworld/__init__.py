@@ -16,16 +16,25 @@ Run it::
 
 from __future__ import annotations
 
-from demoworld.app import CLINIC_PREFIX, IDEMPOTENCY_HEADER, create_clinic_app
-from demoworld.clinic import SEEDED_SLOTS, Appointment, BookingRequest, Clinic, Slot
+from demoworld.app import (
+    CLINIC_PREFIX,
+    IDEMPOTENCY_HEADER,
+    SESSION_HEADER,
+    SESSION_PARAM,
+    create_clinic_app,
+)
+from demoworld.clinic import SEEDED_SLOTS, Appointment, BookingRequest, Clinic, Clinics, Slot
 
 __all__ = [
     "CLINIC_PREFIX",
     "IDEMPOTENCY_HEADER",
     "SEEDED_SLOTS",
+    "SESSION_HEADER",
+    "SESSION_PARAM",
     "Appointment",
     "BookingRequest",
     "Clinic",
+    "Clinics",
     "Slot",
     "create_clinic_app",
 ]

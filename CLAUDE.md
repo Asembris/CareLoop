@@ -218,6 +218,11 @@ reproduce, which is the one thing the arrangement exists to prevent.
 graph edge exits `DONE`, and a sweep in `tests/test_reopen.py` fails if any node, agent, tool or
 policy module names the function. The agent can never leave `DONE`; the world can.
 
+**A case leaves a post-effect handoff only through `request_recheck`, and only a person may call
+it.** Same arrangement, same reason: `tests/test_recheck_writers.py` fails if any agent-facing
+module names it, and a second sweep pins `graph/runner.py` and `graph/nodes.py` as the only writers
+of `transition(..., VERIFYING)`. The agent can never ask to look again; a caregiver can.
+
 **Argument classes belong to the tool registry**, not to `rules.yaml`. Two declaration sites means
 one place to forget a `DESTINATION`. Rules may reference classes; they may never define them, and
 load-time validation fails startup if a rule names a tool or argument the registry does not have.
@@ -512,6 +517,128 @@ representation** — what CareLoop knows, and which action it knows it about —
 deciding what may be done about either is a separate patch with its own evidence. Cases parked
 before this carry neither and stay exactly as they are: readable, projectable, and correctly unable
 to satisfy an identity nobody recorded.
+
+**Something consumes the key now, and it recovers knowledge rather than authority.** A parked
+`EXTERNAL_STATE_NOT_CONFIRMED` case was safe and *permanently* stopped: measured, `approve` and
+`reject` raise `NoSuchApproval` because the parking raises none, `reopen_case` refuses anything that
+is not `DONE`, `POST /api/events` is that refusal over HTTP, and a bare `run_case` executes
+`("dispatch",)` and commits nothing. A caregiver who went to the clinic, found the record wrong and
+corrected it had no supported way to say so. `request_recheck(store, case_id, requested_by=…)` —
+`careloop/graph/runner.py`, beside `open_case`, `reopen_case`, `approve` and `reject` — writes one
+`EXTERNAL_RECHECK_REQUESTED` entry and moves `AWAITING_HUMAN → VERIFYING`. The API then schedules an
+ordinary run, which executes **`("dispatch", "verify")`** and nothing else.
+
+**No graph edge was added and none may be.** `dispatch → verify` already routes a case persisted
+mid-verification, so re-entering verification is a thing the graph already did; `outgoing(verify)`
+is still empty, `("verify", "plan")` is still absent, and `VERIFYING → PLANNING` is still illegal.
+A `verify` self-edge would have been a second route into one node with its own conditions to get
+wrong.
+
+**Every entry into `VERIFYING` is still post-effect, with three sources rather than two.**
+`EXECUTING` and `WAITING_EXTERNAL` are `ExecuteNode` moving on after recording an action or
+suppressing a duplicate of one. The third is the guarded human re-check, and what keeps the claim
+true is not the table but `recheck_target`: it refuses unless the handoff names an `ActionRecord`
+the case really holds, so a case where nothing was carried out cannot take that edge. Do **not**
+weaken this to "`AWAITING_HUMAN` may always enter `VERIFYING`".
+
+**The target is resolved from durable server state, and the client cannot aim it.** The chain is
+`MANUAL_HANDOFF_REQUIRED.idempotency_key → case.action_for(key) → ActionRecord →
+rehydrate(action_type, result) → confirmation_id → the read-back`. `request_recheck` has **no
+parameter** for a tool, arguments, a digest, a confirmation id or an action index, and the route
+declares no body — the property is structural rather than validated, and it is asserted on the
+confirmation id actually fetched rather than on a status code. Never "the latest action", "the
+latest booking", `tool_name` alone or `args_digest` alone; this repository has closed three
+digest-only identity defects already.
+
+**`VerifyNode` is not handed a target, and that is the subtle half.** It resolves its own by
+re-deriving `idempotency_key(case_id, latest_proposal.tool_name, latest_proposal.args)`, exactly as
+on a first pass. So `recheck_target` **proves the two agree before scheduling** — if the handoff's
+key and the proposal-derived key differ, the disagreement is the finding and the request is refused,
+never silently resolved to one of them. Unreachable under the shipped flow, since a parked case
+never plans again; it is a fail-closed guard against a persisted or tampered case and against future
+drift, in the same register as session N's unreachable-but-closed finding.
+
+**One resolver, two readers.** `careloop.graph.context.recheck_target(case) -> RecheckTarget | None`
+is the single source of truth for static eligibility, and both `request_recheck` and
+`decision_view` read it. The button a caregiver is shown and the endpoint that validates their click
+therefore cannot disagree. It is durable-state-only by construction, which is why it deliberately
+answers neither "is a run in flight" (execution context, checked by the API) nor "will the next run
+have an observer" (a fact about a `RunContext`). `DecisionView.recheckable` claims exactly what the
+resolver knows and no more; the API doc-comment says so, and the endpoint re-validates everything.
+
+**A re-check that reads nothing certifies nothing, and this is the load-bearing guard.** Reproduced
+before the repair: force the transition, run with `clinic=None`, and the case reaches `DONE`
+reporting `read_back=false` and `observation=NOT_OBSERVED` while Demo World still holds
+`ATTACKER SUPPLIED REASON`. Nothing is broken in the closed-loop checks and that is the problem —
+the booking *response* was always correct and only the world diverged, so dropping the observer does
+not make verification fail, it makes it *stop looking*. The rule, which is a property rather than a
+special case: **a verification may not certify a case whose own trail already records that an
+independent read of this action was attempted and did not confirm it, unless an independent read is
+performed now.** Certifying without one is certifying by *removing* evidence.
+
+`VerifyNode._verify` returns `Verification(passed=False, externally_observed=False,
+outcome=NOT_OBSERVED)` in that case and transitions nothing — `run` stays the single lifecycle
+writer, so it parks through the same `VERIFICATION_FAILED` → `MANUAL_HANDOFF_REQUIRED` →
+`AWAITING_HUMAN` path as every other failure to certify. **No new state and no new `ReasonCode`**:
+what CareLoop knows is once again that it cannot confirm the result. Both reported fields are
+literally true — nothing was attempted, so `externally_observed` is `False`, and `NOT_OBSERVED` is a
+fact about CareLoop's wiring; `UNAVAILABLE` would claim an external system was consulted by a run
+that never touched one.
+
+**`NOT_OBSERVED` is emphatically not redefined as failure globally.** Three of the four effect tools
+have no external system, and a first-pass simulated run still verifies closed-loop and still reaches
+`DONE` saying plainly that it read nothing. The guard is scoped by
+`entered_verifying_from(case) is AWAITING_HUMAN` — read from the `STATE_TRANSITION` entry
+`transition()` wrote, so it is durable, survives a process boundary, describes *this* episode rather
+than "a re-check happened once", and is not a `RunContext` flag or a parse of any diagnostic.
+
+**Capability and availability are separate and both are needed.**
+`careloop.graph.verify.INDEPENDENTLY_OBSERVABLE` — `frozenset({"book_appointment"})`, beside
+`VERIFIERS` and `RESULT_TYPES` — says an action type *can* be observed by something other than
+CareLoop's own receipt; `RunContext.readbacks` says whether this run *has* that observer. A **subset**
+of `REGISTRY.external_effect_tools` on purpose, checked at import: three tools are simulated by
+design, so equality would force three fake observers into existence. A structural test pins
+`frozenset(clinic-bound RunContext.readbacks) == INDEPENDENTLY_OBSERVABLE`, so the declaration and
+the wiring cannot drift. The tool name lives there and **not** in `runner.py`, the state machine or a
+route.
+
+**Acceptance and outcome are different questions.** Wrong state, a pending approval, the other kind
+of handoff, a handoff with no recorded identity, a key naming no record, an identity mismatch, an
+unobservable action type, a run in flight and a case with no durable delivery are all refused before
+anything moves — `409`, one generic `CaseNotRecheckable` message, because a caller who can tell the
+preconditions apart by probing has been handed a map of them. A clinic that disagrees, holds nothing,
+cannot be reached, or a run with no observer bound are **not** request errors: the request was
+already accepted, and they become ordinary verification outcomes and a second handoff. Moving those
+into the handler would put a domain verdict in the routing layer.
+
+**The transition is legal and narrowly reachable.** Measured while planning: adding `VERIFYING` to
+`TRANSITIONS[AWAITING_HUMAN]` moved none of the suite's 2279 assertions, so the legality was
+entirely unpinned. `tests/test_recheck_writers.py` is the `reopen_case` arrangement applied again —
+no agent-facing module may name `request_recheck`, and `graph/runner.py` and `graph/nodes.py` are
+the only modules that write `transition(..., VERIFYING)` at all, so a node cannot route around the
+operation by writing the state itself.
+
+Three mutants, each red in its own place and green everywhere else. Resolving the target by
+`case.actions[-1]` with the consistency guard dropped turns **5** identity assertions red. Routing
+the request to `PLANNING` instead of `VERIFYING` turns **20** red across three files — and measured,
+it produced `("dispatch", "plan", "gate", "execute", "verify")`, a second `PLAN_PROPOSED`, a second
+`POLICY_ALLOW` and one `DUPLICATE_SUPPRESSED`, which is exactly why `DUPLICATE_SUPPRESSED == 0` is
+the sharp assertion rather than `ACTION_EXECUTED == 1`: both of the latter survived that mutant, and
+the effect path was re-entered and saved only by idempotency. Removing **only** the no-observer
+branch turns exactly **4** red — the no-observer tests — while every observed re-check, every
+simulated run and all four observation classifications stay green.
+
+**What this does not do.** It creates no `Proposal`, invokes no planner and no policy verdict,
+raises and consumes no `Approval`, never reaches `ExecuteNode`, records no `ActionRecord`, changes no
+argument and mints no new idempotency identity — measured as unchanged counts across every scenario.
+It performs exactly **one** observation episode: `ABSENT` and `UNAVAILABLE` each get one read and
+stop, with the observer's own attempt count asserted, so Patch 2B's automatic retry stays deferred
+rather than arriving by accident. A malformed 200 still raises out of the node and leaves the case
+`FAILED`; that is Patch 3 and it already fails closed. Pre-2A handoffs and `NO_SAFE_ACTION_AVAILABLE`
+handoffs are refused with no fallback, no migration and no guess — `Handoff.tool_name` and
+`Handoff.idempotency_key` are both `str | None` because a `NO_SAFE_ACTION_AVAILABLE` payload
+legitimately carries neither, and defaulting either would have a record assert an identity nobody
+observed.
 
 `EXTERNAL_STATE_NOT_CONFIRMED` is the eighth `ReasonCode` and the second that parks a *case* rather
 than refusing a call, so no rule carries it and the engine never emits it. It is named for what

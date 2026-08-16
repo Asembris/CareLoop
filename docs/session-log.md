@@ -5179,6 +5179,201 @@ from it.
 
 22, 25, 26, 28. **Unchanged.**
 
+## Session S — 2026-08-16
+
+### Position
+
+**The last P0 that was a code defect rather than submission admin: the public demo was one world.**
+Four fixed case ids, one SQLite case store, one Demo World clinic with one seeded slot set, and a
+global reset that `realApi.runScenario` fired unauthenticated before every scenario. Two judges
+opening the URL during a three-week judging window is ordinary, and every failure mode is silent:
+
+```
+B presses a scenario  → global reset → A's settled case is gone
+A's decision card     → Approve → 404, discarded, nothing on screen changes
+both press 01         → one seeded slot → the loser gets ClinicRefused and a FAILED case
+                        which reads exactly like the injection defence collapsing
+```
+
+Nobody reports any of that. It just makes the demo look broken to whoever lost the race.
+
+### The repair — a world per visitor, not a namespaced row
+
+A session resolves to its own `ApiDeps`: its own `CaseStore`, its own `RunRegistry`, its own
+`ClinicClient`. `POST /api/demo/reset` calls `clear()` on **that** store, so reaching another
+visitor's cases is not something a route declines to do — it is something it has no way to express.
+A shared store filtered by a prefix would put the property on every query remembering to filter, and
+one forgotten filter is a leak.
+
+`create_app` takes **exactly one** of `store=` or `sessions=`, enforced in `build_dependencies`, and
+an isolated app's `app.state.careloop` holds the registry itself. There is no app-scoped store
+beside the worlds, because a shared store that exists is one something can reach. Every per-world
+collaborator — `events`, `context_factory`, `graph_runner`, `clinic` — is refused alongside
+`sessions=` rather than silently bound to nothing.
+
+| | |
+|---|---|
+| transport | `X-CareLoop-Session`, minted by `POST /api/sessions` |
+| missing | **400** — the `X-Caregiver` reasoning, a required field is absent |
+| unknown or evicted | **410**, used nowhere else in this API |
+| at capacity | **503**, refusing to take a world off somebody mid-demo |
+| Demo World | `X-Demo-Session`, or `?session=` for a browser that cannot set headers |
+
+**A header rather than a cookie, decided by measurement.** Header forwarding through the deployed
+CloudFront distribution is *verified* — `POST …/approve` answers 404 with `X-Caregiver` and 400
+without it, and `?wait=abc` answers 422 against 404, so headers and query strings both reach the
+origin. Cookie forwarding is **not** verifiable from here: the distribution config is not in the
+repo and there is no AWS CLI on this machine. A cookie would have been an assumption that fails in
+production rather than in a test.
+
+**410 is its own status so the client can act on it without reading prose.** A 409 means a run is in
+flight; a 410 means the world is gone. `request()` re-mints and retries exactly once on 410, so a
+judge whose world was evicted or whose backend redeployed sees a fresh dashboard rather than an
+error.
+
+### Atomic create-and-start
+
+`POST /api/demo/scenarios/{key}` now resets the world and delivers, under that world's own
+`asyncio.Lock`. It was a client-side `resetDemo()` followed by the scenario — two requests with a
+window between them where the reset lands and the start is refused, leaving a wiped dashboard and
+nothing running. **No client can close that window from outside.** The retry budget did not go away;
+it moved onto the one call, where a 409 now means this visitor's own previous run.
+
+One code path, not a demo-only branch: the reset happens in both modes, and `test_api_demo.py`'s
+expectations were updated rather than a branch kept to preserve them.
+
+### Demo World
+
+**The booking lock.** `Clinic.book` is a check-then-write and FastAPI runs synchronous handlers in a
+worker pool, so two callers really do arrive on two threads. Every public method now holds an
+`RLock` — reads too, because `book` writes three dictionaries and a read between them sees a slot
+held by an appointment the clinic says it does not have. `slots` is the one exclusion and is a
+property over a tuple frozen at construction.
+
+**`Cache-Control: no-store`, and this is more load-bearing than it looks.** Session F recorded that
+`/clinic/*` set no cache headers and noted the hazard without closing it. Verification performs a
+*separate* `GET /clinic/appointments/{id}`; answered out of a CDN's memory, that read confirms
+CareLoop's own earlier request rather than the clinic's state, reports `read_back: true`, and passes
+while the clinic holds something else. **A cached read-back deletes the only thing the independent
+read buys and still shows green.** The origin now says so, so no cache policy in front of it gets a
+vote.
+
+### Numbers, measured rather than picked
+
+| | |
+|---|---|
+| per-world resident cost | **300 KB**, averaged over 32 worlds each driven through all four scenarios |
+| cap | **64 worlds ≈ 19 MB**, about 1% of what is free on a `t4g.small` |
+| idle TTL | 30 minutes, against a three-minute guided tour |
+| eviction | LRU, never a world with a run in flight; at capacity minting is refused |
+
+**CareLoop's cap may not exceed Demo World's**, and a test fails if it does. A session is one entry
+in each registry; if this side held more, a live visitor's *clinic* could be evicted and reseeded
+underneath them, and the read-back of an appointment that really was made would report `ABSENT` —
+CareLoop's strongest statement about a missing external record — for a reason with nothing to do
+with the outside world.
+
+Worlds are **dropped, not closed**, on eviction. Closing the store would be the tidier gesture and
+would turn a request that had already resolved its world into a 500 from inside SQLite, where a
+clean 410 was the honest answer.
+
+### Evidence
+
+`tests/test_session_isolation.py`, 32 assertions, driven through the real graph and — for the
+clinic half — against Demo World on a loopback socket.
+
+**`TestTheIsolationProof` is the vacuity proof.** One script, two apps: A parks for a decision, B
+presses a scenario, A tries to decide. Isolated → **202**. One world between them → **404**, with
+the store holding no `AWAITING_HUMAN` case at all. That is the deployed defect reproduced rather
+than described.
+
+**Mutant, namespacing removed** (`SessionWorlds.mint` hands every session the same world; the header,
+the 400/410, the eviction and the cap all still work): **8 red, all in that file**, the other 2443
+green. It kills both reset tests, both "neither sees the other" tests, the clinic test, the proof's
+positive half, and the two builder tests.
+
+**The demo world's lock has its own proof**, and it took two attempts to make it honest.
+`RacingClinic` swaps the lock for one that guards nothing and waits at a barrier *inside* the
+guarded region. The first version synced **before** the read and passed against the unlocked clinic
+— both threads were released together and the interpreter still ran one to completion first, so the
+race never happened. Moved **after** the read, the mutant books one slot twice, deterministically.
+**A concurrency mutant that passes may be measuring the scheduler rather than the guard.**
+
+### Verified by running it
+
+Two sessions, two real Bedrock runs pressed simultaneously against a loopback Demo World:
+
+```
+A referral 202 3.85s   DONE  1 action  read_back=true  MATCHED
+B referral 202 3.63s   DONE  1 action  read_back=true  MATCHED
+clinic free slots      A: 2   B: 2   default: 3
+A resets → cases_cleared 1, B's case still 200
+no header → 400        unknown world → 410
+```
+
+Both booked the same slot, in different clinics, and each verified against its own.
+
+### What this cost, stated where a judge will meet it
+
+A per-visitor world lives in memory and does not survive a restart of the API process; `CARELOOP_DB`
+is unused while `--isolate-sessions` is on. **So the deployed URL no longer demonstrates durable
+ownership of a case across processes.** That claim now belongs where it is actually proven —
+`scripts/resume_demo.py` and `tests/test_resume.py`, three real processes over a SQLite file — and
+`docs/judges.md`, `deploy/README.md` and the README's honest limits all say so. Fixing one honesty
+problem by creating another would have been a worse trade than the bug.
+
+The session id is shown at the bottom of the scenario page with a `/clinic/slots?session=…` link,
+because without it `docs/judges.md`'s "check the booking yourself" instruction silently starts
+showing an untouched clinic — the honest-looking failure, which is the worst kind.
+
+### Two corrections
+
+**The README was advertising a fixed bug.** *"Approving a 'nothing safe left to do' parking releases
+the case to execution"* was closed in session Q: the parking raises no `Approval` and `_decide`
+refuses one that is not `is_actionable`. Removed. The rest of the list was re-checked against the
+code — approval expiry is still unmodelled, `WAITING_EXTERNAL` still has no producer, the offline
+suite still only sees the mock, nothing stamps cost, the run registry is still in memory — and two
+were **added**: `book_appointment.reason` is planner-authored free text with no trust key and no
+review, and the deployed demo's ephemerality above.
+
+**The architecture diagram now exists in formats Devpost accepts.** `scripts/export_diagram.py`
+renders `docs/architecture.{png,pdf}` from the SVG through a headless Chromium — the engine the SVG
+was drawn against, so system font stacks and text anchoring land where they were placed. PNG at 3×
+is 3720 × 2850; the PDF is one vector page at 930 × 713 pt with selectable text. Both were opened
+and read rather than trusted: every zone label, node name and footnote is legible. The SVG stays the
+editable source and an export is never edited, exactly as with the fixture PDFs.
+
+### Results
+
+**2451 passed, 37 skipped** (2396 before). `ruff check` and `ruff format --check` clean. Frontend:
+**117 passed across 6 files**, typecheck and build clean. Replay **unchanged at 0 of 320 / 320 of
+320**, run before and after rather than asserted — nothing about isolation touches case identity, so
+idempotency keys and confirmation ids are byte-identical to before.
+
+Nothing was touched in the policy engine, the trust model, the state machine or `rules.yaml`.
+Namespacing stayed a storage and routing concern, which is what the brief said it had to be.
+
+### Still open, deliberately
+
+**The deployed verification did not happen this session.** `ssh` to the instance times out from this
+machine — port 22 is not open to this network's address — while CloudFront keeps serving, so the
+origin is healthy and only the deploy path is shut. Everything above is verified locally against
+real models and a real clinic; **"two judges through CloudFront at once" remains asserted rather than
+measured** until `deploy/push.sh` can run.
+
+**Sessions do not survive an API restart**, by construction. A redeploy hands every live visitor a
+410 and a fresh world. That is correct behaviour and it is also the thing to watch when redeploying
+mid-judging.
+
+### Open decisions
+
+31. **New.** Whether the isolated demo should persist worlds — a SQLite file per session, evicted
+    with the world — so a redeploy does not empty every visitor's dashboard. Deliberately not done:
+    it adds file lifecycle to a demo that is otherwise ephemeral by design, and the 410 path is
+    clean. Revisit only if judging produces a restart people notice.
+
+29, 30, 22, 25, 26, 28. **Unchanged.**
+
 ## Standing risks
 
 - **The resume is a `CaseStore` reconstruction across a process boundary, not a Strands session

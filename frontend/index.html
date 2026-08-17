@@ -55,6 +55,68 @@
     ></canvas>
 
     <div id="root"></div>
+
+    <!-- The boot choreography: an SVG loader that paints the orchestration story assembling
+         itself, then hands its central mark to the header's real one. See docs/BOOT.md.
+
+         A **classic** script, and parser-inserted rather than injected. Both halves matter. A
+         classic script runs synchronously at this point in the parse, so the loader exists before
+         the application module is evaluated and before any WebGL context is created — a script
+         appended from JS would be async, and an entrance that arrives whenever the network
+         finishes is not an entrance. And a classic `src` pointing at a `public/` file is left
+         alone by Vite: `buildHtmlPlugin` rewrites the path and stops there, bundling only
+         `type="module"` sources that are not public files. Verified against vite 5.4 rather than
+         assumed, because the failure would be silent.
+
+         The loader decides for itself whether to run — `?boot=off` sticky for the tab, once per
+         tab otherwise, `?boot=on` and `?boot=full` to replay. That policy lives with the loader
+         because it is the loader's, and because a kill switch split across two files is one
+         somebody eventually half-changes. -->
+    <script src="/careloop-boot.js"></script>
+
+    <!-- The reaper: the second, independent guarantee that the loader cannot trap CareLoop.
+         **It holds no reference to the loader** — not the controller, not the class, not a
+         callback. It reads the DOM the loader leaves behind and undoes exactly that, which is
+         what makes it a real second enforcement point rather than a second call into the same
+         code. It covers what the loader's own teardown structurally cannot: a build that throws
+         after the overlay is mounted, a `finalize()` a future edit breaks, an exit that never
+         reaches its own timer.
+
+         It arms only when the loader actually mounted, which it asks by looking for `data-booting`
+         — set synchronously by the script above, so this is already decided by the time this runs.
+         A loader that 404s, is blocked, or dies at parse leaves no attribute, no overlay and
+         nothing to reap.
+
+         Twelve seconds: the loader's own hard readiness timeout is nine, plus its exit. This is
+         the outer bound, not the working one. -->
+    <script>
+      (function () {
+        var html = document.documentElement;
+        if (!html.hasAttribute("data-booting")) return;
+
+        function reap() {
+          try {
+            var hidden = document.querySelectorAll("[data-boot-hidden]");
+            for (var i = 0; i < hidden.length; i++) {
+              hidden[i].style.opacity = "";
+              hidden[i].removeAttribute("data-boot-hidden");
+            }
+            var flier = document.querySelector("[data-boot-flier]");
+            if (flier) flier.remove();
+            var overlay = document.getElementById("careloop-boot");
+            if (overlay) overlay.remove();
+            html.removeAttribute("data-booting");
+          } catch (error) {
+            /* Nothing above can be retried usefully, and throwing here would be the cosmetic
+               layer taking the application down at the last possible moment. */
+          }
+        }
+
+        var timer = setTimeout(reap, 12000);
+        window.addEventListener("careloop:booted", function () { clearTimeout(timer); }, { once: true });
+      })();
+    </script>
+
     <script type="module" src="/src/main.tsx"></script>
 
     <!-- The field is an enhancement and is loaded as one: injected after the application's own

@@ -3,11 +3,20 @@ import type { ScenarioMeta } from "@/data/mock/scenarios";
 interface ScenarioCardProps {
   scenario: ScenarioMeta;
   onPick(): void;
+  /** The orchestration field sequence this card's own semantics match, when one does.
+   *
+   *  Optional, and absent is a real answer rather than a missing one: a card with no zone gets
+   *  the ambient field, which claims nothing. See `SCENE_ZONES` in `DemoPage` for why scenario
+   *  03 has none. The card's behaviour does not change either way — the field listens to the
+   *  same hover and click the button already had. */
+  sceneZone?: string;
 }
 
-export default function ScenarioCard({ scenario, onPick }: ScenarioCardProps) {
+export default function ScenarioCard({ scenario, onPick, sceneZone }: ScenarioCardProps) {
   return (
     <button
+      data-scene-zone={sceneZone}
+      data-scene-exclude
       // `cl-scenario` alone. It used to carry `cl-row` as well for the ground shift; both
       // classes define --edge at equal specificity, so which one won was decided by source
       // order in components.css — a card whose resting border depended on the order of an

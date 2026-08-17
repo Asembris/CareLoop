@@ -57,9 +57,14 @@ export default function AppHeader() {
         background: "var(--background)"
       }}
     >
+      {/* `data-scene-zone` is read by the orchestration field, which runs its own sequence for the
+          zone on hover and a stronger one on click. It listens on `window` and never takes the
+          event: these buttons keep the handlers, the labels and the focus behaviour they had, and
+          the field is unaware of what they do. */}
       <button
         onClick={() => navigate("/")}
         aria-label="CareLoop — home"
+        data-scene-zone="logo"
         style={{ display: "flex", alignItems: "center", background: "transparent", border: 0, padding: 0 }}
       >
         <CareLoopLogo />
@@ -70,6 +75,7 @@ export default function AppHeader() {
           className="cl-navlink"
           onClick={() => navigate("/")}
           aria-current={homeActive ? "page" : undefined}
+          data-scene-zone="home"
           style={NAV_BUTTON}
         >
           Home
@@ -80,6 +86,7 @@ export default function AppHeader() {
           className="cl-navlink"
           onClick={() => navigate("/trust")}
           aria-current={trustActive ? "page" : undefined}
+          data-scene-zone="trust"
           style={NAV_BUTTON}
         >
           Trust
@@ -90,6 +97,7 @@ export default function AppHeader() {
           className="cl-navlink"
           onClick={toggleHood}
           aria-expanded={hoodOpen}
+          data-scene-zone="hood"
           style={NAV_BUTTON}
         >
           Under the hood

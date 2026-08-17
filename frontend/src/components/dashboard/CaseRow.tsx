@@ -45,12 +45,16 @@ export default function CaseRow({ careCase }: { careCase: CareCase }) {
         </svg>
         <span style={{ fontSize: 16.5, fontWeight: 500, whiteSpace: "nowrap" }}>{careCase.title}</span>
         <span
+          // Keyed on its own text: a paced state advance remounts the span, so the new line
+          // fades in (220ms, opacity only) instead of snapping — the row visibly *ticks*.
+          key={careCase.statusText}
           style={{
             fontSize: 14.5,
             color: "var(--muted-foreground)",
             overflow: "hidden",
             textOverflow: "ellipsis",
-            whiteSpace: "nowrap"
+            whiteSpace: "nowrap",
+            animation: "clFade 220ms ease both"
           }}
         >
           {careCase.statusText}

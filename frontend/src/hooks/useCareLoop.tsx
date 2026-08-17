@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import type { CareCase, DashboardState, ScenarioId } from "@/types/domain";
+import type { ApprovalResult, CareCase, DashboardState, ScenarioId } from "@/types/domain";
 import { api, emptyDashboard } from "@/services/api";
 
 interface CareLoopContextValue extends DashboardState {
@@ -8,11 +8,13 @@ interface CareLoopContextValue extends DashboardState {
   working: CareCase[];
   done: CareCase[];
   caseById(id: string): CareCase | undefined;
-  approve(caseId: string, decisionId: string): void;
-  reject(caseId: string, decisionId: string): void;
+  /** The result comes back so a card can acknowledge honestly: `accepted` false means the
+   *  backend refused (409/404) and nothing was set in motion, so nothing may claim it was. */
+  approve(caseId: string, decisionId: string): Promise<ApprovalResult>;
+  reject(caseId: string, decisionId: string): Promise<ApprovalResult>;
   /** Ask CareLoop to look at the external record again. Takes no decision id: a re-check is not
    *  a decision, and there is nothing for one to name. */
-  recheck(caseId: string): void;
+  recheck(caseId: string): Promise<ApprovalResult>;
   runScenario(id: ScenarioId): void;
   resetDemo(): void;
 }
@@ -26,17 +28,17 @@ export function CareLoopProvider({ children }: { children: ReactNode }) {
   // moving. Every verb restarts it, which is why nothing here has to know when to look again.
   useEffect(() => api.subscribe(setState), []);
 
-  const approve = useCallback((caseId: string, decisionId: string) => {
-    void api.approveAction({ caseId, decisionId, approved: true });
-  }, []);
+  const approve = useCallback(
+    (caseId: string, decisionId: string) => api.approveAction({ caseId, decisionId, approved: true }),
+    []
+  );
 
-  const reject = useCallback((caseId: string, decisionId: string) => {
-    void api.approveAction({ caseId, decisionId, approved: false });
-  }, []);
+  const reject = useCallback(
+    (caseId: string, decisionId: string) => api.approveAction({ caseId, decisionId, approved: false }),
+    []
+  );
 
-  const recheck = useCallback((caseId: string) => {
-    void api.recheckCase(caseId);
-  }, []);
+  const recheck = useCallback((caseId: string) => api.recheckCase(caseId), []);
 
   const runScenario = useCallback((id: ScenarioId) => {
     void api.runScenario(id);

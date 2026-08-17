@@ -322,6 +322,31 @@ describe("the drawers are dialogs, not floating panels", () => {
   });
 });
 
+describe("a decided card acknowledges the press", () => {
+  it("replaces the buttons with an honest acknowledgment once the backend accepts", async () => {
+    serve([
+      card({
+        case_id: "demo-resume",
+        state: "AWAITING_HUMAN",
+        section: "needs_you",
+        decision: approval({ tool_name: "send_email", args: { to: "rosa@carer.example" } })
+      })
+    ]);
+    const user = userEvent.setup();
+    show();
+
+    const approveButton = await screen.findByRole("button", { name: "Approve" });
+    await user.click(approveButton);
+
+    await screen.findByText("Approved");
+    expect(screen.getByText(/On it\. CareLoop is acting/)).toBeInTheDocument();
+    // The authority affordances are gone; the way into the case is not.
+    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Not now" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open case" })).toBeInTheDocument();
+  });
+});
+
 describe("the trust page tells the truth it can prove", () => {
   it("shows the measured pair, the recovery loop, and the observation vocabulary", async () => {
     serve([]);

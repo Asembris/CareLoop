@@ -42,8 +42,22 @@
   /* Layout */
   --page-max: 820px;
   --page-gutter: 40px;
+  --nav-gap: 26px;
+  --drawer-max: 94vw;
   --radius-card: 5px;
   --radius-control: 3px;
+}
+
+/* The one breakpoint. Everything phone-sized flows from these three tokens rather than from
+   per-component media queries — the app styles inline, so the cascade's only job here is to
+   retune the values those styles already read. 700px, not 768px: the nav fits on one line again
+   just above 700, and the drawers only need the full screen once a laptop stops being likely. */
+@media (max-width: 700px) {
+  :root {
+    --page-gutter: 24px;
+    --nav-gap: 13px;
+    --drawer-max: 100vw;
+  }
 }
 
 .dark {

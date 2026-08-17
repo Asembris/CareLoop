@@ -74,7 +74,7 @@ function HoodPanel({ onClose }: { onClose: () => void }) {
         right: 0,
         bottom: 0,
         width: 430,
-        maxWidth: "92vw",
+        maxWidth: "var(--drawer-max)",
         zIndex: 60,
         background: "var(--background)",
         borderLeft: "1px solid color-mix(in oklab, currentColor 16%, transparent)",

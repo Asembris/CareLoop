@@ -34,7 +34,7 @@ function LensPanel({ lens, onClose }: { lens: EvidenceExcerpt; onClose: () => vo
         right: 0,
         bottom: 0,
         width: 460,
-        maxWidth: "94vw",
+        maxWidth: "var(--drawer-max)",
         zIndex: 70,
         background: "var(--background)",
         borderLeft: "1px solid color-mix(in oklab, currentColor 16%, transparent)",

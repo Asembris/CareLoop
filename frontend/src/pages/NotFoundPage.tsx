@@ -18,7 +18,7 @@ export default function NotFoundPage() {
   const navigate = useNavigate();
 
   return (
-    <main style={{ display: "flex", justifyContent: "center", padding: "68px 40px 130px" }}>
+    <main style={{ display: "flex", justifyContent: "center", padding: "68px var(--page-gutter) 130px" }}>
       <div
         style={{
           width: "100%",

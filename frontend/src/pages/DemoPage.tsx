@@ -35,7 +35,7 @@ export default function DemoPage() {
   };
 
   return (
-    <main style={{ display: "flex", justifyContent: "center", padding: "96px 40px 120px" }}>
+    <main style={{ display: "flex", justifyContent: "center", padding: "96px var(--page-gutter) 120px" }}>
       <div
         style={{
           width: "100%",

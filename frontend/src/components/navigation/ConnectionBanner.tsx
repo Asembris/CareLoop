@@ -51,7 +51,7 @@ export default function ConnectionBanner() {
             justifyContent: "center",
             alignItems: "center",
             gap: 8,
-            padding: "9px 40px",
+            padding: "9px var(--page-gutter)",
             borderBottom: "1px solid color-mix(in oklab, currentColor 12%, transparent)",
             background: "color-mix(in oklab, var(--state-decision) 6%, var(--background))"
           }}

@@ -34,7 +34,7 @@ export default function HomePage() {
           };
 
   return (
-    <main style={{ display: "flex", justifyContent: "center", padding: "68px 40px 130px" }}>
+    <main style={{ display: "flex", justifyContent: "center", padding: "68px var(--page-gutter) 130px" }}>
       <div style={{ width: "100%", maxWidth: "var(--page-max)", display: "flex", flexDirection: "column", gap: 52 }}>
         <DashboardHero greeting={greeting()} line={hero.line} sub={hero.sub} />
 

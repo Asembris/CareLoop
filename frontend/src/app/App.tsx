@@ -20,6 +20,12 @@ export default function App() {
           <div
             style={{
               minHeight: "100vh",
+              // A flex column so a page that wants the whole first screen can ask for it with
+              // `flex: 1` instead of subtracting a header height it would have to keep in sync.
+              // The header wraps to a second row on narrow viewports, so any hard-coded offset
+              // is wrong exactly where it is hardest to notice.
+              display: "flex",
+              flexDirection: "column",
               fontFamily: "var(--font-sans)",
               fontSize: 16,
               lineHeight: 1.5,

@@ -467,6 +467,47 @@ describe("building a run", () => {
   });
 });
 
+describe("citations on the spine", () => {
+  it("attaches the fact's citation to the entry that recorded it, with the page text behind it", () => {
+    const facts = [
+      fact(), // slot_start, referral.pdf p.2
+      fact({
+        key: "excerpt:doc-ref:p2",
+        value: "The next available slot is 2026-09-03T09:30:00 at Northgate.",
+        page: 2
+      })
+    ];
+    const timeline = [
+      entry("EVIDENCE_RECORDED", { key: "slot_start", source_doc: "referral.pdf", page: "2" }),
+      entry("FACT_PROMOTED", { key: "slot_start" })
+    ];
+
+    const events = timelineFor(timeline, facts);
+    expect(events).toHaveLength(2);
+    // Both the recording and the validation carry the chip a reader can open.
+    for (const event of events) {
+      expect(event.source).toBeDefined();
+      expect(event.source!.source).toBe("referral.pdf p.2");
+    }
+    // The lens body comes from the page fact, located around the extracted value.
+    expect(events[0].source!.highlight).toBe("2026-09-03T09:30:00");
+    expect(events[0].source!.before).toContain("next available slot");
+  });
+
+  it("gives no chip to triage's classification, an unknown key, or a sourceless fact", () => {
+    const facts = [fact({ key: "caregiver_email", value: "a@b.example", source_doc: "", page: null, citation: "" })];
+    const timeline = [
+      entry("EVIDENCE_RECORDED", { category: "APPOINTMENT", urgency: "SOON" }),
+      entry("EVIDENCE_RECORDED", { key: "not_on_the_case" }),
+      entry("EVIDENCE_RECORDED", { key: "caregiver_email" })
+    ];
+
+    for (const event of timelineFor(timeline, facts)) {
+      expect(event.source).toBeUndefined();
+    }
+  });
+});
+
 describe("documentsFor", () => {
   it("reassembles a document from its page facts, sorted, with the extracted values attached", () => {
     const facts = [

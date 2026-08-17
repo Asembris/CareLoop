@@ -528,6 +528,20 @@ export function timelineText(event: TimelineEventView): string {
   }
 }
 
+/** The citation chip for a spine entry that recorded or validated a fact.
+ *
+ *  The payload names the fact by `key`; the fact itself carries the citation and the page text
+ *  reaches the lens through `excerptFor`. Nothing without provenance gets a chip — triage's
+ *  classification writes this kind with no key, and a config fact has no source document. */
+function spineSource(entry: TimelineEventView, facts: readonly FactView[]): EvidenceExcerpt | undefined {
+  if (entry.kind !== "EVIDENCE_RECORDED" && entry.kind !== "FACT_PROMOTED") return undefined;
+  const key = payloadString(entry, "key");
+  if (!key || isExcerptFact(key)) return undefined;
+  const fact = facts.find((one) => one.key === key);
+  if (!fact || !fact.source_doc) return undefined;
+  return excerptFor(fact, facts);
+}
+
 /** The spine.
  *
  *  Two shapes are imposed here rather than by the backend. `STATE_TRANSITION` entries are dropped
@@ -535,7 +549,10 @@ export function timelineText(event: TimelineEventView): string {
  *  entries are **folded** into the event they interrupted, because the backend records them as
  *  separate top-level entries and the UI hangs them as a dashed branch off the proposal they
  *  refused. A denial with nothing before it is emitted standalone rather than lost. */
-export function timelineFor(timeline: readonly TimelineEventView[]): TimelineEvent[] {
+export function timelineFor(
+  timeline: readonly TimelineEventView[],
+  facts: readonly FactView[] = []
+): TimelineEvent[] {
   const events: TimelineEvent[] = [];
   // A whole run finishes inside one minute, so every entry carries the same HH:MM and the rail
   // becomes a column of one repeated number that reads as a rendering fault. The time is printed
@@ -571,7 +588,8 @@ export function timelineFor(timeline: readonly TimelineEventView[]): TimelineEve
       id: String(entry.seq),
       time: time === printed ? "" : time,
       text: timelineText(entry),
-      tone: toneFor(entry.kind)
+      tone: toneFor(entry.kind),
+      source: spineSource(entry, facts)
     });
     printed = time;
   }
@@ -686,7 +704,7 @@ export function buildCase(
     outcome,
     readback: readbackFor(proposal, verification),
     decision: decisionFor(decision),
-    events: timelineFor(timeline),
+    events: timelineFor(timeline, detail?.facts ?? []),
     evidence: evidenceFor(detail?.facts ?? []),
     documents: documentsFor(detail?.facts ?? []),
     refusals: refusalsFor(timeline)

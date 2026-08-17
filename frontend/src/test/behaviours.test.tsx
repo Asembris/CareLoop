@@ -198,6 +198,33 @@ describe("dashboard categorisation", () => {
   });
 });
 
+describe("the drawers are dialogs, not floating panels", () => {
+  it("traps focus in Under the hood, closes on Escape, and returns focus to the opener", async () => {
+    serve([]);
+    const user = userEvent.setup();
+    show();
+
+    const opener = await screen.findByRole("button", { name: "Under the hood" });
+    await user.click(opener);
+
+    const dialog = await screen.findByRole("dialog", { name: "Under the hood" });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    // Initial focus lands on the panel itself, so its label is announced before any control.
+    expect(dialog).toHaveFocus();
+
+    // The trap: tabbing from the last focusable wraps rather than escaping into the page.
+    await user.tab();
+    const close = screen.getByRole("button", { name: "Close" });
+    expect(close).toHaveFocus();
+    await user.tab();
+    expect(dialog.contains(document.activeElement)).toBe(true);
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Under the hood" })).not.toBeInTheDocument();
+    expect(opener).toHaveFocus();
+  });
+});
+
 describe("connection truth on screen", () => {
   it("never claims nothing needs you against a backend it could not read", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => {

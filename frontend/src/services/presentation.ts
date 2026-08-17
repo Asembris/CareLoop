@@ -25,9 +25,10 @@ import type {
   DecisionFact,
   DecisionKind,
   EventTone,
+  ProvenanceStep,
   RunStage
 } from "@/types/domain";
-import type { CaseState, RunState } from "./backend";
+import type { CaseState, FactView, RunState } from "./backend";
 
 /* ------------------------------------------------------------------ *
  * Sections
@@ -242,6 +243,42 @@ const TRUST_WORDS: Record<string, string> = {
  *  provenance term, and what a caregiver needs to know is that the value was checked. */
 export function trustWord(level: string): string {
   return TRUST_WORDS[level] ?? "Unchecked";
+}
+
+/** The fact's actual provenance journey, for the lens.
+ *
+ *  This replaced a static three-line legend that was identical for every fact — and therefore
+ *  wrong for most of them: a trusted-config fact captioned "Document content — untrusted" is the
+ *  one surface that exists to explain provenance explaining it incorrectly. Each step states what
+ *  is true of *this* fact; the closing line is the same for every fact because it is the one
+ *  statement that is: nothing a fact says is ever a source of authority. */
+export function provenanceJourney(
+  fact: Pick<FactView, "trust_level" | "citation" | "source_doc" | "validated_by">
+): ProvenanceStep[] {
+  const steps: ProvenanceStep[] = [];
+
+  if (!fact.source_doc) {
+    steps.push(
+      fact.trust_level === "TRUSTED"
+        ? { tone: "trusted", text: "Configured by you — trusted" }
+        : { tone: "controlled", text: `Recorded by CareLoop — ${trustWord(fact.trust_level).toLowerCase()}` }
+    );
+  } else {
+    steps.push({ tone: "untrusted", text: `Found in ${fact.citation} — document content, untrusted` });
+    if (fact.trust_level === "CONTROLLED") {
+      steps.push({
+        tone: "controlled",
+        text: fact.validated_by
+          ? `Validated (${fact.validated_by}) — usable as fact`
+          : "Validated — usable as fact"
+      });
+    } else {
+      steps.push({ tone: "muted", text: "Not validated — read as context, never used in an action" });
+    }
+  }
+
+  steps.push({ tone: "muted", text: "Never a source of authority" });
+  return steps;
 }
 
 /* ------------------------------------------------------------------ *

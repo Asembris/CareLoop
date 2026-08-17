@@ -69,6 +69,7 @@ import {
   observationCopy,
   observedLabel,
   outcomeCopy,
+  provenanceJourney,
   pacedState,
   policyDetailFor,
   readbackResult,
@@ -377,7 +378,8 @@ export function excerptFor(fact: FactView, facts: readonly FactView[]): Evidence
     before: "",
     highlight: fact.value,
     after: "",
-    digest: ""
+    digest: "",
+    journey: provenanceJourney(fact)
   };
 
   const page = facts.find(

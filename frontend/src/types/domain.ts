@@ -123,6 +123,11 @@ export interface Readback {
   observed: string;
   result: string;
   state: VerificationState;
+  /** A member of the backend's closed observation vocabulary — MATCHED / DIVERGED / ABSENT /
+   *  UNAVAILABLE / NOT_OBSERVED — or absent on a case recorded before it existed. */
+  observation?: string;
+  /** The one-sentence reading of `observation`, from `presentation.OBSERVATION_COPY`. */
+  observationText?: string;
 }
 
 export interface CareCase {

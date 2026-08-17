@@ -273,6 +273,28 @@ describe("the flagship beat: the poisoned document is readable, beside the polic
   });
 });
 
+describe("the observation is first-class on the outcome panel", () => {
+  it("shows the word, its sentence, and why the observed values are withheld", async () => {
+    serve(
+      [card({ case_id: "demo-referral", state: "DONE", section: "completed" })],
+      {
+        "demo-referral": [
+          entry("PLAN_PROPOSED", { tool_name: "book_appointment", args: BOOKING }),
+          entry("ACTION_EXECUTED", { tool_name: "book_appointment" }),
+          entry("VERIFICATION_PASSED", { read_back: "true", observation: "MATCHED" })
+        ]
+      }
+    );
+    show("/case/demo-referral");
+
+    await screen.findByText("OBSERVATION");
+    expect(screen.getByText("MATCHED")).toBeInTheDocument();
+    expect(screen.getByText(/agrees with every value CareLoop executed/)).toBeInTheDocument();
+    // The withholding is stated, not silent — the trust model applying to this screen too.
+    expect(screen.getByText(/never shown, deliberately/)).toBeInTheDocument();
+  });
+});
+
 describe("the drawers are dialogs, not floating panels", () => {
   it("traps focus in Under the hood, closes on Escape, and returns focus to the opener", async () => {
     serve([]);

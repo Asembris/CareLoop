@@ -602,7 +602,21 @@ export function authorizedSummary(toolName: string, args: Record<string, string>
  *  of anything a prompt or a page could render. What reaches the API is `read_back: true|false` —
  *  enough to say *whether* the world was read, never *what it said*. This column says exactly
  *  that much. */
-export function observedLabel(readBack: boolean): string {
+export function observedLabel(readBack: boolean, observation = ""): string {
+  switch (observation) {
+    case "MATCHED":
+      return "Confirmed by an independent read";
+    case "DIVERGED":
+      return "The clinic's record disagrees";
+    case "ABSENT":
+      return "The clinic holds no such record";
+    case "UNAVAILABLE":
+      return "The clinic could not be read";
+    case "NOT_OBSERVED":
+      return "Not read back";
+  }
+  // A case recorded before the vocabulary existed carries no `observation`; the two-way label
+  // is still true and is all that can honestly be said about it.
   return readBack ? "Confirmed by an independent read" : "Not read back";
 }
 
@@ -611,6 +625,35 @@ export function readbackResult(passed: boolean | null): string {
   if (passed === null) return "Pending";
   return passed ? "Match — loop closed" : "No match";
 }
+
+/** One honest sentence per member of `careloop.graph.verify.ObservationOutcome`.
+ *
+ *  The five words are CareLoop's own closed vocabulary — chosen names, never values an external
+ *  system supplied, which is why the payload key is allowlisted where the diagnostic beside it is
+ *  withheld. The distinctions matter enough to spell out: `ABSENT` is the clinic *contradicting*
+ *  the receipt CareLoop holds, where `UNAVAILABLE` established nothing; `NOT_OBSERVED` is a fact
+ *  about CareLoop's wiring, not a claim about the world, and a simulated run reports it plainly
+ *  rather than pretending a read happened. */
+export const OBSERVATION_COPY: Record<string, string> = {
+  MATCHED: "An independent read of the clinic's own record agrees with every value CareLoop executed.",
+  DIVERGED: "An independent read succeeded — and the clinic's record disagrees with what was executed.",
+  ABSENT: "The clinic answered that it holds no record of this action.",
+  UNAVAILABLE: "The clinic was asked and could not be read. Nothing was established either way.",
+  NOT_OBSERVED: "No independent observer took part — CareLoop checked its own recorded effect, and says so."
+};
+
+export function observationCopy(observation: string): string {
+  return OBSERVATION_COPY[observation] ?? "";
+}
+
+/** Why the observed *values* never render, stated where a reader will wonder.
+ *
+ *  The backend withholds read-back text wholesale
+ *  (`tests/test_verify_readback.py::TestTheReadBackIsNotAnInjectionChannel`), and the reason
+ *  belongs on screen: the withholding is the trust model applying to CareLoop's own UI. */
+export const OBSERVED_VALUES_WITHHELD =
+  "What the clinic actually said is never shown, deliberately: text from an external system is " +
+  "untrusted everywhere in CareLoop, and this screen is not an exception.";
 
 /* ------------------------------------------------------------------ *
  * The run record, as the Under the Hood drawer reads it

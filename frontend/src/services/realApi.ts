@@ -546,7 +546,9 @@ function spineSource(entry: TimelineEventView, facts: readonly FactView[]): Evid
   const key = payloadString(entry, "key");
   if (!key || isExcerptFact(key)) return undefined;
   const fact = facts.find((one) => one.key === key);
-  if (!fact || !fact.source_doc) return undefined;
+  // `page === null` means not from a document — config facts carry a sentinel in `source_doc`
+  // ("trusted-config"), so a non-empty doc name is not evidence of a document.
+  if (!fact || fact.page === null) return undefined;
   return excerptFor(fact, facts);
 }
 

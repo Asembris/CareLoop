@@ -253,11 +253,16 @@ export function trustWord(level: string): string {
  *  is true of *this* fact; the closing line is the same for every fact because it is the one
  *  statement that is: nothing a fact says is ever a source of authority. */
 export function provenanceJourney(
-  fact: Pick<FactView, "trust_level" | "citation" | "source_doc" | "validated_by">
+  fact: Pick<FactView, "trust_level" | "citation" | "page" | "validated_by">
 ): ProvenanceStep[] {
   const steps: ProvenanceStep[] = [];
 
-  if (!fact.source_doc) {
+  // `page === null` is what says "not from a document". Not an empty `source_doc`: configured
+  // facts carry the sentinel `"trusted-config"` there — measured against the live API, where
+  // keying on the doc name mislabelled every config fact as document content, which is precisely
+  // the defect this function exists to remove. Extraction is per-page, so a document fact always
+  // has one.
+  if (fact.page === null) {
     steps.push(
       fact.trust_level === "TRUSTED"
         ? { tone: "trusted", text: "Configured by you — trusted" }

@@ -133,6 +133,44 @@
   --edge: color-mix(in oklab, currentColor 38%, transparent);
 }
 
+/* --- scroll reveal --------------------------------------------------------------------- */
+
+/* Set by `useScrollReveal`, never by markup, and only on sections that start below the fold.
+   There is deliberately no rule that hides anything by default: if the hook does not run, no
+   element carries the attribute and the page is simply visible. See the hook for the four
+   properties that keep it that way.
+
+   380ms matches `clRise`, so a section that arrives by scrolling and a row that arrives by
+   appearing move at the same speed. Transform and opacity only.
+
+   **The transition is on `shown`, never on `[data-reveal]`.** Declaring it on both states makes
+   entering the hidden state animate too, so a section below the fold spends 380ms *fading out*
+   on load instead of simply starting hidden — invisible to a reader who never scrolls there,
+   and a section visibly erasing itself to anyone who scrolls during it. Caught by the reveal
+   spec, which read opacity 1 on an element that was already marked pending. */
+[data-reveal="pending"] {
+  opacity: 0;
+  transform: translateY(8px);
+}
+[data-reveal="shown"] {
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity 380ms ease,
+    transform 380ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+/* Belt and braces. The hook never sets the attribute under reduced motion, so this should be
+   unreachable — it is here so that a future caller who sets it some other way still cannot hide
+   content from someone who asked for no movement. */
+@media (prefers-reduced-motion: reduce) {
+  [data-reveal] {
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
+  }
+}
+
 /* --- citations ------------------------------------------------------------------------- */
 
 /* Solid-vs-dotted, not opacity. The prototype dimmed to 0.7 on hover, which took the citation

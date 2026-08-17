@@ -1,3 +1,4 @@
+import { useScrollReveal } from "@/hooks/useScrollReveal";
 import { useNavigate, useParams } from "react-router-dom";
 import { useCareLoop } from "@/hooks/useCareLoop";
 import { caseTone } from "@/lib/tone";
@@ -12,6 +13,10 @@ export default function CasePage() {
   const navigate = useNavigate();
   const { caseById } = useCareLoop();
   const careCase = caseId ? caseById(caseId) : undefined;
+  // Above the early return, because hooks may not be called conditionally — and keyed on the case,
+  // because this page renders its recovery state until the poller answers. An unkeyed effect would
+  // run once against a column that does not exist yet and mark nothing, ever.
+  const reveal = useScrollReveal<HTMLDivElement>(careCase?.id);
 
   if (!careCase) {
     return (
@@ -37,6 +42,7 @@ export default function CasePage() {
   return (
     <main style={{ display: "flex", justifyContent: "center", padding: "52px var(--page-gutter) 130px" }}>
       <div
+        ref={reveal}
         style={{
           width: "100%",
           maxWidth: "var(--page-max)",

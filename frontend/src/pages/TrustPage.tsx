@@ -1,12 +1,16 @@
+import { useScrollReveal } from "@/hooks/useScrollReveal";
 import AuthorityGrid from "@/components/trust/AuthorityGrid";
 import GuaranteeList from "@/components/trust/GuaranteeList";
 import RecoveryLoop from "@/components/trust/RecoveryLoop";
 import SecurityEvidencePanel from "@/components/trust/SecurityEvidencePanel";
 
 export default function TrustPage() {
+  const reveal = useScrollReveal<HTMLDivElement>();
+
   return (
     <main style={{ display: "flex", justifyContent: "center", padding: "68px var(--page-gutter) 130px" }}>
       <div
+        ref={reveal}
         style={{
           width: "100%",
           maxWidth: "var(--page-max)",

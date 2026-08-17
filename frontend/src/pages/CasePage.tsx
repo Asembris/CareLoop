@@ -4,6 +4,7 @@ import { caseTone } from "@/lib/tone";
 import OutcomePanel from "@/components/cases/OutcomePanel";
 import CaseTimeline from "@/components/cases/CaseTimeline";
 import EvidenceGrid from "@/components/cases/EvidenceGrid";
+import DocumentStrip from "@/components/cases/DocumentStrip";
 
 /** Outcome first, then the spine, then the evidence it rests on. */
 export default function CasePage() {
@@ -83,6 +84,7 @@ export default function CasePage() {
         <OutcomePanel careCase={careCase} />
         <CaseTimeline careCase={careCase} />
         <EvidenceGrid evidence={careCase.evidence} />
+        <DocumentStrip documents={careCase.documents ?? []} refusals={careCase.refusals ?? []} />
       </div>
     </main>
   );

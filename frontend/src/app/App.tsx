@@ -3,6 +3,7 @@ import { ThemeProvider } from "@/hooks/useTheme";
 import { CareLoopProvider } from "@/hooks/useCareLoop";
 import { UiProvider } from "@/hooks/useUi";
 import AppHeader from "@/components/navigation/AppHeader";
+import ConnectionBanner from "@/components/navigation/ConnectionBanner";
 import UnderTheHoodDrawer from "@/components/under-the-hood/UnderTheHoodDrawer";
 import EvidenceLens from "@/components/cases/EvidenceLens";
 import HomePage from "@/pages/HomePage";
@@ -28,6 +29,7 @@ export default function App() {
             }}
           >
             <AppHeader />
+            <ConnectionBanner />
             <Routes>
               <Route path="/" element={<HomePage />} />
               <Route path="/demo" element={<DemoPage />} />

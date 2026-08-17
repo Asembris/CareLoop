@@ -96,6 +96,8 @@ interface World {
   sections: CaseSections;
   details: Record<string, CaseDetail>;
   posts: { url: string; headers: Record<string, string> }[];
+  /** When true, every request throws the way a dead host does. */
+  down: boolean;
 }
 
 function serve(cards: CaseCard[], timelines: Record<string, TimelineEventView[]> = {}): World {
@@ -106,12 +108,14 @@ function serve(cards: CaseCard[], timelines: Record<string, TimelineEventView[]>
       completed: cards.filter((c) => c.section === "completed")
     },
     details: Object.fromEntries(cards.map((c) => [c.case_id, detailOf(c, timelines[c.case_id] ?? [])])),
-    posts: []
+    posts: [],
+    down: false
   };
 
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
+      if (world.down) throw new TypeError("Failed to fetch");
       // A backend serving one world to everybody, which is what these screens are about. The
       // adapter takes the 404 as "carry no session" — and the mint is not one of the verbs a
       // button issues, so it is answered before `posts` is written to rather than filtered out of
@@ -191,6 +195,33 @@ describe("dashboard categorisation", () => {
     // Locked copy, verbatim.
     await screen.findByText("Nothing needs you right now.");
     expect(screen.queryByText("NEEDS YOU")).not.toBeInTheDocument();
+  });
+});
+
+describe("connection truth on screen", () => {
+  it("never claims nothing needs you against a backend it could not read", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    }));
+    show();
+
+    await screen.findByText("CareLoop can't be reached.");
+    // The success line is a claim about the world, and no read of the world succeeded.
+    expect(screen.queryByText("Nothing needs you right now.")).not.toBeInTheDocument();
+  });
+
+  it("labels a mid-session outage and keeps the last known cases on screen", async () => {
+    const world = serve([card({ case_id: "demo-referral", state: "EXECUTING", section: "working" })]);
+    show();
+    await screen.findByText("Cardiology referral");
+
+    world.down = true;
+    await screen.findByText("CareLoop can't be reached — retrying automatically.", undefined, {
+      timeout: 4000
+    });
+    // Stale truth, labelled — not a blank page and not a calm empty one.
+    expect(screen.getByText("Cardiology referral")).toBeInTheDocument();
+    expect(screen.queryByText("Nothing needs you right now.")).not.toBeInTheDocument();
   });
 });
 

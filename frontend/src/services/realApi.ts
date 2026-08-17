@@ -31,6 +31,7 @@ import type {
   ApprovalResult,
   CareCase,
   CareLoopApi,
+  ConnectionState,
   DashboardState,
   DecisionView as UiDecisionView,
   EvidenceExcerpt,
@@ -743,6 +744,14 @@ export const POLL_INTERVAL_MS = 1000;
  *  world is at rest and stop one tick before the run it just started became visible. */
 export const SETTLE_GRACE_MS = 4000;
 
+/** How often to re-try the dashboard read while the backend is unreachable.
+ *
+ *  Slower than `POLL_INTERVAL_MS` because nothing on screen is moving — the only thing a probe can
+ *  discover is that the backend came back — and a page left open against a dead host should not
+ *  hammer it once a second forever. It never stops while a listener exists: recovery is the one
+ *  transition an unreachable page cannot be told about any other way. */
+export const OFFLINE_RETRY_MS = 3000;
+
 /** Gap between attempts when a scenario or a reset is refused because a run is in flight. */
 export const RESET_RETRY_MS = 400;
 
@@ -791,6 +800,13 @@ export class RealCareLoopApi implements CareLoopApi {
   protected run: AgentRun = emptyRun();
   protected scenario: ScenarioId | null = null;
 
+  /** What the last read established about the backend. `connecting` only before the first answer. */
+  private connection: ConnectionState = "connecting";
+
+  /** The last dashboard that was actually read, kept so an outage shows stale truth labelled as
+   *  such rather than a blank page — or worse, a calm empty one. */
+  private lastCases: CareCase[] = [];
+
   /** The last `RunView` seen, kept so the drawer survives the registry losing the run. */
   private lastRunView: RunView | null = null;
 
@@ -811,7 +827,8 @@ export class RealCareLoopApi implements CareLoopApi {
    *  section each case came in under. `completed` is the backend's `AT_REST_STATES`, so a FAILED
    *  case arrives there with the DONE ones and is told apart by `state` — never by the column. */
   async getDashboard(): Promise<DashboardState> {
-    return { cases: await this.readCases(), run: this.run };
+    const cases = this.absorb(await this.readCases());
+    return { cases, run: this.run, connection: this.connection };
   }
 
   async getCase(caseId: string): Promise<CareCase | undefined> {
@@ -970,9 +987,11 @@ export class RealCareLoopApi implements CareLoopApi {
 
   /* -------------------- internals -------------------- */
 
-  private async readCases(): Promise<CareCase[]> {
+  /** `null` means the dashboard could not be read at all — a failed read and an empty dashboard
+   *  are different facts, and folding them together is how an outage renders as "nothing to do". */
+  private async readCases(): Promise<CareCase[] | null> {
     const sections = await request<CaseSections>("/api/cases");
-    if (!sections.data) return [];
+    if (!sections.data) return null;
 
     const cards = [...sections.data.needs_you, ...sections.data.working, ...sections.data.completed];
     const now = new Date();
@@ -1025,18 +1044,43 @@ export class RealCareLoopApi implements CareLoopApi {
     for (const listener of this.listeners) listener(state);
   }
 
+  /** Fold one read's answer into what the adapter knows, and return what the screen should show. */
+  private absorb(read: CareCase[] | null): CareCase[] {
+    if (read === null) {
+      this.connection = "unreachable";
+      return this.lastCases;
+    }
+    this.connection = "live";
+    this.lastCases = read;
+    return read;
+  }
+
   /** One read, then decide whether there is any reason to do another. */
   private async tick(generation: number): Promise<void> {
-    const cases = await this.readCases();
+    const read = await this.readCases();
     await this.refreshRun();
     if (generation !== this.generation) return;
-    this.emit({ cases, run: this.run });
+    const cases = this.absorb(read);
+    this.emit({ cases, run: this.run, connection: this.connection });
+
+    if (this.listeners.size === 0) {
+      this.polling = false;
+      this.timer = null;
+      return;
+    }
+
+    // Unreachable never stops the poller: the page cannot learn the backend came back any other
+    // way. It slows to OFFLINE_RETRY_MS instead, because nothing on a dead connection is "moving".
+    if (read === null) {
+      this.timer = setTimeout(() => void this.tick(generation), OFFLINE_RETRY_MS);
+      return;
+    }
 
     // `working` is every case state except AWAITING_HUMAN, DONE and FAILED — which is exactly
     // "the graph will move this again". A case parked for a decision is at rest until a person
     // acts, and a person acting goes through a verb that restarts the poller.
     const moving = cases.some((one) => one.section === "working");
-    if (this.listeners.size > 0 && (moving || Date.now() < this.graceUntil)) {
+    if (moving || Date.now() < this.graceUntil) {
       this.timer = setTimeout(() => void this.tick(generation), POLL_INTERVAL_MS);
     } else {
       this.polling = false;

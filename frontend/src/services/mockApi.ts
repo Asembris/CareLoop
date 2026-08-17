@@ -46,7 +46,8 @@ class MockCareLoopApi implements CareLoopApi {
   /* -------------------- store plumbing -------------------- */
 
   private snapshot(): DashboardState {
-    return { cases: this.cases.map((c) => ({ ...c })), run: { ...this.run } };
+    // The mock is its own backend, so it is never anything but live.
+    return { cases: this.cases.map((c) => ({ ...c })), run: { ...this.run }, connection: "live" };
   }
 
   private emit(): void {

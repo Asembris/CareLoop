@@ -39,7 +39,7 @@ export const api: CareLoopApi = realApi;
  *  real backend meant two invented cases on screen until the first poll replaced them — a
  *  dashboard that shows work nobody did, for as long as the network takes. */
 export function emptyDashboard(): DashboardState {
-  return { cases: [], run: emptyRun() };
+  return { cases: [], run: emptyRun(), connection: "connecting" };
 }
 
 /** Base URL for the adapter. Empty by default: every request is a relative `/api` path, which the

@@ -4,27 +4,39 @@ import DashboardHero from "@/components/dashboard/DashboardHero";
 import SectionHeading from "@/components/dashboard/SectionHeading";
 import DecisionCard from "@/components/dashboard/DecisionCard";
 import CaseRow from "@/components/dashboard/CaseRow";
-import { greeting, heroLine, heroSub } from "@/lib/tone";
+import { connectingHero, greeting, heroLine, heroSub, unreachableHero } from "@/lib/tone";
 
 /**
  * Home. Needs you / Working / Completed.
  * An empty Needs-you band is removed entirely — an empty container reads as a
  * failure, and "Nothing needs you right now." is the success state.
+ *
+ * The success state renders only on a live connection. Before the first read the page is
+ * connecting; on an unreachable backend it says so — the calm line asserted over data that could
+ * not be read would be indistinguishable from an outage, by construction, which is the one
+ * coincidence this dashboard exists to not have.
  */
 export default function HomePage() {
   const navigate = useNavigate();
-  const { needs, working, done } = useCareLoop();
+  const { needs, working, done, connection } = useCareLoop();
 
   const manualOnly = needs.length === 1 && needs[0].decision?.kind === "NO_SAFE_ACTION_AVAILABLE";
+  const anyCases = needs.length + working.length + done.length > 0;
+
+  const hero =
+    connection === "connecting"
+      ? connectingHero()
+      : connection === "unreachable"
+        ? unreachableHero(anyCases)
+        : {
+            line: heroLine(needs.length, manualOnly),
+            sub: heroSub(needs.length, working.length, done.length)
+          };
 
   return (
     <main style={{ display: "flex", justifyContent: "center", padding: "68px 40px 130px" }}>
       <div style={{ width: "100%", maxWidth: "var(--page-max)", display: "flex", flexDirection: "column", gap: 52 }}>
-        <DashboardHero
-          greeting={greeting()}
-          line={heroLine(needs.length, manualOnly)}
-          sub={heroSub(needs.length, working.length, done.length)}
-        />
+        <DashboardHero greeting={greeting()} line={hero.line} sub={hero.sub} />
 
         {needs.length > 0 ? (
           <section

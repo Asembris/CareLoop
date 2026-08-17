@@ -137,9 +137,19 @@ export interface AgentRun {
   verificationDetail: string;
 }
 
+/** What the adapter currently knows about its own connection to the backend.
+ *
+ *  `connecting` is only ever the state before the first read has answered; after that the page is
+ *  `live` or `unreachable` forever. The distinction the UI must respect: a dashboard that cannot
+ *  be read is not a dashboard with nothing on it, so the calm success line may only render on
+ *  `live` — an unreachable backend rendering "Nothing needs you right now." is a false statement
+ *  on the one product whose claim is that the trail tells the truth. */
+export type ConnectionState = "connecting" | "live" | "unreachable";
+
 export interface DashboardState {
   cases: CareCase[];
   run: AgentRun;
+  connection: ConnectionState;
 }
 
 export interface ApprovalInput {

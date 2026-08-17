@@ -18,7 +18,7 @@ export default function DocumentStrip({
   if (documents.length === 0) return null;
 
   return (
-    <section style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+    <section data-scene-exclude style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
         <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, letterSpacing: "0.12em", color: "var(--muted-foreground)" }}>
           SOURCE DOCUMENTS

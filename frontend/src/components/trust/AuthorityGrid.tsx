@@ -4,6 +4,7 @@ import { AUTHORITY } from "@/data/trust";
 export default function AuthorityGrid() {
   return (
     <section
+      data-scene-exclude
       style={{
         display: "grid",
         gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",

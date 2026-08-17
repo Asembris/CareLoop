@@ -20,7 +20,7 @@ export default function TrustPage() {
           animation: "clFade 320ms ease both"
         }}
       >
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <div data-scene-exclude style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, letterSpacing: "0.12em", color: "var(--muted-foreground)" }}>
             TRUST
           </span>
@@ -46,7 +46,7 @@ export default function TrustPage() {
 
         <AuthorityGrid />
 
-        <section style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <section data-scene-exclude style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, letterSpacing: "0.12em", color: "var(--muted-foreground)" }}>
             SYSTEM GUARANTEES
           </span>

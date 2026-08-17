@@ -7,7 +7,7 @@ export default function EvidenceGrid({ evidence }: { evidence: EvidenceItem[] })
   if (evidence.length === 0) return null;
 
   return (
-    <section style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+    <section data-scene-exclude style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, letterSpacing: "0.12em", color: "var(--muted-foreground)" }}>
         EVIDENCE
       </span>

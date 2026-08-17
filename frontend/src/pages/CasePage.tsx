@@ -21,7 +21,10 @@ export default function CasePage() {
   if (!careCase) {
     return (
       <main style={{ display: "flex", justifyContent: "center", padding: "68px var(--page-gutter) 130px" }}>
-        <div style={{ width: "100%", maxWidth: "var(--page-max)", display: "flex", flexDirection: "column", gap: 16 }}>
+        <div
+          data-scene-exclude
+          style={{ width: "100%", maxWidth: "var(--page-max)", display: "flex", flexDirection: "column", gap: 16 }}
+        >
           <h1 style={{ margin: 0, fontFamily: "var(--font-serif)", fontWeight: 300, fontSize: 34 }}>
             That case is no longer here.
           </h1>
@@ -52,7 +55,7 @@ export default function CasePage() {
           animation: "clFade 320ms ease both"
         }}
       >
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <div data-scene-exclude style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <button
             className="cl-quiet"
             onClick={() => navigate("/")}

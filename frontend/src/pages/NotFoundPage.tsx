@@ -20,6 +20,7 @@ export default function NotFoundPage() {
   return (
     <main style={{ display: "flex", justifyContent: "center", padding: "68px var(--page-gutter) 130px" }}>
       <div
+        data-scene-exclude
         style={{
           width: "100%",
           maxWidth: "var(--page-max)",

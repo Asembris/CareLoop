@@ -38,7 +38,7 @@ const VOCABULARY = ["MATCHED", "DIVERGED", "ABSENT", "UNAVAILABLE", "NOT_OBSERVE
  */
 export default function RecoveryLoop() {
   return (
-    <section style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+    <section data-scene-exclude style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       <span style={LABEL}>WHEN THE WORLD DISAGREES</span>
 
       <p style={{ margin: 0, fontSize: 16, lineHeight: 1.6, color: "var(--muted-foreground)", maxWidth: "62ch" }}>

@@ -322,6 +322,41 @@ describe("the drawers are dialogs, not floating panels", () => {
   });
 });
 
+describe("the trust page tells the truth it can prove", () => {
+  it("shows the measured pair, the recovery loop, and the observation vocabulary", async () => {
+    serve([]);
+    show("/trust");
+
+    // The contrast is the evidence: both numbers, face to face.
+    await screen.findByText("0 of 320");
+    expect(screen.getByText("320 of 320")).toBeInTheDocument();
+    expect(screen.getByText("python -m evals.replay")).toBeInTheDocument();
+
+    // The recovery loop has a visual home, with the five words spelled out.
+    expect(screen.getByText("WHEN THE WORLD DISAGREES")).toBeInTheDocument();
+    for (const word of ["MATCHED", "DIVERGED", "ABSENT", "UNAVAILABLE", "NOT_OBSERVED"]) {
+      expect(screen.getByText(word)).toBeInTheDocument();
+    }
+    expect(screen.getByText(/recovers knowledge, never authority/)).toBeInTheDocument();
+  });
+});
+
+describe("under the hood names the real primitives", () => {
+  it("annotates the agent path and lists the stack", async () => {
+    serve([]);
+    const user = userEvent.setup();
+    show();
+    await user.click(await screen.findByRole("button", { name: "Under the hood" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Under the hood" });
+    expect(dialog.textContent).toContain("BeforeToolCallEvent → cancel_tool");
+    expect(dialog.textContent).toContain("Strands GraphBuilder");
+    expect(dialog.textContent).toContain("Amazon Nova via Bedrock");
+    expect(dialog.textContent).toContain("@gated_tool");
+    expect(dialog.textContent).toContain("rules.yaml");
+  });
+});
+
 describe("connection truth on screen", () => {
   it("never claims nothing needs you against a backend it could not read", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => {

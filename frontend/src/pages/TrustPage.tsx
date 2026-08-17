@@ -1,5 +1,6 @@
 import AuthorityGrid from "@/components/trust/AuthorityGrid";
 import GuaranteeList from "@/components/trust/GuaranteeList";
+import RecoveryLoop from "@/components/trust/RecoveryLoop";
 import SecurityEvidencePanel from "@/components/trust/SecurityEvidencePanel";
 
 export default function TrustPage() {
@@ -47,6 +48,8 @@ export default function TrustPage() {
           </span>
           <GuaranteeList />
         </section>
+
+        <RecoveryLoop />
 
         <SecurityEvidencePanel />
       </div>

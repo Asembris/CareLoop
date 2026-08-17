@@ -2,7 +2,7 @@ import { useRef } from "react";
 import { useCareLoop } from "@/hooks/useCareLoop";
 import { useDialog } from "@/hooks/useDialog";
 import { useUi } from "@/hooks/useUi";
-import { AGENT_STAGES, AUTHORITY } from "@/data/trust";
+import { AGENT_STAGES, AUTHORITY, STACK, STAGE_PRIMITIVES } from "@/data/trust";
 import type { AgentRun, RunStage } from "@/types/domain";
 
 const STAGE_ORDER: RunStage[] = ["TRIAGE", "EVIDENCE", "PLANNER", "GATE", "EXECUTE", "VERIFY", "SETTLED"];
@@ -143,7 +143,15 @@ function HoodPanel({ onClose }: { onClose: () => void }) {
                       hierarchy rather than for contrast: with the floor at 0.65 the old value left
                       a 0.10 gap between "not yet" and "done", which is not a distinction anybody
                       could see. The dot's colour and the "running"/"done" label carry it too. */}
-                  <span style={{ fontSize: 14.5, opacity: active ? 1 : past ? 0.85 : 0.65 }}>{name}</span>
+                  <span style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                    <span style={{ fontSize: 14.5, opacity: active ? 1 : past ? 0.85 : 0.65 }}>{name}</span>
+                    {/* The primitive behind the friendly name, at full muted contrast — it does
+                        not dim with the stage, because which primitive a stage is does not
+                        change with whether it has run. */}
+                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--muted-foreground)" }}>
+                      {STAGE_PRIMITIVES[name]}
+                    </span>
+                  </span>
                   <span
                     style={{
                       marginLeft: "auto",
@@ -200,6 +208,27 @@ function HoodPanel({ onClose }: { onClose: () => void }) {
               <span style={{ fontFamily: "var(--font-mono)", fontSize: 12.5, color: r.tone, wordBreak: "break-all" }}>
                 {r.v}
               </span>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <span style={SECTION_LABEL}>STACK</span>
+          {STACK.map((row) => (
+            <div
+              key={row.k}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 3,
+                padding: "7px 0",
+                borderBottom: "1px solid color-mix(in oklab, currentColor 9%, transparent)"
+              }}
+            >
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, letterSpacing: "0.06em", color: "var(--muted-foreground)" }}>
+                {row.k}
+              </span>
+              <span style={{ fontSize: 13, lineHeight: 1.5 }}>{row.v}</span>
             </div>
           ))}
         </div>

@@ -5670,6 +5670,241 @@ scenario again. The goldens were regenerated against the deployed build as true 
 
 29, 30, 31, 22, 25, 26, 28. **Unchanged.**
 
+## Session U — 2026-08-17
+
+### Position
+
+**Session T added depth; this session is about the layer T did not touch — the interface did not
+respond to being touched.** The brief named four symptoms from a live hover-and-scroll pass: no
+hover feedback on the scenario cards, case rows or the primary button; a dashboard occupying the
+top third of the viewport; nothing responding to scroll; and a dead second after pressing a
+scenario. All four reproduced. The diagnosis underneath them was not the one the brief assumed.
+
+**The distinction that framed the work: restraint is calm, inertness is nothing happening when you
+touch things.** The fix is response rather than spectacle.
+
+### The hover states were not missing. They were written, shipped, and dead.
+
+`components.css` was in the bundle, all nine rules present, every one of them matching its
+elements. None of them did anything, because **an inline style outranks a class rule** and every
+rule targeted a property its own element set inline. Measured with a real cursor through the
+deployed build: hovering "Run a scenario" gave `matches(':hover') === true`,
+`matches('.cl-outline') === true`, and a border alpha **unchanged at 0.18** where the rule says
+0.45. Same for the nav links, the scenario cards — which even declared
+`transition: border-color 160ms`, so the intent was right there in the markup — the case rows and
+the citation chips.
+
+**The positive control is what makes this a measurement rather than a cascade argument.** Two
+state rules did work, and they are exactly the two whose property is never set inline:
+
+```
+.cl-solid:hover { opacity: .88 }        -> measured 0.88 while hovered   LIVE
+:focus-visible  { outline: 2px solid }  -> measured solid 2px on Tab     LIVE
+```
+
+Every rule whose property is inline was dead; every rule whose property is not was live. Nothing
+else explains both directions. Final tally: **seven dead, one no-op, one live.** The no-op is
+`.cl-quiet:hover { opacity: 1 }` on elements whose resting opacity is already `1` — dimmed with
+`color`, not opacity — so that rule could not have done anything even with the cascade in its
+favour.
+
+**One correction to the brief, which had focus down as an afterthought.** Focus was the
+best-supported state in the app and the only one that survived. The work was to bring hover up to
+focus, not the reverse.
+
+### The repair: move the token, not the property
+
+Inline styles stop hard-coding state-bearing values and read a token instead — `border: 1px solid
+var(--edge)` — and the hover rule moves the token. This works *with* the stated system in
+`HANDOFF.md` §8 ("inline style + CSS custom properties") rather than `!important`-ing over it, and
+it needs no per-component hover state.
+
+**A component may not set these tokens inline.** An inline `--edge` outranks the rule for exactly
+the same reason the original code failed, and the failure is silent. That constraint is now
+written at the top of `components.css`.
+
+Verified live in the browser afterwards, per element type: scenario card 0.16 to 0.38, case row
+transparent to 5% ground with its rule 0.10 to 0.24, nav link muted to foreground, evidence card
+0.14 to 0.34 with a 3% ground, citation chip dotted to solid **with its colour unchanged**, which
+is what preserves session T's contrast repair.
+
+### `.cl-solid:hover` was dead on Approve and Decline — the audit's own pattern, one layer deeper
+
+The one hover in the app that worked did not work on the two buttons that matter most. Both
+`disabled={sending}` controls carried `opacity: sending ? 0.6 : 1` **inline**, and an inline
+`opacity` outranks `.cl-solid:hover { opacity: .88 }` in the resting case as surely as an inline
+`border` outranks a border rule. So the positive control was itself partly compromised: the rule
+was live on "Skip to the dashboard", which sets no inline opacity, and dead everywhere it was
+load-bearing.
+
+The sending dim is now `:disabled` in `components.css`, which is the attribute those buttons
+already carry, declared after the hover rules so a control mid-request stays dim rather than
+lighting up. **The generalisable form: finding that a class of rules is defeated by inline styles
+is not finished when the obviously-broken ones are fixed — the ones that appear to work have to be
+checked against the same mechanism, because a rule can be live on one element and dead on another
+depending on what that element happens to set inline.**
+
+### Scroll reveal, and the failure mode it is built around
+
+Content that never becomes visible is worse than no animation, so the hidden state is never the
+resting state of anything. Four properties, in `useScrollReveal`:
+
+1. Pending is applied **by JavaScript, at mount, only to children already below the fold.** No
+   stylesheet rule hides anything on its own. If the hook never runs, the page is simply visible,
+   and the first screen was never a candidate.
+2. A **watchdog on the observer**, not an unconditional timer. An `IntersectionObserver` delivers
+   an initial callback per target shortly after `observe`, so silence means the mechanism is not
+   working and everything pending is cleared. The brief asked for an unconditional failsafe; that
+   would have revealed every section about a second after load whether or not the reader scrolled,
+   which is not a failsafe but an off switch on a delay.
+3. **Focus reveals immediately.** A pending section is transparent but still focusable, so
+   `focusin` reveals it before the caret lands.
+4. **`prefers-reduced-motion` skips the mechanism entirely** — no attribute, so no state to undo.
+
+`freezeAnimations` forces `[data-reveal]` visible, flagged and approved rather than done quietly:
+it makes *more* of the page scannable, which is the same category as freezing animations rather
+than an exemption from the scan.
+
+### The pending state made sections fade *out*, because the transition was on the wrong state
+
+`transition` sat on `[data-reveal]`, so applying `pending` animated the element from visible to
+hidden over 380ms instead of starting it hidden. Below-fold content visibly erasing itself on load
+would have read as a rendering bug on camera, and it is invisible to any test that only checks the
+end state. Caught because the reveal spec read `opacity: 1` on an element already marked pending.
+
+**The transition belongs on the revealed state only** — `[data-reveal="shown"]` carries it,
+`[data-reveal="pending"]` carries none, so entering the hidden state is instant and only the
+arrival animates.
+
+A second bug from the same spec: the hook was keyed `[]` and `CasePage` renders its recovery state
+until the poller answers, so at first mount the ref was null and nothing was ever marked. It takes
+a `readyKey` now — the identity of the thing rendered, not a loading boolean, so swapping one case
+for another re-runs too.
+
+### The token fallback, and why it is the same shape as "a detector that has to exempt itself"
+
+Mid-repair a blunt find-and-replace pointed dozens of **non-interactive** spans and paragraphs at
+`--nav-ink`, a token defined only inside the hover-class scope. Undefined there, `color` would have
+resolved to nothing and the deliberate, AA-measured muted tone would have broken across the app.
+Caught by reading the diff, reverted, redone surgically.
+
+The durable fix is not "be careful": every token reference carries a fallback to the value it is
+replacing — `var(--nav-ink, var(--muted-foreground))`, `var(--edge, color-mix(...14%...))`. So the
+same accident **degrades to the correct resting appearance instead of failing silently**, and a
+component reused outside its class still renders correctly.
+
+Same shape as session S's content sweep flagging itself: the useful move was not to suppress the
+hazard but to arrange things so the hazardous case is harmless. **A token that only works when
+every caller is correct is a token whose failure mode is invisible; give it the right default and
+the failure becomes a no-op.**
+
+### The dead second, measured honestly after an instrument error
+
+First measurement said 2.3s from press to navigation. That was wrong: the recorder's `t0` was its
+own install time, and the gap was the tool round-trip rather than the UI. Re-anchored to an
+in-page capture-phase click listener, and confirmed against the code — `runScenario` is
+fire-and-forget and `navigate("/")` is synchronous:
+
+```
+  67ms   already on /, showing "Nothing needs you right now. / Nothing open."
+2109ms   the working state finally appears        (injection)
+ 917ms   the same gap on referral
+```
+
+So navigation is instant and the dashboard renders an empty case list for one to two seconds. The
+copy it shows during that window is a **locked hero line asserting the opposite of what just
+happened** — the same defect class session T fixed for the connection state, arriving by the other
+route: there the world could not be read, here it was read before the press could reach it.
+
+`startingHero()` joins `connectingHero()` and `unreachableHero()`; the five locked lines are
+untouched. It is scoped `starting && !anyCases`, so it can only ever replace the empty state, and
+it clears **on refusal as well as on success** — a page claiming work is starting over a request
+the backend declined is the same small lie a decided card refuses to tell.
+
+**Two instrument findings, both worth carrying.** The Browser pane was not compositing, so CSS
+transitions never advanced and `IntersectionObserver` delivered no callbacks at all — the first
+made a working hover read as unchanged, the second made the reveal watchdog fire and looked like a
+broken reveal. Both were the environment, not the code. **A non-rendering browser cannot
+distinguish a working animation from a missing one; that verification belongs in Playwright.**
+
+### Deliberately not built: the ambient ring
+
+The brief proposed a single hairline ring behind the hero, drawing on load and closing when a case
+verifies, and asked for a judgement rather than a compromise.
+
+**Dropped, and the reasoning is recorded here because a later session will otherwise re-propose
+it.** The verification seal *is* a ring that draws and closes, and its meaning is exact: an
+independent read-back agreed. An ambient ring that also draws and also closes, on a forty-second
+idle loop about nothing, says that same sentence in a decorative register — **it does not add a
+signature, it spends the seal's vocabulary on wallpaper**, so when the seal fires it reads as more
+of the ambient thing rather than as the one moment the product has been building toward. It also
+fails the brief's own constraint that motion answers "what just changed": a slow idle rotation
+answers nothing and exists to be noticed. Session T settled the adjacent question already — a hero
+canvas competes with the real booking, and aesthetic contradiction scores worse than blandness.
+
+The want underneath it was real and is addressed by the other four commits: a cursor that gets an
+answer, a first screen that ends where the screen ends, and no two-second lie after the one button
+a judge presses.
+
+### The reference screenshots were not regenerated, and that is a measurement
+
+The dashboard's content went from ending at 412px of a 737px viewport (56%) to 607px (82%), and the
+page still introduces no scrollbar. None of that shows in the goldens: the fill is `min-height`
+plus an `auto` top margin, so it engages only when the viewport is *taller* than the content, and
+the 540px reference height is below that threshold. Re-captured, both home states came back
+pixel-identical apart from the time-of-day greeting. Regenerating would have committed a spurious
+diff and made the reference less stable.
+
+`e2e/tests/capture-goldens.spec.ts` now holds the capture conditions as runnable code, skipped
+unless `CARELOOP_CAPTURE=1`. It waits for the decision card to *settle*: the card rises over 420ms
+and the tool's first run caught it half-transparent, which is a worse reference than the one it
+would have replaced.
+
+### Evidence
+
+Frontend **146** vitest (143 before), e2e **68** (64 before, plus 4 skipped capture tests),
+typecheck and build clean. Nothing under `careloop/`, `demoworld/`, `evals/` or `deploy/` was
+touched.
+
+Four mutants, each red in its own place:
+
+| mutant | red | green |
+|---|---|---|
+| `useScrollReveal` does nothing | **2** reveal tests | 66, every a11y scan included |
+| dashboard ignores the press (`awaitingFirstCase = false`) | **1** | 145 |
+| a refused press keeps claiming work started | **1** | 145 |
+
+Stated honestly: the other two reveal tests and the two remaining scenario tests pass vacuously
+against their own mutants, because they guard *exit* conditions. Non-vacuity is carried by the
+first reveal test's `below.length > 0` assertion and by the starting test that the first mutant
+kills.
+
+**A local red run that was not a regression.** Three specs failed mid-session with
+`503 ... all of them are in use`: the manually-started stack had accumulated worlds across five
+suite runs and a long browser session. Restarting it gave 68/68. Session T's cap finding, reached
+from the other direction — there the suite outgrew the limit, here a long-lived server did.
+
+### Still open, deliberately
+
+**Commit 4 has not been felt on the deployed stack.** The local scripted stack settles a scenario
+in ~82ms, so the starting state is on screen for roughly 25ms and the dead beat effectively does
+not exist locally. The deployed stack is where it is 0.9s and 2.1s. The vitest tests prove the
+behaviour deterministically by holding the POST open, but **the feel-check for this commit is only
+meaningful post-deploy** and should be done there rather than treating the local timing as
+evidence.
+
+**Not deployed.** The commits sit on `main`, unpushed. A deploy hands every live visitor a 410, so
+it stays a manual, explicitly requested step — and session S's filming constraint still applies: a
+cold process turns a two-second scenario into ten to fifteen.
+
+### Open decisions
+
+34. **New, closed by decision.** No ambient ring behind the hero, for the reasons above. Revisit
+    only if the seal is ever removed, since the argument is entirely about not spending its
+    vocabulary twice.
+
+33, 29, 30, 31, 22, 25, 26, 28. **Unchanged.**
+
 ## Standing risks
 
 - **The resume is a `CaseStore` reconstruction across a process boundary, not a Strands session

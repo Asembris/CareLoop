@@ -1,5 +1,6 @@
 import type { CareCase } from "@/types/domain";
 import { caseTone } from "@/lib/tone";
+import { OBSERVED_VALUES_WITHHELD } from "@/services/presentation";
 import VerificationSeal from "./VerificationSeal";
 
 const LABEL = {
@@ -8,6 +9,16 @@ const LABEL = {
   letterSpacing: "0.08em",
   color: "var(--muted-foreground)"
 } as const;
+
+/** Colour never carries the outcome alone — the word itself is the badge, and the sentence under
+ *  it says what the word means. */
+const OBSERVATION_TONE: Record<string, string> = {
+  MATCHED: "var(--state-verified)",
+  DIVERGED: "var(--state-denied)",
+  ABSENT: "var(--state-denied)",
+  UNAVAILABLE: "var(--state-decision)",
+  NOT_OBSERVED: "var(--muted-foreground)"
+};
 
 /**
  * Outcome first, and the external read-back beside it. A mismatch renders the
@@ -63,6 +74,43 @@ export default function OutcomePanel({ careCase }: { careCase: CareCase }) {
               <span style={LABEL}>RESULT</span>
               <span style={{ fontSize: 15, color: tone }}>{readback.result}</span>
             </div>
+            {readback.observation ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                <span style={LABEL}>OBSERVATION</span>
+                <span
+                  style={{
+                    fontFamily: "var(--font-mono)",
+                    fontSize: 13,
+                    letterSpacing: "0.06em",
+                    color: OBSERVATION_TONE[readback.observation] ?? "inherit"
+                  }}
+                >
+                  {readback.observation}
+                </span>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {readback?.observationText ? (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+              marginTop: 6,
+              paddingTop: 12,
+              borderTop: "1px solid color-mix(in oklab, currentColor 10%, transparent)"
+            }}
+          >
+            <span style={{ fontSize: 14, lineHeight: 1.6, color: "var(--muted-foreground)" }}>
+              {readback.observationText}
+            </span>
+            {readback.observation !== "NOT_OBSERVED" ? (
+              <span style={{ fontSize: 12.5, lineHeight: 1.6, color: "var(--muted-foreground)" }}>
+                {OBSERVED_VALUES_WITHHELD}
+              </span>
+            ) : null}
           </div>
         ) : null}
       </div>

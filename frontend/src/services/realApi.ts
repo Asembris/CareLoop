@@ -66,6 +66,7 @@ import {
   factSummary,
   isExcerptFact,
   isRenderedOnTheSpine,
+  observationCopy,
   observedLabel,
   outcomeCopy,
   pacedState,
@@ -296,6 +297,10 @@ export interface VerificationOutcome {
   passed: boolean;
   /** Whether an *external* system was read back, rather than only CareLoop's own record. */
   readBack: boolean;
+  /** The `observation` payload key: a member of the backend's closed `ObservationOutcome`
+   *  vocabulary, or `""` on a case recorded before it existed. `outcome` answers "what did the
+   *  read produce"; `passed` answers "may this be certified" — different questions, kept apart. */
+  observation: string;
 }
 
 /** The last verification, whichever way it went.
@@ -311,7 +316,8 @@ export function latestVerification(
     if (event.kind === "VERIFICATION_PASSED" || event.kind === "VERIFICATION_FAILED") {
       return {
         passed: event.kind === "VERIFICATION_PASSED",
-        readBack: payloadString(event, "read_back") === "true"
+        readBack: payloadString(event, "read_back") === "true",
+        observation: payloadString(event, "observation")
       };
     }
   }
@@ -645,9 +651,11 @@ function readbackFor(
   if (!proposal || !outcome) return undefined;
   return {
     authorized: authorizedSummary(proposal.toolName, proposal.args),
-    observed: observedLabel(outcome.readBack),
+    observed: observedLabel(outcome.readBack, outcome.observation),
     result: readbackResult(outcome.passed),
-    state: verificationState(outcome)
+    state: verificationState(outcome),
+    observation: outcome.observation,
+    observationText: observationCopy(outcome.observation)
   };
 }
 

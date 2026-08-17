@@ -126,17 +126,19 @@ describe("reading the timeline", () => {
       entry("VERIFICATION_PASSED", { read_back: "true" }),
       entry("VERIFICATION_FAILED", { read_back: "true" })
     ];
-    expect(latestVerification(timeline)).toEqual({ passed: false, readBack: true });
+    expect(latestVerification(timeline)).toEqual({ passed: false, readBack: true, observation: "" });
   });
 
   it("separates an external read-back from a closed-loop check", () => {
     expect(latestVerification([entry("VERIFICATION_PASSED", { read_back: "true" })])).toEqual({
       passed: true,
-      readBack: true
+      readBack: true,
+      observation: ""
     });
     expect(latestVerification([entry("VERIFICATION_PASSED", { read_back: "false" })])).toEqual({
       passed: true,
-      readBack: false
+      readBack: false,
+      observation: ""
     });
   });
 
@@ -365,8 +367,44 @@ describe("building a case", () => {
       authorized: "Thu Sep 3 · 9:30 AM",
       observed: "Confirmed by an independent read",
       result: "Match — loop closed",
-      state: "MATCH"
+      state: "MATCH",
+      // A verification recorded before the vocabulary existed: nothing is invented for it.
+      observation: "",
+      observationText: ""
     });
+  });
+
+  it("carries the observation vocabulary through, each word with its own sentence", () => {
+    const withObservation = (observation: string, kind = "VERIFICATION_FAILED") =>
+      buildCase(
+        card({ state: "AWAITING_HUMAN", section: "needs_you" }),
+        detail({
+          state: "AWAITING_HUMAN",
+          timeline: [
+            entry("PLAN_PROPOSED", { tool_name: "book_appointment", args: BOOKING }),
+            entry(kind, { tool_name: "book_appointment", read_back: "true", observation })
+          ]
+        }),
+        undefined,
+        NOW
+      ).readback!;
+
+    const absent = withObservation("ABSENT");
+    // ABSENT is the clinic *contradicting* the receipt CareLoop holds — not a failure to read.
+    expect(absent.observation).toBe("ABSENT");
+    expect(absent.observed).toBe("The clinic holds no such record");
+    expect(absent.observationText).toContain("holds no record");
+
+    const unavailable = withObservation("UNAVAILABLE");
+    expect(unavailable.observed).toBe("The clinic could not be read");
+    expect(unavailable.observationText).toContain("Nothing was established");
+
+    const diverged = withObservation("DIVERGED");
+    expect(diverged.observed).toBe("The clinic's record disagrees");
+
+    const matched = withObservation("MATCHED", "VERIFICATION_PASSED");
+    expect(matched.state).toBe("MATCH");
+    expect(matched.observationText).toContain("agrees with every value");
   });
 
   it("carries the decision's arguments through, so the card names the call that will be made", () => {

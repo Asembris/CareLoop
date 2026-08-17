@@ -15,6 +15,21 @@
  *
  * SVG-first by requirement: it must paint before any WebGL context exists,
  * download nothing, and never be the reason the app fails to appear.
+ *
+ * ---------------------------------------------------------------------------
+ * Vendored from `careloop-motion` (frontend/docs/BOOT.md records the version
+ * and every delta). Kept as close to upstream as the integration allows: each
+ * departure is marked `LOCAL DELTA` and numbered, so the next upgrade is a
+ * diff rather than a merge.
+ *
+ *   1  run policy      once per tab, `?boot=off` sticky, `?boot=on|full` replay
+ *   2  dark paper      #26241f -> #1a1713, CareLoop's actual --background
+ *   3  theme chain     data-theme -> .dark -> storage -> system -> light
+ *   4  status copy     one neutral line; CareLoop performs no boot-time work
+ *   5  accessibility   the overlay leaves the accessibility tree entirely
+ *   6  fail open       idempotent finalize(), guarded FLIP, hard exit timer
+ *   7  timing          condensed path tuned to this application's readiness
+ * ---------------------------------------------------------------------------
  */
 
 (function () {
@@ -36,6 +51,72 @@
       return null;
     }
   })();
+
+  /* LOCAL DELTA 1 — the run policy, which upstream leaves as "every page load".
+   *
+   * Two properties, and both are about a switch meaning what it says.
+   *
+   * **`?boot=off` is sticky for the tab.** Upstream reads it out of
+   * `location.search` once. CareLoop routes on the client, so `navigate("/")`
+   * drops the query and the next reload boots again — a kill switch a
+   * navigation silently undoes is not a kill switch. It is written to
+   * `sessionStorage` and read back on every load.
+   *
+   * **The loader runs once per tab.** It is an entrance, and a judge who
+   * reloads mid-demo has already seen it. `?boot=on` and `?boot=full` are the
+   * explicit replays; both clear a sticky "off" as well, so one flag is always
+   * enough to get back to a known state.
+   *
+   * `sessionStorage` rather than `localStorage`, deliberately: a second tab is
+   * a second arrival and deserves the entrance. Every access is guarded — a
+   * browser that refuses storage falls back to the URL flag alone, which is
+   * upstream's behaviour and fails towards showing the loader rather than
+   * towards suppressing it.
+   */
+  const RUN_KEY = "careloop:boot";
+
+  function bootStore() {
+    try {
+      return window.sessionStorage;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function shouldRun() {
+    const store = bootStore();
+    if (FORCE === "off") {
+      try {
+        if (store) store.setItem(RUN_KEY, "off");
+      } catch (_) {
+        /* Nothing to remember it with; the flag still holds for this load. */
+      }
+      return false;
+    }
+    if (FORCE === "on" || FORCE === "full") {
+      try {
+        if (store) store.removeItem(RUN_KEY);
+      } catch (_) {
+        /* An explicit replay that cannot clear the flag still replays. */
+      }
+      return true;
+    }
+    try {
+      if (store && store.getItem(RUN_KEY) !== null) return false;
+    } catch (_) {
+      /* Unreadable storage means an unremembered arrival, which is an arrival. */
+    }
+    return true;
+  }
+
+  function rememberShown() {
+    try {
+      const store = bootStore();
+      if (store) store.setItem(RUN_KEY, "shown");
+    } catch (_) {
+      /* Then it shows again on the next load, which is upstream's behaviour. */
+    }
+  }
 
   const PALETTE = {
     light: {
@@ -707,7 +788,8 @@
   /* --------------------------------------------------------------- bootstrap */
 
   const boot = (() => {
-    if (FORCE === "off") return null;
+    if (!shouldRun()) return null;
+    rememberShown();
     try {
       document.documentElement.setAttribute("data-booting", "");
       return new CareLoopBoot();

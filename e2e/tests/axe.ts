@@ -83,6 +83,16 @@ export async function freezeAnimations(page: Page): Promise<void> {
       animation-delay: 0s !important;
       transition-duration: 0s !important;
       transition-delay: 0s !important;
+    }
+
+    /* Scroll-reveal sections are transparent until they are scrolled to, and a scan reads the
+       whole document rather than whatever is currently on screen. Forcing them visible makes
+       *more* of the page scannable, which is why it belongs beside the frozen animations rather
+       than being an exemption from the scan: without it, everything below the fold on the trust
+       and case pages would be measured at zero opacity and reported as undecided. */
+    [data-reveal] {
+      opacity: 1 !important;
+      transform: none !important;
     }`
   });
 

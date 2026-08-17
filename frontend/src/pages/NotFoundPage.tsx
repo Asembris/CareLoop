@@ -51,7 +51,8 @@ export default function NotFoundPage() {
             border: 0,
             padding: "4px 0",
             fontSize: 13.5,
-            color: "var(--muted-foreground)"
+            color: "var(--nav-ink, var(--muted-foreground))",
+            transition: "color 120ms ease"
           }}
         >
           ← Home

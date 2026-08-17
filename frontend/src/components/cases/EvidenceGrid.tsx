@@ -19,8 +19,9 @@ export default function EvidenceGrid({ evidence }: { evidence: EvidenceItem[] })
             onClick={() => openLens(ev.excerpt)}
             style={{
               textAlign: "left",
-              background: "transparent",
-              border: "1px solid color-mix(in oklab, currentColor 14%, transparent)",
+              background: "var(--ground, transparent)",
+              border: "1px solid var(--edge, color-mix(in oklab, currentColor 14%, transparent))",
+              transition: "background 120ms ease, border-color 120ms ease",
               borderRadius: 4,
               padding: "18px 20px",
               display: "flex",

@@ -139,12 +139,12 @@ export default function DecisionCard({ careCase }: { careCase: CareCase }) {
                 disabled={sending}
                 onClick={() => void decide(false)}
                 style={{
-                  background: "transparent",
-                  border: "1px solid color-mix(in oklab, currentColor 20%, transparent)",
+                  background: "var(--ground, transparent)",
+                  border: "1px solid var(--edge, color-mix(in oklab, currentColor 20%, transparent))",
                   borderRadius: "var(--radius-control)",
                   padding: "10px 16px",
                   fontSize: 14.5,
-                  opacity: sending ? 0.6 : 1
+                  transition: "background 120ms ease, border-color 120ms ease, opacity 120ms ease"
                 }}
               >
                 {decision.rejectLabel}
@@ -161,7 +161,10 @@ export default function DecisionCard({ careCase }: { careCase: CareCase }) {
                   padding: "10px 18px",
                   fontSize: 14.5,
                   fontWeight: 500,
-                  opacity: sending ? 0.6 : 1
+                  // The sending dim is `:disabled` in components.css, not an inline opacity.
+                  // Inline, it outranked `.cl-solid:hover` and left the two buttons that matter
+                  // most — Approve and Decline — as the only solid controls with no hover at all.
+                  transition: "opacity 120ms ease"
                 }}
               >
                 {decision.approveLabel}
@@ -173,11 +176,12 @@ export default function DecisionCard({ careCase }: { careCase: CareCase }) {
               className="cl-outline"
               onClick={() => recheck(careCase.id)}
               style={{
-                background: "transparent",
-                border: "1px solid color-mix(in oklab, currentColor 20%, transparent)",
+                background: "var(--ground, transparent)",
+                border: "1px solid var(--edge, color-mix(in oklab, currentColor 20%, transparent))",
                 borderRadius: "var(--radius-control)",
                 padding: "10px 16px",
-                fontSize: 14.5
+                fontSize: 14.5,
+                transition: "background 120ms ease, border-color 120ms ease"
               }}
             >
               {decision.recheckLabel}
@@ -187,11 +191,12 @@ export default function DecisionCard({ careCase }: { careCase: CareCase }) {
             className="cl-outline"
             onClick={() => navigate("/case/" + careCase.id)}
             style={{
-              background: "transparent",
-              border: "1px solid color-mix(in oklab, currentColor 20%, transparent)",
+              background: "var(--ground, transparent)",
+              border: "1px solid var(--edge, color-mix(in oklab, currentColor 20%, transparent))",
               borderRadius: "var(--radius-control)",
               padding: "10px 16px",
-              fontSize: 14.5
+              fontSize: 14.5,
+              transition: "background 120ms ease, border-color 120ms ease"
             }}
           >
             {decision.kind === "REQUIRES_HUMAN_APPROVAL" ? "Open case" : "Review situation"}

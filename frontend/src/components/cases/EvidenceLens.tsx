@@ -95,7 +95,7 @@ function LensPanel({ lens, onClose }: { lens: LensView; onClose: () => void }) {
           className="cl-quiet"
           onClick={onClose}
           aria-label="Close"
-          style={{ background: "transparent", border: 0, padding: "4px 8px", fontSize: 16, color: "var(--muted-foreground)" }}
+          style={{ background: "transparent", border: 0, padding: "4px 8px", fontSize: 16, color: "var(--nav-ink, var(--muted-foreground))", transition: "color 120ms ease" }}
         >
           ×
         </button>

@@ -93,6 +93,32 @@ export async function freezeAnimations(page: Page): Promise<void> {
     [data-reveal] {
       opacity: 1 !important;
       transform: none !important;
+    }
+
+    /* The decorative orchestration field, hidden for the scan — and this makes the contrast rule
+       measure *more*, not less.
+
+       axe cannot judge text whose background stack contains a canvas element: element-has-image
+       treats one as an image node, getBackgroundColor gives up, and every affected element comes
+       back incomplete with messageKey "imgNode". Measured rather than assumed — a canvas that has
+       never been given a drawing context at all produces exactly the same result, so this is a
+       fact about the element type and not about anything CareLoop paints. With the field present
+       and this rule absent, twelve of the fourteen states reported one color-contrast incomplete
+       covering nearly every string on the page.
+
+       The alternative was an Allowance per state, and it is the weaker option by some distance:
+       allowances are matched by rule id, so allowing color-contrast in twelve states would switch
+       the undecided arm of the contrast rule off across almost the whole suite — including for the
+       drawers and overlays it was written to catch. Hiding one aria-hidden, inert,
+       pointer-events-none canvas removes the ambiguity instead, and every DOM-resolvable contrast
+       pair stays asserted exactly as before this layer existed.
+
+       What this deliberately does not cover is the field's own contribution to the blend behind
+       text — but axe never covered it either: it reports undecided, never a ratio. That question
+       is measured directly, in pixels, by field.spec.ts. a11y-vacuity.spec.ts proves this rule
+       does not blind the scan to a real defect painted over the same canvas. */
+    #careloop-field {
+      display: none !important;
     }`
   });
 

@@ -6,6 +6,19 @@ body {
   margin: 0;
   padding: 0;
   background: var(--background);
+  /* The paper lives here now rather than on the application root, so the orchestration field can
+     paint between the two. It carries the theme cross-fade the app root used to own; the tone
+     itself is unchanged, and both elements already read the same token. */
+  transition: background 400ms ease;
+}
+
+/* Paper (html/body) → field (#careloop-field, z-index 0) → application (z-index 1).
+   The field is a fixed canvas outside this element, so the application needs a stacking position
+   of its own to sit above it. Positioned, not transformed: the drawers inside are `position:
+   fixed` and would size to this box instead of the viewport if a transform were introduced here. */
+#root {
+  position: relative;
+  z-index: 1;
 }
 
 * {

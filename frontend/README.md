@@ -23,6 +23,11 @@ React 18 · TypeScript (strict) · Vite · React Router.
 No UI framework, no CSS framework — inline styles over CSS custom properties,
 with the CareLoop mark as inline SVG.
 
+Behind it all, an orchestration field: a WebGL composition painted between the
+paper and the interface, self-hosted, outside the React tree, and decorative in
+the strict sense — `?motion=off` gives you the application unchanged, byte for
+byte. See **[docs/MOTION.md](docs/MOTION.md)**.
+
 ## Routes
 
 - `/` — Home: Needs you / Working / Completed

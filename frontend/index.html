@@ -9,7 +9,14 @@
          the first frame paints, or a dark-theme visitor gets one ivory flash on every load. The
          stored choice wins; with nothing stored, the system preference decides. Kept in sync with
          useTheme (same key, same rule) — this script decides the first frame, the hook every one
-         after it. -->
+         after it.
+
+         Two forms of the same fact, and the app remains the single source of truth for it. The
+         `dark` class is what every token in tokens.css keys off. `data-theme` carries the same
+         decision in the form the motion field reads: it watches the first `[data-theme]` element
+         and retones on mutation, so `<html>` — first in document order — is where both live.
+         `light` is written explicitly rather than left implied, because the field's observer
+         reads an attribute value and an absent attribute is not a value. -->
     <script>
       (function () {
         try {
@@ -18,8 +25,10 @@
             stored === "dark" ||
             (stored !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
           if (dark) document.documentElement.classList.add("dark");
+          document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
         } catch (error) {
           /* No storage access means light, which is the canonical theme anyway. */
+          document.documentElement.setAttribute("data-theme", "light");
         }
       })();
     </script>
@@ -30,7 +39,54 @@
     <link rel="preload" href="/fonts/newsreader-latin.woff2" as="font" type="font/woff2" crossorigin />
   </head>
   <body>
+    <!-- The orchestration field paints here, behind the whole application: paper (html/body) →
+         field (z-index 0) → app (#root, z-index 1). Static markup rather than a React element on
+         purpose — the module re-boots itself whenever this canvas leaves the document, and a
+         canvas React owns would hand that guard every StrictMode double-mount to interpret.
+
+         Positioning is inline rather than in global.css because the stylesheet arrives with the
+         bundle: an unstyled canvas is a 300x150 inline-block, and it would be one at the top of
+         the page for exactly as long as the CSS takes to land. Decorative and inert — aria-hidden,
+         and `pointer-events: none` so it can never take a click meant for the interface. -->
+    <canvas
+      id="careloop-field"
+      aria-hidden="true"
+      style="position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; display: block"
+    ></canvas>
+
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+
+    <!-- The field is an enhancement and is loaded as one: injected after the application's own
+         module, never bundled with it, and skipped entirely when it is not wanted.
+
+         `?motion=off` is the kill switch — a debugging lever and a fail-open one. It removes the
+         canvas and never fetches three.js, so what remains is the application exactly as it was
+         before this layer existed. The scene has its own fallbacks for a missing WebGL context or
+         a failed fetch (it hides the canvas and warns), so this is the switch for the case where
+         nothing failed and the field is simply not wanted.
+
+         Injected rather than written as a `<script type="module" src="/careloop-scene.js">` tag:
+         Vite resolves script srcs in this file as build inputs, and `/careloop-scene.js` is a
+         `public/` file that must be copied verbatim rather than bundled. -->
+    <script>
+      (function () {
+        var off = false;
+        try {
+          off = new URLSearchParams(window.location.search).get("motion") === "off";
+        } catch (error) {
+          /* No URLSearchParams means an environment the field will not run in anyway. */
+        }
+        if (off) {
+          var canvas = document.getElementById("careloop-field");
+          if (canvas) canvas.remove();
+          return;
+        }
+        var field = document.createElement("script");
+        field.type = "module";
+        field.src = "/careloop-scene.js";
+        document.body.appendChild(field);
+      })();
+    </script>
   </body>
 </html>

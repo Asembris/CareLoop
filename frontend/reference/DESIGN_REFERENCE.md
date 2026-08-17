@@ -41,6 +41,18 @@ goldens re-captured against the new build came back pixel-identical to the
 committed ones apart from the time-of-day greeting. Regenerating would have
 committed a spurious diff and made the reference less stable, not more.
 
+**The orchestration field is not in them either, and that is also a
+measurement.** The animated background added in session V paints behind every
+route, so a screenshot taken now carries hairline topology in the margins that
+none of these show. They were not regenerated, for two reasons. The field is a
+live WebGL composition driven by a pointer, a scroll position and irregular
+ambient timers, so any capture of it is one frame of something that never
+repeats — a *less* stable reference than no capture at all. And what the goldens
+are for is the interface, which did not move: with `?motion=off`, all four
+routes in both themes render **byte-identical** to the build before the
+integration, at these exact conditions. That comparison is the honest successor
+to a re-capture here, and `frontend/docs/MOTION.md` records how it was taken.
+
 Two things follow for whoever compares next. These goldens do **not** show the
 viewport composition, because 540px is below the height at which it changes —
 compare at a real desktop height for that. And `e2e/tests/capture-goldens.spec.ts`

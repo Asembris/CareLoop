@@ -10,6 +10,9 @@ const NAV_BUTTON: CSSProperties = {
   border: 0,
   padding: "4px 0",
   fontSize: 14,
+  // A nav item may move to another row; its label may never break mid-phrase. Without this,
+  // "Under the hood" renders as three stacked words the first time the header runs out of room.
+  whiteSpace: "nowrap",
   transition: "color 160ms ease"
 };
 
@@ -43,9 +46,9 @@ export default function AppHeader() {
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
-        gap: 40,
+        gap: "10px 40px",
         flexWrap: "wrap",
-        padding: "18px 40px",
+        padding: "18px var(--page-gutter)",
         borderBottom: "1px solid color-mix(in oklab, currentColor 12%, transparent)",
         background: "var(--background)"
       }}
@@ -58,7 +61,7 @@ export default function AppHeader() {
         <CareLoopLogo />
       </button>
 
-      <nav style={{ display: "flex", alignItems: "center", gap: 26 }}>
+      <nav style={{ display: "flex", alignItems: "center", gap: "var(--nav-gap)" }}>
         <button
           className="cl-navlink"
           onClick={() => navigate("/")}

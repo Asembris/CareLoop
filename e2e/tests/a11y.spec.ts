@@ -174,4 +174,30 @@ for (const theme of THEMES) {
 
     await scan(page, `evidence lens (${theme})`, OVER_THE_PAGE);
   });
+
+  scanState(`document lens (${theme})`, async (page, request) => {
+    // The document mode of the lens: full page text of the poisoned notice with the refusal
+    // panel beneath. `injection_only` produces it for real and deterministically.
+    await seed(page, request, "injection_only");
+    await page.goto("/case/demo-injection-only");
+    await useTheme(page, theme);
+
+    await page.getByText("mediguard-continuity-notice.pdf").first().click();
+    await settled(page.getByRole("dialog", { name: "Source document" }));
+
+    await scan(page, `document lens (${theme})`, OVER_THE_PAGE);
+  });
+
+  scanState(`offline dashboard (${theme})`, async (page) => {
+    // The one state reality cannot produce while the webServer keeps the API alive for the other
+    // specs — see `truth-surfaces.spec.ts` for the justification of the abort. The theme is set
+    // first, while the backend is still reachable, because the toggle itself needs no network.
+    await page.goto("/");
+    await useTheme(page, theme);
+    await page.route("**/api/**", (route) => route.abort());
+    await page.goto("/");
+
+    await page.getByText("CareLoop can't be reached — retrying automatically.").waitFor();
+    await scan(page, `offline dashboard (${theme})`, NONE);
+  });
 }

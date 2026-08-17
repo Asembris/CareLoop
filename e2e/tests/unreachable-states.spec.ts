@@ -1,4 +1,8 @@
-/* The two states `page.route` is spent on, and why each one earns it.
+/* The two post-effect states `page.route` is spent on, and why each one earns it.
+ *
+ * (`truth-surfaces.spec.ts` and the offline a11y scans spend one more, on an unreachable backend,
+ * with their own justification: the suite's webServer keeps the API alive for every parallel spec,
+ * so an outage can only be one browser context's experience.)
  *
  * **Everything else in this suite is unmocked, and that is the point of the layer.** These two are
  * the exception, and the justification is the same for both, stated once because it is one fact

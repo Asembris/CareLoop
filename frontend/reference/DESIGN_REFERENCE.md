@@ -31,6 +31,24 @@ Two changes to the medium, both deliberate:
 - **`case-detail-light.png` / `case-detail-dark.png` are new.** The case page is
   the centrepiece after session T and previously had no golden at all.
 
+**Session U did not regenerate them, and that is a measurement rather than an
+oversight.** Session U made the dashboard fill the first screen — at 1280x737 its
+content went from ending at 412px (56% of the viewport) to 607px (82%). None of
+that is visible here: the fill is `min-height` plus an `auto` top margin on the
+closing row, so it only engages when the viewport is *taller* than the content,
+and at the 540px reference height there is no slack to distribute. The two home
+goldens re-captured against the new build came back pixel-identical to the
+committed ones apart from the time-of-day greeting. Regenerating would have
+committed a spurious diff and made the reference less stable, not more.
+
+Two things follow for whoever compares next. These goldens do **not** show the
+viewport composition, because 540px is below the height at which it changes —
+compare at a real desktop height for that. And `e2e/tests/capture-goldens.spec.ts`
+now holds the capture conditions as runnable code, skipped unless
+`CARELOOP_CAPTURE=1`. It waits for the decision card to settle before shooting:
+the card rises over 420ms, and the first run of that tool caught it
+half-transparent, which is a worse reference than the one it would have replaced.
+
 ## Files
 
 | File | State |

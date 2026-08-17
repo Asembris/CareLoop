@@ -5631,6 +5631,36 @@ the MATCHED badge and the trust numerals all render from real backend data.
 - The injection beat's nondeterminism is a model property. The document floor covers the screen;
   whether the scenario should guarantee a denial is a backend conversation.
 
+### Deployed, and verified through the edge
+
+`deploy/push.sh` ran after the port-22 rule was re-pointed (the developer IP had rotated —
+`102.158.85.6` → `102.159.23.21` — and the scoped `careloop-bench` credentials correctly cannot
+touch the security group, so the re-point was manual). `verify_deploy.py` passed every gate
+through the distribution, with a real referral run settling in 2.3s.
+
+The session-T surfaces were then verified through CloudFront, never the origin: **22 of 22
+checks** — the poisoned document readable in full with four named deny rules beneath it on a real
+`injection_only` run, five citation chips opening the lens at the right page excerpt, the MATCHED
+badge with the withholding footnote, `0 of 320` facing `320 of 320`, the stack named in the
+drawer, and a blocked-`/api` dashboard that says "CareLoop can't be reached" and never the calm
+line.
+
+**The connection state machine under a real systemd restart, measured:** banner up 3.1s after
+`systemctl restart careloop-api` (the first failed poll), calm line never rendered during the
+outage, offline probing at ~0.44 requests/second (the 3s retry, not a hammer), and the page
+re-minted a fresh world and returned to live without a reload. One design fact worth naming
+rather than fixing: the banner is poll-driven, so an *idle* page (poller stopped, nothing moving)
+does not notice an outage until something restarts the poller — its content was true when
+rendered, and every path that could act goes through a verb that reads the truth first.
+
+**One live-model observation for filming day:** a `resume` press against the deployed Nova
+planner ended `FAILED` on the 24-node budget — the planner never proposed the parkable email, and
+the dashboard reported it honestly ("Did not complete — the graph stopped after 24 node
+execution(s)…"). A re-press in a fresh world parked normally. Nondeterministic, seen once in
+roughly six deployed runs this session; the remedy on camera is the remedy everywhere: press the
+scenario again. The goldens were regenerated against the deployed build as true PNGs, with
+`case-detail` added — the centrepiece previously had no golden at all.
+
 ### Open decisions
 
 33. **New.** The e2e stack's degradation under repeated local runs is browser memory (documented

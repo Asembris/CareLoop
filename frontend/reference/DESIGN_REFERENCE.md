@@ -17,22 +17,30 @@ Preserve them closely.
 - Fonts: Instrument Sans, Newsreader, IBM Plex Mono, all loaded.
 - Both themes captured for every state.
 
-**The goldens are JPEGs, despite the `.png` extension.** Every file in
-`screenshots/` begins `ff d8 ff e0` — JPEG SOI/JFIF, not the PNG signature — at
-909x540, lossy, cropped to the fold rather than full-page. They are eyeball
-references for a human comparing states. They are **not** pixel goldens, and a
-visual regression test that diffs against them will fail on compression artifacts
-alone. Anything wanting pixel comparison has to capture its own baseline first.
+**Regenerated in session T against the deployed build** (2026-08-17, through the
+CloudFront distribution, real scenario runs). The set predated every session-T
+surface — citations, the documents strip, the observation panel, the trust
+numbers, the stack section — and was a stale reference for anyone comparing.
+Two changes to the medium, both deliberate:
+
+- **They are true PNGs now.** The original set was JPEGs under a `.png`
+  extension (session D1's finding, preserved below for history). Still 909x540,
+  still cropped to the fold, still eyeball references rather than pixel goldens
+  — the states carry live-run data (timestamps, run ids), so a pixel diff
+  against them measures the data, not the design.
+- **`case-detail-light.png` / `case-detail-dark.png` are new.** The case page is
+  the centrepiece after session T and previously had no golden at all.
 
 ## Files
 
 | File | State |
 |---|---|
 | `demo-light.png` / `demo-dark.png` | Scenario launcher, three cards |
-| `home-idle-light.png` / `home-idle-dark.png` | "Nothing needs you right now." — Working + Completed only |
-| `home-needs-you-light.png` / `home-needs-you-dark.png` | Scenario 01 paused at the decision |
-| `trust-light.png` / `trust-dark.png` | Authority model, guarantees, empty security evidence |
-| `under-the-hood-light.png` / `under-the-hood-dark.png` | Drawer open over the dashboard |
+| `home-idle-light.png` / `home-idle-dark.png` | "Nothing needs you right now." — fresh world |
+| `home-needs-you-light.png` / `home-needs-you-dark.png` | Scenario 03 paused at the decision |
+| `case-detail-light.png` / `case-detail-dark.png` | Completed referral: outcome, observation badge, spine with citation chips |
+| `trust-light.png` / `trust-dark.png` | Authority model, guarantees, measured security evidence |
+| `under-the-hood-light.png` / `under-the-hood-dark.png` | Drawer open over the dashboard, stack named |
 
 `original-prototype.dc.html` is the approved design-environment prototype. It is
 reference only — not part of the build, not to be shipped.

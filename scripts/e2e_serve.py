@@ -311,7 +311,15 @@ def scripted_worlds(clinic_url: str) -> SessionWorlds:
             clinic=clinic,
         )
 
-    return SessionWorlds(build)
+    # A short idle TTL, and it is load-bearing for the suite rather than a tuning preference.
+    # Every spec mints its own world, the whole suite mints more than ``DEFAULT_SESSION_LIMIT``
+    # of them, and under the deployed half-hour TTL the cap fills mid-run — measured as
+    # ``sessionFromPage`` timing out on whichever specs run last, an order-dependent failure that
+    # reads as flakiness. A spec touches its world for seconds and the per-test budget is 30s, so
+    # two minutes of idleness is 4x the longest a live spec can go quiet, and worlds from earlier
+    # specs (or an earlier run against the same server) are forgotten instead of counted against
+    # the cap. The deployed default is untouched: a judge's half hour is not a spec's 30 seconds.
+    return SessionWorlds(build, idle_seconds=120.0)
 
 
 def main() -> None:

@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentRun } from "@/types/domain";
+import type { AgentRun, DashboardState } from "@/types/domain";
 import type { CaseCard, CaseDetail, CaseSections, FactView, RunView, TimelineEventView } from "./backend";
+import { emptyDashboard } from "./api";
 import { clockTime } from "./presentation";
 import {
+  OFFLINE_RETRY_MS,
+  POLL_INTERVAL_MS,
   RESET_ATTEMPTS,
   RESET_RETRY_MS,
   RealCareLoopApi,
@@ -523,12 +526,14 @@ describe("getDashboard", () => {
     expect(calls.filter((url) => url.includes("/api/cases/demo-referral"))).toHaveLength(1);
   });
 
-  it("keeps the screen up when the backend is unreachable", async () => {
+  it("keeps the screen up when the backend is unreachable — and says so", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => {
       throw new TypeError("Failed to fetch");
     }));
     const state = await new RealCareLoopApi().getDashboard();
     expect(state.cases).toEqual([]);
+    // The load-bearing half: an unreadable dashboard is never reported as an empty one.
+    expect(state.connection).toBe("unreachable");
   });
 });
 
@@ -551,6 +556,8 @@ function fakeBackend() {
     details: {} as Record<string, CaseDetail>,
     runs: {} as Record<string, RunView>,
     status: {} as Record<string, number>,
+    /** When true, every request throws the way a dead host does. */
+    down: false,
     calls
   };
 
@@ -562,6 +569,7 @@ function fakeBackend() {
         method: init?.method ?? "GET",
         headers: (init?.headers ?? {}) as Record<string, string>
       });
+      if (world.down) throw new TypeError("Failed to fetch");
 
       const forced = world.status[url];
       if (forced && forced !== 202) return new Response("", { status: forced });
@@ -741,6 +749,71 @@ describe("subscribe", () => {
 
     expect(latest!.stage).toBe("EXECUTE");
     expect(latest!.actionIntent).toContain("book_appointment");
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Connection truth
+ * ------------------------------------------------------------------ */
+
+describe("connection truth", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("reports unreachable and keeps the last known cases, never a calm empty dashboard", async () => {
+    const world = fakeBackend();
+    world.sections = { needs_you: [], working: [working()], completed: [] };
+    world.details["demo-referral"] = detail({ state: "EXECUTING" });
+
+    const seen: DashboardState[] = [];
+    const api = new RealCareLoopApi();
+    api.subscribe((state) => seen.push(state));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(seen[0].connection).toBe("live");
+    expect(seen[0].cases).toHaveLength(1);
+
+    world.down = true;
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS + 50);
+
+    const during = seen[seen.length - 1];
+    expect(during.connection).toBe("unreachable");
+    // The stale case is still shown — labelled by the connection, not silently dropped.
+    expect(during.cases).toHaveLength(1);
+  });
+
+  it("keeps probing while unreachable and recovers to live on its own", async () => {
+    const world = fakeBackend();
+    world.sections = { needs_you: [], working: [working()], completed: [] };
+    world.details["demo-referral"] = detail({ state: "EXECUTING" });
+
+    const seen: DashboardState[] = [];
+    const api = new RealCareLoopApi();
+    api.subscribe((state) => seen.push(state));
+    await vi.advanceTimersByTimeAsync(0);
+    world.down = true;
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS + 50);
+    expect(seen[seen.length - 1].connection).toBe("unreachable");
+
+    // Long past the settle grace with nothing moving — the poller must still be probing,
+    // because recovery is the one transition an unreachable page cannot be told about.
+    await vi.advanceTimersByTimeAsync(OFFLINE_RETRY_MS * 4);
+    expect(api.isPolling).toBe(true);
+    const probes = world.calls.filter((c) => c.url === "/api/cases").length;
+    expect(probes).toBeGreaterThan(3);
+
+    world.down = false;
+    await vi.advanceTimersByTimeAsync(OFFLINE_RETRY_MS + 50);
+    expect(seen[seen.length - 1].connection).toBe("live");
+  });
+
+  it("starts from connecting, so the first screen claims nothing it has not read", () => {
+    expect(emptyDashboard().connection).toBe("connecting");
   });
 });
 

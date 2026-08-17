@@ -31,6 +31,23 @@ export function greeting(now: Date = new Date()): string {
   return "Good evening, Maya.";
 }
 
+/** Before the first read has answered, the page may not claim anything about the world. */
+export function connectingHero(): { line: string; sub: string } {
+  return { line: "Connecting to CareLoop…", sub: "Your dashboard will appear in a moment." };
+}
+
+/** The backend cannot be read. Saying so replaces the calm success line entirely: "Nothing needs
+ *  you right now." on an unreachable backend would be a confident falsehood, and this product's
+ *  one claim is that what is on screen is true. */
+export function unreachableHero(showingLastKnown: boolean): { line: string; sub: string } {
+  return {
+    line: "CareLoop can't be reached.",
+    sub: showingLastKnown
+      ? "Retrying automatically — the cases below are the last state this page saw."
+      : "Retrying automatically. Nothing can be shown until the connection returns."
+  };
+}
+
 export function heroLine(needsCount: number, isManualFollowUp: boolean): string {
   if (needsCount === 0) return "Nothing needs you right now.";
   if (needsCount === 1) return isManualFollowUp ? "One case needs a person." : "One decision is waiting.";

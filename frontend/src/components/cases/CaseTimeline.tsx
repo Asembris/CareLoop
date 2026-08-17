@@ -10,7 +10,7 @@ export default function CaseTimeline({ careCase }: { careCase: CareCase }) {
   const { openLens, toggleHood } = useUi();
 
   return (
-    <section style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+    <section data-scene-exclude style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, letterSpacing: "0.12em", color: "var(--muted-foreground)" }}>
         WHAT CARELOOP DID
       </span>

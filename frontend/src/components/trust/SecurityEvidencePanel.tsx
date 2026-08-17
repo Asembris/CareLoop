@@ -31,6 +31,7 @@ export default function SecurityEvidencePanel() {
 
   return (
     <section
+      data-scene-exclude
       style={{
         display: "flex",
         flexDirection: "column",

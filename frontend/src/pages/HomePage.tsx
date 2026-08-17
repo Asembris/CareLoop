@@ -70,8 +70,12 @@ export default function HomePage() {
       >
         <DashboardHero greeting={greeting()} line={hero.line} sub={hero.sub} />
 
+        {/* Each band is marked `data-scene-exclude` rather than each card inside it: the field
+            keeps only its six largest boxes, so one section covers its rows and the gaps between
+            them for one slot instead of many. */}
         {needs.length > 0 ? (
           <section
+            data-scene-exclude
             style={{
               display: "flex",
               flexDirection: "column",
@@ -92,7 +96,7 @@ export default function HomePage() {
         ) : null}
 
         {working.length > 0 ? (
-          <section style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <section data-scene-exclude style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <SectionHeading label="WORKING" />
             <div style={{ display: "flex", flexDirection: "column" }}>
               {working.map((c) => (
@@ -103,7 +107,7 @@ export default function HomePage() {
         ) : null}
 
         {done.length > 0 ? (
-          <section style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <section data-scene-exclude style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <SectionHeading label="COMPLETED" />
             <div style={{ display: "flex", flexDirection: "column" }}>
               {done.map((c) => (
@@ -114,6 +118,7 @@ export default function HomePage() {
         ) : null}
 
         <div
+          data-scene-exclude
           style={{
             // `auto` rather than a fixed spacer: it collapses to the column gap as soon as the
             // sections above are tall enough to fill the screen, so a busy dashboard is not

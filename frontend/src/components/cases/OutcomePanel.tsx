@@ -31,6 +31,7 @@ export default function OutcomePanel({ careCase }: { careCase: CareCase }) {
 
   return (
     <section
+      data-scene-exclude
       style={{
         display: "flex",
         gap: 34,

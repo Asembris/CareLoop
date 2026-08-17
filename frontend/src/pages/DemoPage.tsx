@@ -6,6 +6,23 @@ import { useCareLoop } from "@/hooks/useCareLoop";
 import { ensureSession } from "@/services/api";
 import type { ScenarioId } from "@/types/domain";
 
+/** Which orchestration-field sequence each scenario's own semantics match.
+ *
+ *  A card is mapped only where the field is describing what the scenario actually does. 01 is a
+ *  referral that completes and is verified; 02 is a document that tries to instruct the agent and
+ *  a branch that ends. Both are what the field's `referral` and `injection` sequences draw.
+ *
+ *  **03 is deliberately absent.** It is `resume` — CareLoop stops for a decision it has no
+ *  authority to take, and finishes when the caregiver decides. The field ships a `mismatch`
+ *  sequence, which draws a verification that disagrees and a loop that refuses to close; pointing
+ *  03 at it would animate a failure this scenario does not have. An unmapped card gets the ambient
+ *  field, which asserts nothing. A truthful `resume` sequence is a thing to author, not to borrow.
+ */
+const SCENE_ZONES: Partial<Record<ScenarioId, string>> = {
+  referral: "referral",
+  injection: "injection"
+};
+
 /**
  * The judge's entry point. Starting a scenario calls the adapter and returns to
  * the live dashboard while the run progresses — never a jump to the end state.
@@ -46,7 +63,7 @@ export default function DemoPage() {
           animation: "clFade 500ms ease both"
         }}
       >
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <div data-scene-exclude style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, letterSpacing: "0.12em", color: "var(--muted-foreground)" }}>
             DEMO
           </span>
@@ -70,11 +87,11 @@ export default function DemoPage() {
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: 18 }}>
           {SCENARIOS.map((s) => (
-            <ScenarioCard key={s.id} scenario={s} onPick={() => start(s.id)} />
+            <ScenarioCard key={s.id} scenario={s} onPick={() => start(s.id)} sceneZone={SCENE_ZONES[s.id]} />
           ))}
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 16, paddingTop: 8 }}>
+        <div data-scene-exclude style={{ display: "flex", alignItems: "center", gap: 16, paddingTop: 8 }}>
           <button
             className="cl-solid"
             onClick={() => navigate("/")}
@@ -97,6 +114,7 @@ export default function DemoPage() {
 
         {world && (
           <p
+            data-scene-exclude
             style={{
               margin: 0,
               fontFamily: "var(--font-mono)",

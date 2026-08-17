@@ -29,9 +29,13 @@ export default function App() {
               fontFamily: "var(--font-sans)",
               fontSize: 16,
               lineHeight: 1.5,
-              background: "var(--background)",
+              // Transparent, not `--background`: the paper is painted by html/body in global.css
+              // so the orchestration field can sit between the paper and this element. Repainting
+              // the same token here would put an opaque sheet over the field and hide it
+              // completely — which looks exactly like WebGL having failed.
+              background: "transparent",
               color: "var(--foreground)",
-              transition: "background 400ms ease, color 400ms ease"
+              transition: "color 400ms ease"
             }}
           >
             <AppHeader />

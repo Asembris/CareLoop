@@ -16,7 +16,7 @@
  */
 
 import { expect, test } from "@playwright/test";
-import { scanner } from "./axe";
+import { freezeAnimations, scanner } from "./axe";
 
 /** Deliberately broken, in two independent ways. */
 const BROKEN = `
@@ -38,6 +38,29 @@ test.describe("the scanner", () => {
     const rules = results.violations.map((violation) => violation.id);
 
     expect(rules).toContain("color-contrast");
+  });
+
+  test("still catches it with the orchestration field behind the page", async ({ page }) => {
+    /* `freezeAnimations` hides `#careloop-field` for the duration of a scan, because axe returns
+     * every element above a `<canvas>` as undecided rather than judging it. That rule earns its
+     * place only if a real defect painted over the same canvas is still caught — otherwise it is
+     * an off switch with a comment attached.
+     *
+     * The canvas here is the shipped one, by id and by the styling the app gives it. Nothing is
+     * drawn into it: what is being proven is that hiding it does not take the page with it. */
+    await page.setContent(`
+      <canvas id="careloop-field" aria-hidden="true"
+        style="position:fixed;inset:0;width:100%;height:100%;z-index:0;pointer-events:none"></canvas>
+      <div style="position:relative;z-index:1">${BROKEN}</div>
+    `);
+    await freezeAnimations(page);
+
+    const results = await scanner(page).analyze();
+
+    expect(results.violations.map((violation) => violation.id)).toContain("color-contrast");
+    // And the undecided arm is what the rule is for: without hiding the canvas this is where the
+    // failure would have gone instead, reported as "axe could not tell" rather than as a defect.
+    expect(results.incomplete.map((result) => result.id)).not.toContain("color-contrast");
   });
 
   test("catches a deliberate missing label", async ({ page }) => {

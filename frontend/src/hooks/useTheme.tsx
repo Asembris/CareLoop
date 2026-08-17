@@ -23,8 +23,13 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   });
 
+  /* Both forms of one decision, written together so they cannot drift. The class is what the
+     tokens key off; `data-theme` is the same fact in the form the orchestration field reads — it
+     observes attribute mutations on the first `[data-theme]` element and retones without a reload.
+     This hook stays the source of truth for both; the field never decides a theme, it follows. */
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
+    document.documentElement.setAttribute("data-theme", theme);
   }, [theme]);
 
   const value = useMemo<ThemeContextValue>(

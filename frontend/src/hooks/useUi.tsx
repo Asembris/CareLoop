@@ -1,12 +1,20 @@
 import { createContext, useContext, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import type { EvidenceExcerpt } from "@/types/domain";
+import type { CaseDocument, EvidenceExcerpt, PolicyRefusal } from "@/types/domain";
+
+/** What the lens is currently showing: one extracted fact, or a whole source document with the
+ *  case's policy refusals beside it. The refusals ride along with the document deliberately —
+ *  the pairing "read the attack, see the refusal" is the view, not two views. */
+export type LensView =
+  | { kind: "excerpt"; excerpt: EvidenceExcerpt }
+  | { kind: "document"; document: CaseDocument; refusals: PolicyRefusal[] };
 
 interface UiContextValue {
   hoodOpen: boolean;
   toggleHood(): void;
-  lens: EvidenceExcerpt | null;
+  lens: LensView | null;
   openLens(excerpt: EvidenceExcerpt): void;
+  openDocument(document: CaseDocument, refusals: PolicyRefusal[]): void;
   closeLens(): void;
 }
 
@@ -14,14 +22,16 @@ const UiContext = createContext<UiContextValue | null>(null);
 
 export function UiProvider({ children }: { children: ReactNode }) {
   const [hoodOpen, setHoodOpen] = useState(false);
-  const [lens, setLens] = useState<EvidenceExcerpt | null>(null);
+  const [lens, setLens] = useState<LensView | null>(null);
 
   const value = useMemo<UiContextValue>(
     () => ({
       hoodOpen,
       toggleHood: () => setHoodOpen((v) => !v),
       lens,
-      openLens: (excerpt: EvidenceExcerpt) => setLens(excerpt),
+      openLens: (excerpt: EvidenceExcerpt) => setLens({ kind: "excerpt", excerpt }),
+      openDocument: (document: CaseDocument, refusals: PolicyRefusal[]) =>
+        setLens({ kind: "document", document, refusals }),
       closeLens: () => setLens(null)
     }),
     [hoodOpen, lens]

@@ -61,6 +61,28 @@ export interface BlockedAction {
   rule?: string;
 }
 
+/** One page of a source document, exactly as extraction recorded it, with the values that were
+ *  lifted into facts so the lens can show where each came from. */
+export interface DocumentPage {
+  page: number;
+  text: string;
+  highlights: string[];
+}
+
+/** A source document reassembled from its page facts. The text is quoted, untrusted data — the
+ *  entire point of rendering it is that a reader can see the attack and see that it stayed inert. */
+export interface CaseDocument {
+  name: string;
+  pages: DocumentPage[];
+}
+
+/** One action the policy engine refused on this case, in caregiver words plus the audit fields. */
+export interface PolicyRefusal {
+  text: string;
+  reasonCode: string;
+  ruleId: string;
+}
+
 export interface TimelineEvent {
   id: string;
   time: string;
@@ -120,6 +142,9 @@ export interface CareCase {
   decision?: DecisionView | null;
   events: TimelineEvent[];
   evidence: EvidenceItem[];
+  /** Optional because the mock predates them; the real adapter always fills both. */
+  documents?: CaseDocument[];
+  refusals?: PolicyRefusal[];
 }
 
 export interface AgentRun {

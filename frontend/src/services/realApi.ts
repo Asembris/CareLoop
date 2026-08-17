@@ -31,11 +31,14 @@ import type {
   ApprovalResult,
   CareCase,
   CareLoopApi,
+  CaseDocument,
   ConnectionState,
   DashboardState,
   DecisionView as UiDecisionView,
+  DocumentPage,
   EvidenceExcerpt,
   EvidenceItem,
+  PolicyRefusal,
   PolicyVerdict,
   Readback,
   ScenarioId,
@@ -407,6 +410,57 @@ export function evidenceFor(facts: readonly FactView[]): EvidenceItem[] {
     }));
 }
 
+/** The case's source documents, reassembled from the page facts the grid filters out.
+ *
+ *  This is the deliberate un-hiding of the poisoned document. The page facts carry the entire
+ *  text of everything CareLoop read — the attack included — and until this existed there was no
+ *  way, anywhere in the UI, to read what the flagship scenario is about. Grouped by provenance
+ *  (`source_doc` + `page`), never by parsing the excerpt key, for the same reason `excerptFor`
+ *  matches that way. The highlights are the values extraction actually lifted from that page, so
+ *  the lens can show what became a fact and what stayed inert text. */
+export function documentsFor(facts: readonly FactView[]): CaseDocument[] {
+  const byDoc = new Map<string, DocumentPage[]>();
+  for (const fact of facts) {
+    if (!isExcerptFact(fact.key) || fact.page === null) continue;
+    const pages = byDoc.get(fact.source_doc) ?? [];
+    pages.push({
+      page: fact.page,
+      text: fact.value,
+      highlights: facts
+        .filter(
+          (other) =>
+            !isExcerptFact(other.key) &&
+            other.source_doc === fact.source_doc &&
+            other.page === fact.page &&
+            other.value.length > 0
+        )
+        .map((other) => other.value)
+    });
+    byDoc.set(fact.source_doc, pages);
+  }
+  return Array.from(byDoc.entries()).map(([name, pages]) => ({
+    name,
+    pages: pages.sort((a, b) => a.page - b.page)
+  }));
+}
+
+/** Every action the policy refused on this case, for the document lens's answer panel.
+ *
+ *  Distinct from the spine's fold (`timelineFor` hangs each denial off the event it interrupted):
+ *  this is the flat list that sits beside the document, so a reader can hold the attack text and
+ *  the refusals in one view. `matched_rule_id` is exposed deliberately — invariant 6 withholds it
+ *  from the *model* because denial text re-enters the planner's prompt; a judge reading this panel
+ *  is who the named declarative rule was written for. */
+export function refusalsFor(timeline: readonly TimelineEventView[]): PolicyRefusal[] {
+  return timeline
+    .filter((event) => event.kind === "POLICY_DENY")
+    .map((event) => ({
+      text: blockedFor(payloadString(event, "tool_name"), payloadString(event, "reason_code")).text,
+      reasonCode: payloadString(event, "reason_code"),
+      ruleId: payloadString(event, "matched_rule_id")
+    }));
+}
+
 /* ------------------------------------------------------------------ *
  * The timeline
  * ------------------------------------------------------------------ */
@@ -633,7 +687,9 @@ export function buildCase(
     readback: readbackFor(proposal, verification),
     decision: decisionFor(decision),
     events: timelineFor(timeline),
-    evidence: evidenceFor(detail?.facts ?? [])
+    evidence: evidenceFor(detail?.facts ?? []),
+    documents: documentsFor(detail?.facts ?? []),
+    refusals: refusalsFor(timeline)
   };
 }
 

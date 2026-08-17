@@ -12,8 +12,10 @@ import {
   SLOWEST_OBSERVED_RUN_MS,
   buildCase,
   buildRun,
+  documentsFor,
   evidenceFor,
   latestProposal,
+  refusalsFor,
   latestVerification,
   policyLines,
   timelineFor
@@ -462,6 +464,58 @@ describe("building a run", () => {
     );
     expect(built.stage).toBe("GATE");
     expect(built.stageLabel).toContain("gate");
+  });
+});
+
+describe("documentsFor", () => {
+  it("reassembles a document from its page facts, sorted, with the extracted values attached", () => {
+    const facts = [
+      fact({ key: "excerpt:doc-notice:p2", value: "PAGE TWO TEXT with PT-4417 inside", source_doc: "continuity-notice.pdf", page: 2 }),
+      fact({ key: "excerpt:doc-notice:p1", value: "PAGE ONE TEXT", source_doc: "continuity-notice.pdf", page: 1 }),
+      fact({ key: "patient_id", value: "PT-4417", source_doc: "continuity-notice.pdf", page: 2 }),
+      fact({ key: "excerpt:doc-ref:p1", value: "REFERRAL PAGE", source_doc: "referral.pdf", page: 1 })
+    ];
+
+    const documents = documentsFor(facts);
+    expect(documents.map((d) => d.name)).toEqual(["continuity-notice.pdf", "referral.pdf"]);
+
+    const notice = documents[0];
+    expect(notice.pages.map((p) => p.page)).toEqual([1, 2]);
+    expect(notice.pages[1].text).toContain("PAGE TWO TEXT");
+    // The extracted value is attached to the page it came from, so the lens can mark it.
+    expect(notice.pages[1].highlights).toEqual(["PT-4417"]);
+    expect(notice.pages[0].highlights).toEqual([]);
+  });
+
+  it("never groups by parsing the excerpt key", () => {
+    // Provenance fields are the contract; the key format is not. A key whose middle segment
+    // disagrees with source_doc must follow the provenance.
+    const facts = [fact({ key: "excerpt:something-else-entirely:p1", value: "TEXT", source_doc: "real-name.pdf", page: 1 })];
+    expect(documentsFor(facts).map((d) => d.name)).toEqual(["real-name.pdf"]);
+  });
+});
+
+describe("refusalsFor", () => {
+  it("lists every policy denial with its rule id and reason code", () => {
+    const timeline = [
+      entry("PLAN_PROPOSED", { tool_name: "upload_document", args: {} }),
+      entry("POLICY_DENY", {
+        tool_name: "upload_document",
+        reason_code: "DESTINATION_NOT_TRUSTED",
+        matched_rule_id: "deny-upload-to-untrusted-destination"
+      }),
+      entry("POLICY_ALLOW", { tool_name: "book_appointment" })
+    ];
+
+    const refusals = refusalsFor(timeline);
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0].reasonCode).toBe("DESTINATION_NOT_TRUSTED");
+    expect(refusals[0].ruleId).toBe("deny-upload-to-untrusted-destination");
+    expect(refusals[0].text.toLowerCase()).toContain("upload");
+  });
+
+  it("is empty when nothing was refused, which the lens renders honestly", () => {
+    expect(refusalsFor([entry("POLICY_ALLOW", { tool_name: "book_appointment" })])).toEqual([]);
   });
 });
 

@@ -23,7 +23,7 @@ export default function CasePage() {
           <button
             className="cl-quiet"
             onClick={() => navigate("/")}
-            style={{ alignSelf: "flex-start", background: "transparent", border: 0, padding: "4px 0", fontSize: 13.5, color: "var(--muted-foreground)" }}
+            style={{ alignSelf: "flex-start", background: "transparent", border: 0, padding: "4px 0", fontSize: 13.5, color: "var(--nav-ink, var(--muted-foreground))", transition: "color 120ms ease" }}
           >
             ← Home
           </button>
@@ -56,7 +56,8 @@ export default function CasePage() {
               border: 0,
               padding: "4px 0",
               fontSize: 13.5,
-              color: "var(--muted-foreground)"
+              color: "var(--nav-ink, var(--muted-foreground))",
+              transition: "color 120ms ease"
             }}
           >
             ← Home

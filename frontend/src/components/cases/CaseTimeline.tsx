@@ -81,7 +81,7 @@ export default function CaseTimeline({ careCase }: { careCase: CareCase }) {
                         padding: 0,
                         fontSize: 13,
                         color: "var(--state-controlled)",
-                        borderBottom: "1px dotted currentColor"
+                        borderBottom: "1px var(--chip-underline, dotted) currentColor"
                       }}
                     >
                       {e.source.source}
@@ -117,7 +117,8 @@ export default function CaseTimeline({ careCase }: { careCase: CareCase }) {
                           border: 0,
                           padding: "2px 0 0",
                           fontSize: 13,
-                          color: "var(--muted-foreground)",
+                          color: "var(--nav-ink, var(--muted-foreground))",
+                          transition: "color 120ms ease",
                           borderBottom: "1px solid color-mix(in oklab, currentColor 30%, transparent)"
                         }}
                       >

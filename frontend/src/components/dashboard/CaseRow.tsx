@@ -14,14 +14,17 @@ export default function CaseRow({ careCase }: { careCase: CareCase }) {
       onClick={() => navigate("/case/" + careCase.id)}
       style={{
         textAlign: "left",
-        background: "transparent",
+        // --ground and --edge are owned by components.css. Setting either here would outrank
+        // the hover rule that moves it, which is the exact defect this indirection removes.
+        background: "var(--ground, transparent)",
         border: 0,
-        borderBottom: "1px solid color-mix(in oklab, currentColor 10%, transparent)",
+        borderBottom: "1px solid var(--edge, color-mix(in oklab, currentColor 10%, transparent))",
         padding: "17px 8px 17px 4px",
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
         gap: 20,
+        transition: "background 120ms ease, border-color 120ms ease",
         animation: "clRise 380ms cubic-bezier(0.22,0.61,0.36,1) both"
       }}
     >

@@ -13,7 +13,11 @@ const NAV_BUTTON: CSSProperties = {
   // A nav item may move to another row; its label may never break mid-phrase. Without this,
   // "Under the hood" renders as three stacked words the first time the header runs out of room.
   whiteSpace: "nowrap",
-  transition: "color 160ms ease"
+  // Resting and active ink both come from components.css, keyed on aria-current / aria-expanded
+  // — the same attributes the accessibility layer sets, so the announced state and the rendered
+  // state cannot drift. Assigning `color` here would outrank the hover rule.
+  color: "var(--nav-ink, var(--muted-foreground))",
+  transition: "color 120ms ease"
 };
 
 const UNDERLINE: CSSProperties = {
@@ -66,7 +70,7 @@ export default function AppHeader() {
           className="cl-navlink"
           onClick={() => navigate("/")}
           aria-current={homeActive ? "page" : undefined}
-          style={{ ...NAV_BUTTON, color: homeActive ? "var(--foreground)" : muted }}
+          style={NAV_BUTTON}
         >
           Home
           <span aria-hidden="true" style={{ ...UNDERLINE, opacity: homeActive ? 0.75 : 0 }} />
@@ -76,7 +80,7 @@ export default function AppHeader() {
           className="cl-navlink"
           onClick={() => navigate("/trust")}
           aria-current={trustActive ? "page" : undefined}
-          style={{ ...NAV_BUTTON, color: trustActive ? "var(--foreground)" : muted }}
+          style={NAV_BUTTON}
         >
           Trust
           <span aria-hidden="true" style={{ ...UNDERLINE, opacity: trustActive ? 0.75 : 0 }} />
@@ -86,7 +90,7 @@ export default function AppHeader() {
           className="cl-navlink"
           onClick={toggleHood}
           aria-expanded={hoodOpen}
-          style={{ ...NAV_BUTTON, color: hoodOpen ? "var(--foreground)" : muted }}
+          style={NAV_BUTTON}
         >
           Under the hood
           <span aria-hidden="true" style={{ ...UNDERLINE, opacity: hoodOpen ? 0.75 : 0 }} />
@@ -111,14 +115,14 @@ export default function AppHeader() {
             width: 32,
             height: 32,
             background: "transparent",
-            border: "1px solid color-mix(in oklab, currentColor 14%, transparent)",
+            border: "1px solid var(--edge, color-mix(in oklab, currentColor 14%, transparent))",
             padding: 0,
             borderRadius: "var(--radius-control)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            color: muted,
-            transition: "color 160ms ease, border-color 160ms ease"
+            color: "var(--nav-ink, var(--muted-foreground))",
+            transition: "color 120ms ease, border-color 120ms ease"
           }}
         >
           {theme === "dark" ? (

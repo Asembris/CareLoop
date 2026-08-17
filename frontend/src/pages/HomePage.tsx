@@ -95,11 +95,12 @@ export default function HomePage() {
             className="cl-outline"
             onClick={() => navigate("/demo")}
             style={{
-              background: "transparent",
-              border: "1px solid color-mix(in oklab, currentColor 18%, transparent)",
+              background: "var(--ground, transparent)",
+              border: "1px solid var(--edge, color-mix(in oklab, currentColor 18%, transparent))",
               borderRadius: "var(--radius-control)",
               padding: "8px 14px",
-              fontSize: 13.5
+              fontSize: 13.5,
+              transition: "background 120ms ease, border-color 120ms ease"
             }}
           >
             Run a scenario

@@ -122,8 +122,22 @@ test.describe("the orchestration field", () => {
       await visit(page, route);
 
       const zones = await page.evaluate(() => {
-        const scene = (window as unknown as { __careLoopScene: { layout: { zones: number[][] } } })
-          .__careLoopScene;
+        const scene = (
+          window as unknown as { __careLoopScene: { layout: { zones: number[][] }; refreshZones(): void } }
+        ).__careLoopScene;
+
+        /* Both halves in one synchronous block, after asking the field to re-measure.
+         *
+         * The RAF loop refreshes zones every twelfth frame, so `layout.zones` is a value computed
+         * some frames ago; comparing it against a DOM snapshot taken now is a race, and CI lost it
+         * on /trust — four zones against three visible surfaces, because a late layout shift moved
+         * one of them out of the band between the two reads. Different font metrics on a Linux
+         * runner are enough to change which surfaces sit inside it.
+         *
+         * Waiting for the page to settle would only narrow the window. Measuring both from the
+         * same layout closes it, and `refreshZones` is the same method the loop calls, so this
+         * still exercises the real DOM-to-world bridge rather than a test-only path. */
+        scene.refreshZones();
         const marked = Array.from(document.querySelectorAll("[data-scene-exclude]"));
         const onScreen = marked.filter((el) => {
           const rect = el.getBoundingClientRect();

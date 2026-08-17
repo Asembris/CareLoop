@@ -8,5 +8,9 @@
 .cl-solid:hover { opacity: 0.88; }
 .cl-row:hover { background: color-mix(in oklab, currentColor 4%, transparent); }
 .cl-quiet:hover { opacity: 1; }
-.cl-source:hover { opacity: 0.7; }
+/* Solid-vs-dotted, not opacity. The prototype dimmed to 0.7 on hover, which took the citation
+   ink to 3.14:1 mid-hover — caught by the axe sweep the first time a chip actually rendered
+   (they were dead code against the mock). Contrast applies to every state, hover included, and
+   this is the same "opacity over a passing token" pattern as the three repairs before it. */
+.cl-source:hover { border-bottom-style: solid; }
 .cl-scenario:hover { border-color: color-mix(in oklab, currentColor 32%, transparent); }

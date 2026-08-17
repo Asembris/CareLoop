@@ -34,8 +34,31 @@ export default function HomePage() {
           };
 
   return (
-    <main style={{ display: "flex", justifyContent: "center", padding: "68px var(--page-gutter) 130px" }}>
-      <div style={{ width: "100%", maxWidth: "var(--page-max)", display: "flex", flexDirection: "column", gap: 52 }}>
+    /* The dashboard owns the first screen rather than floating in its top third. Measured before
+       this: content ended at 412px of a 737px viewport and the page did not scroll at all, which
+       reads as a page that stopped loading rather than as restraint.
+
+       `flex: 1` fills whatever the header leaves, and the closing row is pushed down by an auto
+       margin — so it settles at the bottom of the first screen while the dashboard is short, and
+       flows normally below the cases once there are enough of them to fill the screen. Nothing is
+       pinned and nothing scrolls inside anything. */
+    <main
+      style={{
+        flex: 1,
+        display: "flex",
+        justifyContent: "center",
+        padding: "68px var(--page-gutter) 130px"
+      }}
+    >
+      <div
+        style={{
+          width: "100%",
+          maxWidth: "var(--page-max)",
+          display: "flex",
+          flexDirection: "column",
+          gap: 52
+        }}
+      >
         <DashboardHero greeting={greeting()} line={hero.line} sub={hero.sub} />
 
         {needs.length > 0 ? (
@@ -83,6 +106,10 @@ export default function HomePage() {
 
         <div
           style={{
+            // `auto` rather than a fixed spacer: it collapses to the column gap as soon as the
+            // sections above are tall enough to fill the screen, so a busy dashboard is not
+            // padded and a quiet one is not half-empty.
+            marginTop: "auto",
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",

@@ -13,6 +13,7 @@ import {
   outcomeCopy,
   pacedState,
   policyDetailFor,
+  provenanceJourney,
   relativeTime,
   sectionFor,
   slotLabel,
@@ -148,6 +149,41 @@ describe("trust", () => {
   it("never renders the raw tier, including one it has not heard of", () => {
     for (const tier of ["UNTRUSTED", "CONTROLLED", "TRUSTED", "SOMETHING_NEW"]) {
       expect(trustWord(tier)).not.toBe(tier);
+    }
+  });
+
+  it("tells each fact's own provenance story, never one legend for all", () => {
+    // The defect this replaced: a trusted-config fact captioned "Document content — untrusted".
+    const config = provenanceJourney({
+      trust_level: "TRUSTED",
+      citation: "",
+      source_doc: "",
+      validated_by: null
+    });
+    expect(config[0]).toEqual({ tone: "trusted", text: "Configured by you — trusted" });
+    expect(config.map((s) => s.text).join(" ")).not.toContain("untrusted");
+
+    const validated = provenanceJourney({
+      trust_level: "CONTROLLED",
+      citation: "referral.pdf p.2",
+      source_doc: "referral.pdf",
+      validated_by: "iso_datetime"
+    });
+    expect(validated.map((s) => s.tone)).toEqual(["untrusted", "controlled", "muted"]);
+    expect(validated[0].text).toContain("referral.pdf p.2");
+    expect(validated[1].text).toContain("iso_datetime");
+
+    const raw = provenanceJourney({
+      trust_level: "UNTRUSTED",
+      citation: "continuity-notice.pdf p.1",
+      source_doc: "continuity-notice.pdf",
+      validated_by: null
+    });
+    expect(raw[1].text).toContain("Not validated");
+
+    // The one line every journey ends on, because it is the one statement true of every fact.
+    for (const journey of [config, validated, raw]) {
+      expect(journey[journey.length - 1].text).toBe("Never a source of authority");
     }
   });
 });

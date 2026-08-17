@@ -5,11 +5,19 @@ import { useUi } from "@/hooks/useUi";
 import type { LensView } from "@/hooks/useUi";
 import type { CaseDocument, EvidenceExcerpt, PolicyRefusal } from "@/types/domain";
 
+/** Fallback when an excerpt carries no journey (the mock's data predates it). */
 const TIERS = [
   { color: "var(--state-untrusted)", text: "Document content — untrusted" },
   { color: "var(--state-controlled)", text: "Extracted and validated — usable as fact" },
   { color: "var(--brand-accent)", text: "Never a source of authority" }
 ];
+
+const STEP_COLOR: Record<string, string> = {
+  untrusted: "var(--state-untrusted)",
+  controlled: "var(--state-controlled)",
+  trusted: "var(--brand-accent)",
+  muted: "var(--muted-foreground)"
+};
 
 const FRAME = {
   border: "1px solid color-mix(in oklab, currentColor 14%, transparent)",
@@ -117,7 +125,10 @@ function ExcerptBody({ excerpt }: { excerpt: EvidenceExcerpt }) {
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        {TIERS.map((t) => (
+        {(
+          excerpt.journey?.map((step) => ({ color: STEP_COLOR[step.tone] ?? "currentColor", text: step.text })) ??
+          TIERS
+        ).map((t) => (
           <div key={t.text} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 14 }}>
             <span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: "50%", background: t.color }} />
             <span style={{ color: "var(--muted-foreground)" }}>{t.text}</span>

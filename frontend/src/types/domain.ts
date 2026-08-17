@@ -39,6 +39,12 @@ export type EventTone = "neutral" | "decision" | "verified" | "denied" | "untrus
  *  beats a button whose backend state contradicts its own screen. */
 export type ScenarioId = "referral" | "injection" | "resume";
 
+/** One step of a fact's provenance journey, rendered as a dot and a sentence in the lens. */
+export interface ProvenanceStep {
+  tone: "untrusted" | "controlled" | "trusted" | "muted";
+  text: string;
+}
+
 export interface EvidenceExcerpt {
   fact: string;
   source: string;
@@ -46,6 +52,9 @@ export interface EvidenceExcerpt {
   highlight: string;
   after: string;
   digest: string;
+  /** This fact's actual journey. Optional because the mock predates it; the lens falls back to
+   *  the generic tier legend when it is absent. */
+  journey?: ProvenanceStep[];
 }
 
 export interface EvidenceItem {

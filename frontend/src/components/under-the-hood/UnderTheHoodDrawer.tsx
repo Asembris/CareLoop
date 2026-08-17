@@ -1,4 +1,6 @@
+import { useRef } from "react";
 import { useCareLoop } from "@/hooks/useCareLoop";
+import { useDialog } from "@/hooks/useDialog";
 import { useUi } from "@/hooks/useUi";
 import { AGENT_STAGES, AUTHORITY } from "@/data/trust";
 import type { AgentRun, RunStage } from "@/types/domain";
@@ -47,15 +49,25 @@ function runRows(run: AgentRun): { k: string; v: string; tone: string }[] {
  */
 export default function UnderTheHoodDrawer() {
   const { hoodOpen, toggleHood } = useUi();
-  const { run } = useCareLoop();
   if (!hoodOpen) return null;
+  return <HoodPanel onClose={toggleHood} />;
+}
+
+/** Split from the gate above so the dialog hooks only run while the drawer is open. */
+function HoodPanel({ onClose }: { onClose: () => void }) {
+  const { run } = useCareLoop();
+  const panel = useRef<HTMLElement>(null);
+  useDialog(panel, onClose);
 
   const activeIndex = STAGE_ORDER.indexOf(run.stage);
 
   return (
     <aside
+      ref={panel}
       role="dialog"
+      aria-modal="true"
       aria-label="Under the hood"
+      tabIndex={-1}
       style={{
         position: "fixed",
         top: 0,
@@ -91,7 +103,7 @@ export default function UnderTheHoodDrawer() {
         </span>
         <button
           className="cl-quiet"
-          onClick={toggleHood}
+          onClick={onClose}
           aria-label="Close"
           style={{ background: "transparent", border: 0, padding: "4px 8px", fontSize: 16, color: "var(--muted-foreground)" }}
         >

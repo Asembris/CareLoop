@@ -5,6 +5,24 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>CareLoop</title>
+    <!-- Blocking on purpose, and before any stylesheet: the theme class must be on <html> when
+         the first frame paints, or a dark-theme visitor gets one ivory flash on every load. The
+         stored choice wins; with nothing stored, the system preference decides. Kept in sync with
+         useTheme (same key, same rule) — this script decides the first frame, the hook every one
+         after it. -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem("careloop:theme");
+          var dark =
+            stored === "dark" ||
+            (stored !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+          if (dark) document.documentElement.classList.add("dark");
+        } catch (error) {
+          /* No storage access means light, which is the canonical theme anyway. */
+        }
+      })();
+    </script>
     <!-- The three families are self-hosted from /fonts and declared in src/styles/fonts.css.
          Nothing here reaches a CDN: a demo filmed in fallback faces because the network hiccuped
          would lose most of what the design is. -->

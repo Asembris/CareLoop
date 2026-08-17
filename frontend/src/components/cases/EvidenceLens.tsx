@@ -1,4 +1,7 @@
+import { useRef } from "react";
+import { useDialog } from "@/hooks/useDialog";
 import { useUi } from "@/hooks/useUi";
+import type { EvidenceExcerpt } from "@/types/domain";
 
 const TIERS = [
   { color: "var(--state-untrusted)", text: "Document content — untrusted" },
@@ -10,11 +13,21 @@ const TIERS = [
 export default function EvidenceLens() {
   const { lens, closeLens } = useUi();
   if (!lens) return null;
+  return <LensPanel lens={lens} onClose={closeLens} />;
+}
+
+/** Split from the gate above so the dialog hooks only run while the lens is open. */
+function LensPanel({ lens, onClose }: { lens: EvidenceExcerpt; onClose: () => void }) {
+  const panel = useRef<HTMLElement>(null);
+  useDialog(panel, onClose);
 
   return (
     <aside
+      ref={panel}
       role="dialog"
+      aria-modal="true"
       aria-label="Evidence"
+      tabIndex={-1}
       style={{
         position: "fixed",
         top: 0,
@@ -46,7 +59,7 @@ export default function EvidenceLens() {
         </span>
         <button
           className="cl-quiet"
-          onClick={closeLens}
+          onClick={onClose}
           aria-label="Close"
           style={{ background: "transparent", border: 0, padding: "4px 8px", fontSize: 16, color: "var(--muted-foreground)" }}
         >

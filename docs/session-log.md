@@ -5535,6 +5535,111 @@ secret, and rewriting history for it buys nothing.
 
 29, 30, 22, 25, 26, 28. **Unchanged.**
 
+## Session T — 2026-08-17
+
+### Position
+
+**The frontend upgrade, from a critique the browser gave rather than the code.** The deployed demo
+was judged first-hand — every route, both themes, desktop and 375px, four live scenario runs, a
+blocked-`/api` pass — before anything was proposed. The verdict that survived: not shallow, but
+**bland, with the depth real but withheld. The backend is a vault and the UI shows the lobby.**
+That distinction changed the work from "build more" to "stop hiding what exists."
+
+The mockup verdict, accepted in full: take the engineering discipline (degradation guarantees, the
+pre-paint theme bootstrap), none of the aesthetic, none of the WebGL. Aesthetic contradiction
+scores worse than blandness, and the demo's real booking with an independent read-back *is* the
+spectacle — a hero canvas would compete with it.
+
+### What the browser found that nobody had named
+
+- **A network failure rendered as the product's proudest claim.** With every `/api` request
+  aborted, the dashboard was pixel-identical to the healthy empty state: "Nothing needs you right
+  now." — a confident falsehood on the one product whose claim is that the trail tells the truth.
+- **The flagship beat was a model roll.** Two `injection` runs against the deployed demo: one
+  rendered a single blocked line, the other rendered *no trace of any attack at all* — the planner
+  never proposed the unsafe action, and the case completed visually identical to the benign
+  referral, under a scenario card that promised a branch.
+- Citations never rendered (the chip markup was dead code against the real adapter), the poisoned
+  document was invisible, the Trust page displayed em-dashes over committed numbers, and the lens
+  captioned trusted-config facts "Document content — untrusted".
+
+### What shipped — thirteen commits
+
+1. **Connection truth.** `DashboardState.connection` (`connecting / live / unreachable`); the hero
+   asserts the calm line only on `live`; an offline banner + persistent live region; the poller
+   never stops while unreachable (3s probes) because recovery is the one transition an
+   unreachable page cannot otherwise learn. Stale cases stay on screen, labelled.
+2. **Real dialogs + pre-paint theme.** `useDialog` (focus trap, Escape, `aria-modal`, focus
+   return, topmost-wins for stacked drawers); a blocking bootstrap in `index.html` so the first
+   frame paints in the visitor's theme; system preference is the default, only a toggle persists.
+3. **One mobile breakpoint**, three tokens (`--page-gutter`, `--nav-gap`, `--drawer-max`) retuned
+   at 700px rather than per-component media queries.
+4. **The peak: the poisoned document is readable.** `documentsFor` reassembles each source
+   document from the page facts the grid filters out; a SOURCE DOCUMENTS strip on every case; the
+   lens's document mode renders full page text — the attack included — framed as untrusted quoted
+   data with extracted values highlighted, and the case's `POLICY_DENY`s (rule id, reason code)
+   directly beneath. **The floor is deterministic even when the denial is not**: a run where
+   nothing unsafe was proposed still shows the attack as inert data, captioned honestly.
+5. **Citations on the spine.** `EVIDENCE_RECORDED` / `FACT_PROMOTED` entries carry their fact's
+   citation chip; the dead markup came alive; chips open the lens on the real page excerpt.
+6. **`ObservationOutcome` first-class.** The allowlisted `observation` payload renders as a badge
+   with one honest sentence per word, and the withholding of observed *values* is stated on
+   screen — the trust model applying to CareLoop's own UI.
+7. **Per-fact provenance** replaced the static legend; config facts read "Configured by you —
+   trusted". Detection keys on `page === null`, **not** on `source_doc`, which holds the sentinel
+   `"trusted-config"` — measured against the live API after the first cut mislabelled every
+   config fact, the exact defect the change existed to remove.
+8. **The Trust page shows `0 of 320` facing `320 of 320`**, with the reproduce command;
+   `src/data/trust.test.ts` parses `docs/security-evaluation.md` and fails on drift, so the
+   hand-carried number cannot outlive its measurement.
+9. **The recovery loop has a visual home** (five steps, five words, knowledge-never-authority) and
+   Under the Hood names the stack: `GraphBuilder`, `MultiAgentBase`, `BeforeToolCallEvent →
+   cancel_tool`, the `@gated_tool` backstop, Nova via Bedrock, `rules.yaml`, the SDK loop bounds.
+10. **Motion with a job.** A decided card acknowledges only after the backend's 202 — a refused
+    press restores the buttons, because "on it" about a 409 would be a small lie in the exact
+    place the product promises not to tell them. Paced status lines crossfade (220ms). The seal
+    is untouched.
+
+Plus three the new e2e surfaced: the citation chip's hover dimmed to 0.7 opacity and failed AA
+mid-hover (3.14:1) — **the fourth instance of "opacity over a passing token", caught the first
+time the chips actually rendered**; the trust numerals needed `exact` matching because
+"320 of 320" contains "0 of 320"; and the sentinel fix above.
+
+### The suite found its own cap
+
+The full e2e suite now mints more worlds than `DEFAULT_SESSION_LIMIT` in one run, and under the
+deployed half-hour idle TTL the cap filled mid-run — `sessionFromPage` timing out on whichever
+specs ran last, an order-dependent failure that read as flakiness and degraded across consecutive
+runs against a long-lived server. `scripted_worlds` now passes `idle_seconds=120`: a spec touches
+its world for seconds and the per-test budget is 30, so two minutes is 4× the longest a live spec
+can go quiet. The deployed default is untouched. **A harness that shares the production limits
+inherits production's assumptions about how long a visitor lingers.**
+
+### Results
+
+Frontend **143** vitest (119 before), e2e **64** (54 before) including scans of the document lens
+and the offline dashboard in both themes, backend **2544 passed, 37 skipped**, `ruff` clean.
+Two full e2e runs green back to back against one server — the second is the proof the cap fix
+needed. Verified visually against the scripted stack: the attack text, the chips, the journey,
+the MATCHED badge and the trust numerals all render from real backend data.
+
+### Findings, not tasks
+
+- Observed clinic values stay withheld forever, by design; the UI now says so where a reader
+  will wonder, and that footnote is doing the trust model's teaching.
+- The dashboard denial count was cut (fetch-per-settled-case); the count lives on the case page.
+- The injection beat's nondeterminism is a model property. The document floor covers the screen;
+  whether the scenario should guarantee a denial is a backend conversation.
+
+### Open decisions
+
+33. **New.** The e2e stack's degradation under repeated local runs is browser memory (documented
+    in `playwright.config.ts`), not the suite — measured at 55–64 passing varying with free RAM,
+    then 64/64 twice after closing stray processes. Nothing to fix in the suite; worth knowing
+    before reading a local red run as a defect.
+
+29, 30, 31, 22, 25, 26, 28. **Unchanged.**
+
 ## Standing risks
 
 - **The resume is a `CaseStore` reconstruction across a process boundary, not a Strands session

@@ -154,10 +154,12 @@ describe("trust", () => {
 
   it("tells each fact's own provenance story, never one legend for all", () => {
     // The defect this replaced: a trusted-config fact captioned "Document content — untrusted".
+    // `source_doc` holds the sentinel "trusted-config" on real config facts; `page: null` is
+    // what actually says "not from a document", and it is what the derivation keys on.
     const config = provenanceJourney({
       trust_level: "TRUSTED",
-      citation: "",
-      source_doc: "",
+      citation: "trusted-config",
+      page: null,
       validated_by: null
     });
     expect(config[0]).toEqual({ tone: "trusted", text: "Configured by you — trusted" });
@@ -166,7 +168,7 @@ describe("trust", () => {
     const validated = provenanceJourney({
       trust_level: "CONTROLLED",
       citation: "referral.pdf p.2",
-      source_doc: "referral.pdf",
+      page: 2,
       validated_by: "iso_datetime"
     });
     expect(validated.map((s) => s.tone)).toEqual(["untrusted", "controlled", "muted"]);
@@ -176,7 +178,7 @@ describe("trust", () => {
     const raw = provenanceJourney({
       trust_level: "UNTRUSTED",
       citation: "continuity-notice.pdf p.1",
-      source_doc: "continuity-notice.pdf",
+      page: 1,
       validated_by: null
     });
     expect(raw[1].text).toContain("Not validated");

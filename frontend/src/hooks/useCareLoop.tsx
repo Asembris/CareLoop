@@ -15,6 +15,10 @@ interface CareLoopContextValue extends DashboardState {
   /** Ask CareLoop to look at the external record again. Takes no decision id: a re-check is not
    *  a decision, and there is nothing for one to name. */
   recheck(caseId: string): Promise<ApprovalResult>;
+  /** A scenario has been asked for and no case has arrived yet. Set on the press and cleared when
+   *  the backend answers — including when it refuses, because a page claiming work is starting
+   *  over a request that was declined is the same small lie a decided card refuses to tell. */
+  starting: boolean;
   runScenario(id: ScenarioId): void;
   resetDemo(): void;
 }
@@ -26,7 +30,17 @@ export function CareLoopProvider({ children }: { children: ReactNode }) {
 
   // The adapter polls GET /api/cases and re-emits this same shape, stopping once nothing is
   // moving. Every verb restarts it, which is why nothing here has to know when to look again.
-  useEffect(() => api.subscribe(setState), []);
+  useEffect(
+    () =>
+      api.subscribe((next) => {
+        setState(next);
+        // The case arrived, so the press is no longer the most recent thing that happened. Cleared
+        // here as well as on the response so that a later empty dashboard — after a reset, or in a
+        // world that was evicted — cannot inherit a stale "starting" from a run that finished.
+        if (next.cases.length > 0) setStarting(false);
+      }),
+    []
+  );
 
   const approve = useCallback(
     (caseId: string, decisionId: string) => api.approveAction({ caseId, decisionId, approved: true }),
@@ -40,8 +54,17 @@ export function CareLoopProvider({ children }: { children: ReactNode }) {
 
   const recheck = useCallback((caseId: string) => api.recheckCase(caseId), []);
 
+  const [starting, setStarting] = useState(false);
+
   const runScenario = useCallback((id: ScenarioId) => {
-    void api.runScenario(id);
+    setStarting(true);
+    // `caseId` is empty when the POST never returned a run — a refused press, or a backend that
+    // could not be reached through the retry budget. Either way nothing was set in motion, so the
+    // dashboard goes back to saying so rather than waiting on a case that is not coming.
+    void api.runScenario(id).then(
+      (run) => setStarting(Boolean(run.caseId)),
+      () => setStarting(false)
+    );
   }, []);
 
   const resetDemo = useCallback(() => {
@@ -56,13 +79,14 @@ export function CareLoopProvider({ children }: { children: ReactNode }) {
       working: bySection("working"),
       done: bySection("done"),
       caseById: (id: string) => state.cases.find((c) => c.id === id),
+      starting,
       approve,
       reject,
       recheck,
       runScenario,
       resetDemo
     };
-  }, [state, approve, reject, recheck, runScenario, resetDemo]);
+  }, [state, starting, approve, reject, recheck, runScenario, resetDemo]);
 
   return <CareLoopContext.Provider value={value}>{children}</CareLoopContext.Provider>;
 }

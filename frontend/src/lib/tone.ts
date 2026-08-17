@@ -48,6 +48,25 @@ export function unreachableHero(showingLastKnown: boolean): { line: string; sub:
   };
 }
 
+/** Between the press and the first case.
+ *
+ *  Measured on the deployed demo: pressing a scenario navigated home in 67ms and then showed
+ *  "Nothing needs you right now. / Nothing open." for 0.9s on the referral and **2.1s** on the
+ *  injection scenario — the one a judge is most likely to press. The button that starts the demo
+ *  showed nothing happening first.
+ *
+ *  That is the same defect the connection states exist to prevent: a calm line asserted over a
+ *  world the page has not read yet. Here the page has read it, and the claim is wrong for the
+ *  other reason — work was just asked for, so "nothing open" is stale rather than unknown. The
+ *  five locked hero lines are untouched; this is a new state getting its own words, exactly as
+ *  `connectingHero` and `unreachableHero` did. */
+export function startingHero(): { line: string; sub: string } {
+  return {
+    line: "Starting a scenario…",
+    sub: "CareLoop is opening the case. It will appear here in a moment."
+  };
+}
+
 export function heroLine(needsCount: number, isManualFollowUp: boolean): string {
   if (needsCount === 0) return "Nothing needs you right now.";
   if (needsCount === 1) return isManualFollowUp ? "One case needs a person." : "One decision is waiting.";

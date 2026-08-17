@@ -4,7 +4,7 @@ import DashboardHero from "@/components/dashboard/DashboardHero";
 import SectionHeading from "@/components/dashboard/SectionHeading";
 import DecisionCard from "@/components/dashboard/DecisionCard";
 import CaseRow from "@/components/dashboard/CaseRow";
-import { connectingHero, greeting, heroLine, heroSub, unreachableHero } from "@/lib/tone";
+import { connectingHero, greeting, heroLine, heroSub, startingHero, unreachableHero } from "@/lib/tone";
 
 /**
  * Home. Needs you / Working / Completed.
@@ -18,20 +18,29 @@ import { connectingHero, greeting, heroLine, heroSub, unreachableHero } from "@/
  */
 export default function HomePage() {
   const navigate = useNavigate();
-  const { needs, working, done, connection } = useCareLoop();
+  const { needs, working, done, connection, starting } = useCareLoop();
 
   const manualOnly = needs.length === 1 && needs[0].decision?.kind === "NO_SAFE_ACTION_AVAILABLE";
   const anyCases = needs.length + working.length + done.length > 0;
+
+  /* Scoped to "and there is nothing to show yet" rather than to the flag alone. The moment a case
+     exists it speaks for itself, so this can only ever replace the empty state — never a dashboard
+     with work on it, and never a stale flag outliving the run that set it. */
+  const awaitingFirstCase = starting && !anyCases;
 
   const hero =
     connection === "connecting"
       ? connectingHero()
       : connection === "unreachable"
-        ? unreachableHero(anyCases)
-        : {
-            line: heroLine(needs.length, manualOnly),
-            sub: heroSub(needs.length, working.length, done.length)
-          };
+        ? // An unreachable backend outranks a press: the last thing that happened is that the page
+          // stopped being able to read the world, and that is what it has to say.
+          unreachableHero(anyCases)
+        : awaitingFirstCase
+          ? startingHero()
+          : {
+              line: heroLine(needs.length, manualOnly),
+              sub: heroSub(needs.length, working.length, done.length)
+            };
 
   return (
     /* The dashboard owns the first screen rather than floating in its top third. Measured before

@@ -409,6 +409,86 @@ describe("connection truth on screen", () => {
   });
 });
 
+describe("pressing a scenario", () => {
+  const EMPTY: CaseSections = { needs_you: [], working: [], completed: [] };
+
+  /** A backend that answers reads normally and lets the test decide when the scenario POST lands. */
+  function serveWithHeldScenario(scenarioResponse: () => Promise<Response>) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/api/sessions")) return new Response("", { status: 404 });
+        if (init?.method === "POST" && url.includes("/api/demo/scenarios/")) return scenarioResponse();
+        if (url.endsWith("/api/cases")) return new Response(JSON.stringify(EMPTY), { status: 200 });
+        return new Response("", { status: 404 });
+      })
+    );
+  }
+
+  async function press() {
+    show("/demo");
+    await userEvent.click(await screen.findByRole("button", { name: /Schedule a cardiology referral/ }));
+  }
+
+  it("says work is starting rather than flashing the empty dashboard", async () => {
+    // Held open: the real gap between the press and the first case was measured at 0.9s on the
+    // referral and 2.1s on the injection scenario, and for that whole time the dashboard said
+    // "Nothing open." Holding the response makes that window arbitrarily wide instead of racing it.
+    serveWithHeldScenario(() => new Promise<Response>(() => {}));
+    await press();
+
+    await screen.findByText("Starting a scenario…");
+    // The locked calm line is a claim about a world where nothing was asked for. Something was.
+    expect(screen.queryByText("Nothing needs you right now.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Nothing open. CareLoop will pick up the next thing that arrives.")).not
+      .toBeInTheDocument();
+  });
+
+  it("goes back to the empty state when the backend refuses the press", async () => {
+    // Nothing was set in motion, so the dashboard may not keep claiming something is starting —
+    // the same rule the decision card follows when a decision is answered 409.
+    serveWithHeldScenario(async () => new Response("", { status: 500 }));
+    await press();
+
+    await screen.findByText("Nothing needs you right now.");
+    expect(screen.queryByText("Starting a scenario…")).not.toBeInTheDocument();
+  });
+
+  it("hands the screen over as soon as the case exists", async () => {
+    let cases: CaseSections = EMPTY;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/api/sessions")) return new Response("", { status: 404 });
+        if (init?.method === "POST" && url.includes("/api/demo/scenarios/")) {
+          cases = {
+            needs_you: [],
+            working: [card({ case_id: "demo-referral", state: "EXECUTING", section: "working" })],
+            completed: []
+          };
+          return new Response(
+            JSON.stringify({
+              run_id: "run-demo-referral-1",
+              case_id: "demo-referral",
+              state: "RUNNING",
+              executed_nodes: ["dispatch"],
+              error: null
+            }),
+            { status: 202 }
+          );
+        }
+        if (url.endsWith("/api/cases")) return new Response(JSON.stringify(cases), { status: 200 });
+        return new Response("", { status: 404 });
+      })
+    );
+    await press();
+
+    await screen.findByText("Cardiology referral");
+    // The starting line is scaffolding for an empty screen, never something a real case competes with.
+    expect(screen.queryByText("Starting a scenario…")).not.toBeInTheDocument();
+  });
+});
+
 describe("a decision", () => {
   it("posts to approve with the caregiver header when Approve is pressed", async () => {
     const world = serve([

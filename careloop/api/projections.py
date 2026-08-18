@@ -175,6 +175,14 @@ TIMELINE_PAYLOAD_FIELDS: Final[frozenset[str]] = frozenset(
         "verdict",
         "reason_code",
         "matched_rule_id",
+        # the refusal's durable identity, which is how the graph recognises a proposal it has
+        # already refused against unchanged policy inputs and stops replanning. Both are digests
+        # of things this API already exposes — ``args_digest`` covers the ``args`` above, and
+        # ``policy_fingerprint`` covers the case state, facts and approvals the case endpoints
+        # already return — so exposing them reveals nothing new, and they are what lets the panel
+        # explain *why* a case was handed to a caregiver rather than merely that it was.
+        "args_digest",
+        "policy_fingerprint",
         # state machine
         "from",
         "to",

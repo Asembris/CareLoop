@@ -11,7 +11,7 @@
  * asserting. What is being tested here is the decision, not the animation.
  */
 
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "./base";
 import { runScenario, sessionFromPage, withSession } from "./helpers";
 
 /** Open the dashboard, seed a scenario into the world the page is using, and show it. */

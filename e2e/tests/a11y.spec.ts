@@ -37,7 +37,7 @@
  * knowing: the palette was mostly right and the compositing was not.
  */
 
-import { test, type APIRequestContext, type Page } from "@playwright/test";
+import { test, type APIRequestContext, type Page } from "./base";
 import { scan, type Allowance } from "./axe";
 import { runScenario, sessionFromPage, settled } from "./helpers";
 

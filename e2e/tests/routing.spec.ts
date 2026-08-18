@@ -34,7 +34,7 @@
  * exactly the division of responsibility the defect report described.
  */
 
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./base";
 
 /** Paths that match no route. All three must reach the same recovery surface. */
 const UNMATCHED = [

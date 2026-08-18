@@ -7,7 +7,7 @@
  * broken one. Playwright composites, so it can.
  */
 
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./base";
 import { runScenario, sessionFromPage } from "./helpers";
 
 /** Direct children of the reveal container, with the state the hook put on them. */

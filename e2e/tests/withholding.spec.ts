@@ -20,7 +20,7 @@
  * None of that reaches the API. There is something to withhold and it is withheld.
  */
 
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./base";
 import { mintSession, runScenario, withSession } from "./helpers";
 
 /** A hand-written mirror of `careloop.api.projections.TIMELINE_PAYLOAD_FIELDS`.

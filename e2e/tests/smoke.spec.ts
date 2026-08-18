@@ -5,7 +5,7 @@
  * could not reach the origin.
  */
 
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./base";
 
 test.describe("the stack", () => {
   test("serves the API and the app from one origin", async ({ page, request }) => {

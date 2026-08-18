@@ -1,4 +1,5 @@
 import { Route, Routes } from "react-router-dom";
+import { useApplicationReady } from "@/boot/ready";
 import { ThemeProvider } from "@/hooks/useTheme";
 import { CareLoopProvider } from "@/hooks/useCareLoop";
 import { UiProvider } from "@/hooks/useUi";
@@ -13,6 +14,11 @@ import TrustPage from "@/pages/TrustPage";
 import NotFoundPage from "@/pages/NotFoundPage";
 
 export default function App() {
+  /* The last effect of the initial mount, and therefore the earliest moment at which CareLoop is
+     honestly usable. The boot layer listens; nothing in the application does, and nothing here
+     changes if the loader is absent. See `boot/ready.ts` for why this boundary and not another. */
+  useApplicationReady();
+
   return (
     <ThemeProvider>
       <CareLoopProvider>

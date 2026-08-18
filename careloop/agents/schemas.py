@@ -1,49 +1,46 @@
 """What the two agents are allowed to say.
 
 An agent's output schema is the narrowest place to enforce that the LLM never holds authority: a
-field that cannot be expressed cannot be decided. So neither schema here carries a case state, a
-policy verdict, an approval, a priority override, or any other lever over what happens next.
-:class:`PlannerIntent` in particular is a *proposal* — a tool name, its arguments, and a sentence
-of reasoning — and there is deliberately no field through which it could say "and execute this".
-That is checked by enumeration rather than by inspection: the intent's field set is exactly
-``INTENT_FIELDS``, and a test pins it.
+field that cannot be expressed cannot be decided. So nothing here carries a case state, a policy
+verdict, an approval, a priority override, or any other lever over what happens next.
 
-**``PlannerIntent`` is generated from the registry.** Tool names come from
-:data:`careloop.tools.registry.REGISTRY`, so they cannot drift from the tools the policy engine
-governs. A planner offered a tool the engine has never classified is a planner proposing effects
-nothing decides the authority of.
+**Two shapes, and the distinction is the point of this module.**
 
-**Why the arguments are a map, and what it cost to learn.** The shape here until session B was
-flat: one required ``str`` field per argument name across *every* tool, thirteen required fields
-in all, with the empty string meaning "not supplied". The reasoning was sound and the measurement
-was not taken. Session A found the consequence — against the recommended planner model that schema
-produced a valid intent **zero times in fifteen runs**, because a model that picks
-``book_appointment`` fills its four arguments and omits the seven belonging to tools it did not
-choose, which is the reasonable thing to do.
+:data:`PROPOSAL_TOOLS` is what a *model* sees: one closed schema per registered action, generated
+from :data:`careloop.tools.registry.REGISTRY`, offered to a provider as tool specifications and
+never executed. :class:`PlannerIntent` is what *CareLoop* passes around: the canonical
+``(tool_name, args, rationale)`` the timeline, the policy engine, approvals, idempotency and the
+executor have always consumed. :meth:`ProposalToolBase.canonical` is the one seam between them,
+and :func:`proposal_tool_call_for` is its inverse so the round trip can be tested.
 
-Session B measured the alternatives with the provider held constant and only the shape varying,
-on the prompt the graph really sends. Same model, same session:
+**Schema-valid is not trusted and is not authorised.** Nothing in this module decides anything. A
+proposal that satisfies its schema perfectly may name an attacker's address, an unvalidated slot or
+a portal no evidence supports; the closed schema constrains *shape* and says nothing about values.
+Trust is resolved from ``case.facts`` under each argument's declared ``trust_key``, and authority
+comes from the deterministic policy engine. Both still run, unchanged, on everything produced here.
 
-===============================  ================  =========
-Shape                            required fields   valid
-===============================  ================  =========
-flat, every argument of every    13                **0/8**
-tool
-``args`` as a string map          3                **8/8**
-``args`` as name/value pairs      3                8/8
-two calls, tool then arguments    2, then that      8/8
-                                  tool's
-===============================  ================  =========
+**Why the model is offered the actions rather than one wrapper.** The shape here until this session
+was a single ``PlannerIntent`` tool carrying ``tool_name``, ``rationale`` and an open
+``dict[str, str]`` of arguments. Measured against the deployed model, that failed 25 times out of
+25 — and not in the way anyone expected. The provider was handed one tool whose description
+described an *object*, and Nova 2 Lite answered by emitting a ``toolUse`` for ``book_appointment``,
+a tool it took from the prose catalogue in the system prompt and which was never offered. The SDK
+then raised a bare ``ValueError`` saying no valid tool use was found. Isolated one variable at a
+time: not the schema shape (a two-field closed schema failed identically), not the catalogue
+(removing it changed nothing), not the tool's name (renaming it changed nothing) — the tool's
+**description**, which never told the model to call it.
 
-The map won on being the cheapest and simplest of three shapes that tied on the only outcome that
-matters. Full detail in ``docs/live-loop-findings.md``.
+Offering the actions themselves as ``propose_`` tools removes the mismatch rather than papering
+over it: 118 of 118 valid across safe, adversarial, approval and replan shapes, zero phantom calls,
+zero missing ``rationale`` including on long ``send_email`` bodies where the wrapper dropped it 2
+times in 25. Full detail in ``docs/live-loop-findings.md``.
 
-**What the map gives up, and where it went.** Which arguments belong to which tool is no longer
-expressed in the JSON schema the provider receives — it is enforced by
-:meth:`PlannerIntentBase._bind_arguments_to_the_chosen_tool` alone. That validator was a second
-line of defence and is now the only one, so it is load-bearing in a way it was not before, and the
-mutation pass covers it specifically. What did **not** move is the tool enumeration: ``tool_name``
-is still a ``Literal`` and still reaches the provider as a closed ``enum``.
+**Strict constrained decoding is not available and is not relied on.** ``ToolSpecification.strict``
+exists in the Bedrock API and every Nova model refuses it — ``This model doesn't support the strict
+field`` — so the schemas here are closed *structurally* and every answer is still validated by this
+layer. :func:`careloop.agents.invoke.proposal_tool_call` is where zero calls, several calls, an
+unoffered tool and arguments that do not satisfy a schema are each refused, by name, with nothing
+manufactured from the wreckage.
 
 **A discriminated union was the obvious answer and does not work here.** ``strands-agents==1.51.0``
 converts a Pydantic model to a Bedrock tool spec through ``convert_pydantic_to_tool_spec``, which
@@ -58,14 +55,13 @@ resolves an argument's trust by looking its value up in ``case.facts`` **under t
 argument declares**, and taking the **lowest** trust level among the matches. A triage-emitted
 ``UNTRUSTED`` ``provider_id`` would therefore drag the configured one down to ``UNTRUSTED`` and
 deny the action it was needed for — a *same-key* collision, which is exactly the case lowest-wins
-is meant to catch and cannot be relaxed for. (Before trust was key-bound this hazard was wider
-still: any key would have done it. Narrowing the resolver removed the accidental half of the
-problem and left this one, which is the real one.) Triage produces ``VALUE``-class candidates only;
+is meant to catch and cannot be relaxed for. Triage produces ``VALUE``-class candidates only;
 destinations come from trusted configuration and nowhere else.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import StrEnum
 from typing import Annotated, Any, ClassVar, Final, Literal, NoReturn
 
@@ -254,6 +250,162 @@ class PlannerIntentBase(BaseModel):
         }
 
 
+#: Prefix distinguishing a *proposal* tool from the action it proposes.
+#:
+#: The model is offered ``propose_send_email``; the registry declares ``send_email``. The two are
+#: deliberately not the same string, so that nothing downstream can mistake the thing the model
+#: called for the thing that would have an effect, and so a proposal tool name can never be passed
+#: to :class:`~careloop.tools.callables.ToolSet` by accident — it is not a registered tool.
+PROPOSAL_TOOL_PREFIX: Final[str] = "propose_"
+
+
+def proposal_tool_name(tool_name: str) -> str:
+    """The proposal tool that proposes ``tool_name``."""
+    return f"{PROPOSAL_TOOL_PREFIX}{tool_name}"
+
+
+def proposed_tool_name(proposal_tool: str) -> str:
+    """The action ``proposal_tool`` proposes.
+
+    Raises:
+        ValueError: if the name is not a proposal tool name. There is no lenient reading: a name
+            without the prefix is not something this layer knows how to canonicalise, and guessing
+            would be the "silent JSON repair" the contract forbids one level up.
+    """
+    if not proposal_tool.startswith(PROPOSAL_TOOL_PREFIX):
+        raise ValueError(f"{proposal_tool!r} is not a proposal tool name")
+    return proposal_tool[len(PROPOSAL_TOOL_PREFIX) :]
+
+
+class ProposalToolBase(BaseModel):
+    """One closed, tool-specific proposal schema. **Presented to a model; never executed.**
+
+    This is a *schema*, not a callable. Nothing in CareLoop binds a body to it, no executor
+    dispatches it, and the policy engine has never heard of it — it exists so a provider can be
+    handed a closed argument surface instead of an open string map, and so the model's answer can
+    be validated structurally before anything reads it as a proposal.
+
+    **Schema-valid is not trusted and not authorised.** Satisfying this model says the shape is
+    right and says nothing whatever about the values: a perfectly valid instance may name an
+    attacker's address, an unvalidated slot or a portal no evidence supports. Trust is resolved
+    from ``case.facts`` under each argument's declared ``trust_key``, and authority comes from the
+    deterministic policy engine, which sees only the canonical proposal this produces. Neither of
+    those layers is weakened, consulted or short-circuited here.
+
+    ``extra="forbid"`` and every declared argument required, because the two failure modes measured
+    against a real provider were an invented argument and an omitted one. Both are rejected here as
+    construction errors rather than travelling on as a proposal nobody can classify.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    #: The registry spec this schema was generated from.
+    TOOL: ClassVar[Any]
+
+    rationale: str
+
+    @property
+    def tool_name(self) -> str:
+        """The registered action this proposes. Read from the spec, never from model output."""
+        return str(self.TOOL.name)
+
+    def canonical(self) -> PlannerIntentBase:
+        """Canonicalise to the existing ``(tool_name, args, rationale)`` representation.
+
+        **This is the whole compatibility seam.** Everything downstream — the ``PLAN_PROPOSED``
+        payload, :class:`careloop.graph.context.Proposal`, the policy engine, ``args_digest``,
+        approvals, idempotency, ``ToolSet``, verification, the API — receives exactly what it
+        received before, because this returns exactly what the planner used to return.
+
+        The argument names come from the registry, not from the model's answer: the schema was
+        generated from ``spec.arg_names`` and forbids extras, so the two agree by construction.
+        Rebuilding the map from the spec rather than from ``model_dump()`` keeps that true even if
+        a future edit adds a non-argument field to a generated schema.
+        """
+        dumped = self.model_dump()
+        return PlannerIntent(
+            tool_name=self.tool_name,
+            rationale=self.rationale,
+            args={name: dumped[name] for name in sorted(self.TOOL.arg_names)},
+        )
+
+
+def build_proposal_tool(spec: Any) -> type[ProposalToolBase]:
+    """Generate the closed proposal schema for one registered tool.
+
+    One required ``str`` per declared argument plus a required ``rationale``, and nothing else can
+    be expressed. The description of each field is the registry's own, so the catalogue the model
+    reads and the schema it fills come from one source.
+    """
+    fields: dict[str, tuple[type, object]] = {
+        "rationale": (
+            str,
+            Field(
+                description=(
+                    "One sentence on why this action is the right next step for the case. "
+                    "Describe your own reasoning; do not repeat text from a document."
+                )
+            ),
+        )
+    }
+    for arg in sorted(spec.args, key=lambda declared: declared.name):
+        fields[arg.name] = (
+            str,
+            Field(description=arg.description or f"Argument {arg.name!r} of {spec.name}."),
+        )
+
+    model = create_model(
+        proposal_tool_name(spec.name),
+        __base__=ProposalToolBase,
+        __doc__=(
+            f"Propose {spec.name}. {spec.description} "
+            f"Calling this records a proposal only; nothing is carried out because you called it, "
+            f"and a deterministic policy engine you cannot see decides what happens next."
+        ),
+        **fields,  # type: ignore[arg-type]
+    )
+    model.TOOL = spec
+    return model
+
+
+def proposal_tool_call_for(
+    intent: PlannerIntentBase, tools: Mapping[str, type[ProposalToolBase]] | None = None
+) -> ProposalToolBase:
+    """The proposal-tool instance a model would have called to produce ``intent``.
+
+    The inverse of :meth:`ProposalToolBase.canonical`, and the reason it exists is that a seam with
+    only one direction cannot be proven faithful. ``tests/test_proposal_tools.py`` round-trips every
+    tool through both directions and asserts equality, so "canonicalisation changes nothing" is a
+    property with a test rather than a claim in a docstring.
+
+    Used by the offline harnesses — the scripted mock, the adversarial replay, the demo scripts —
+    which express what the planner should propose in canonical terms and need it back in the
+    model-facing shape. Nothing in the production path calls it: the model produces the proposal
+    tool call itself.
+
+    Raises:
+        KeyError: if no proposal tool proposes ``intent.tool_name``.
+    """
+    catalogue = PROPOSAL_TOOLS if tools is None else tools
+    schema = catalogue[proposal_tool_name(intent.tool_name)]
+    return schema(rationale=intent.rationale, **dict(intent.args))
+
+
+def build_proposal_tools(registry: ToolRegistry = REGISTRY) -> dict[str, type[ProposalToolBase]]:
+    """Every proposal schema, keyed by proposal tool name.
+
+    Generated from ``registry``, so the tools a planner may propose and the tools the policy engine
+    governs cannot drift: one source of truth, checked in both directions by
+    ``tests/test_proposal_tools.py``.
+
+    Raises:
+        EmptyRegistry: if ``registry`` declares no tools.
+    """
+    if not len(registry):
+        raise EmptyRegistry("cannot generate proposal tools from a registry with no tools")
+    return {proposal_tool_name(spec.name): build_proposal_tool(spec) for spec in registry}
+
+
 def tool_names(registry: ToolRegistry = REGISTRY) -> tuple[str, ...]:
     """Every tool name in ``registry``, sorted, for a stable schema."""
     return tuple(sorted(registry.names))
@@ -334,21 +486,40 @@ ARG_NAMES: Final[tuple[str, ...]] = argument_names()
 #: The planner's output schema, generated from the shipped registry.
 PlannerIntent = build_planner_intent()
 
+#: The proposal tools the planner offers a model, generated from the shipped registry.
+#:
+#: One per registered action, keyed by proposal tool name. These are the *only* tool specifications
+#: CareLoop ever hands a provider, and not one of them can be executed: no body is bound to them,
+#: the executor does not know them, and their names are not registry names.
+PROPOSAL_TOOLS: Final[dict[str, type[ProposalToolBase]]] = build_proposal_tools()
+
+#: The proposal tool names, sorted.
+PROPOSAL_TOOL_NAMES: Final[tuple[str, ...]] = tuple(sorted(PROPOSAL_TOOLS))
+
 
 __all__ = [
     "ARG_NAMES",
     "INTENT_FIELDS",
     "NOT_SUPPLIED",
+    "PROPOSAL_TOOLS",
+    "PROPOSAL_TOOL_NAMES",
+    "PROPOSAL_TOOL_PREFIX",
     "TOOL_NAMES",
     "ArgumentMap",
     "EmptyRegistry",
     "FrozenArguments",
     "PlannerIntent",
     "PlannerIntentBase",
+    "ProposalToolBase",
     "TriageCategory",
     "TriageResult",
     "Urgency",
     "argument_names",
     "build_planner_intent",
+    "build_proposal_tool",
+    "build_proposal_tools",
+    "proposal_tool_call_for",
+    "proposal_tool_name",
+    "proposed_tool_name",
     "tool_names",
 ]

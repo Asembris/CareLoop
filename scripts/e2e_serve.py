@@ -311,15 +311,31 @@ def scripted_worlds(clinic_url: str) -> SessionWorlds:
             clinic=clinic,
         )
 
-    # A short idle TTL, and it is load-bearing for the suite rather than a tuning preference.
-    # Every spec mints its own world, the whole suite mints more than ``DEFAULT_SESSION_LIMIT``
-    # of them, and under the deployed half-hour TTL the cap fills mid-run — measured as
+    # A short idle TTL and a raised cap, both load-bearing for the suite rather than tuning
+    # preferences.
+    #
+    # Every spec mints its own world, the whole suite mints more than ``DEFAULT_SESSION_LIMIT`` of
+    # them, and under the deployed half-hour TTL the cap fills mid-run — measured as
     # ``sessionFromPage`` timing out on whichever specs run last, an order-dependent failure that
     # reads as flakiness. A spec touches its world for seconds and the per-test budget is 30s, so
     # two minutes of idleness is 4x the longest a live spec can go quiet, and worlds from earlier
     # specs (or an earlier run against the same server) are forgotten instead of counted against
-    # the cap. The deployed default is untouched: a judge's half hour is not a spec's 30 seconds.
-    return SessionWorlds(build, idle_seconds=120.0)
+    # the cap.
+    #
+    # The TTL alone stopped being enough once the suite passed a hundred tests: **the whole run is
+    # shorter than the TTL**, so nothing minted during it is ever evictable and the cap becomes a
+    # hard ceiling on worlds per run. Measured — ``POST /api/sessions`` immediately after a passing
+    # run answers ``503 … all of them are in use``, meaning the suite lands on exactly 64 and any
+    # ordering that reaches it a moment sooner takes the tail of the suite down with it. Lowering
+    # the TTL under the run length instead would evict a world a spec is still between assertions
+    # on, which trades a loud failure for a confusing one.
+    #
+    # 256 is headroom for roughly four times the current suite. It is safe *here* and nowhere else:
+    # the cap exists so a deployed demo cannot be made to hold unbounded worlds by anyone who can
+    # reach the port, and this server is loopback, short-lived and driven by one suite. The
+    # deployed defaults are untouched — a judge's half hour is not a spec's 30 seconds, and a
+    # public port is not this one.
+    return SessionWorlds(build, limit=256, idle_seconds=120.0)
 
 
 def main() -> None:

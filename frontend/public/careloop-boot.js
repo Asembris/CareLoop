@@ -143,8 +143,17 @@
       graphite: "#6b675e", dormant: "#b3afa5", sage: "#4a7d6c", violet: "#7d6a8f",
       forest: "#315e52", sageMark: "#a6b09d"
     },
+    /* LOCAL DELTA 2 — the dark paper is CareLoop's, not the package's.
+     *
+     * Upstream ships `#26241f` and its own token table claims that is
+     * `oklch(0.205 0.008 70)`. It is not: that colour resolves to `#1a1713`,
+     * and `#1a1713` is what `--background` paints in `tokens.css`. Twelve
+     * levels per channel is not a rounding difference — the overlay reads as a
+     * lighter sheet over the page, and it announces itself at exactly the
+     * moment the hand-off is supposed to be seamless. Light was already within
+     * one level and is untouched. */
     dark: {
-      paper: "#26241f", ink: "#e9e5dd", statusInk: "#b5afa4",
+      paper: "#1a1713", ink: "#e9e5dd", statusInk: "#b5afa4",
       graphite: "#9c9689", dormant: "#4d4a44", sage: "#91b4a7", violet: "#b49ec4",
       forest: "#91b4a7", sageMark: "#c7cfbe"
     }
@@ -222,11 +231,31 @@
       this.run();
     }
 
+    /* LOCAL DELTA 3 — the application decides the theme; this only reads its decision.
+     *
+     * In practice the first branch always answers. The blocking script in `index.html` writes
+     * `data-theme` on `<html>` before the first stylesheet and before this file is parsed, and it
+     * has already folded the system preference into that value — so a first-time visitor whose OS
+     * is dark gets a dark loader on the very first painted frame, with no branch here involved.
+     *
+     * The rest of the chain exists so the loader is never the thing that disagrees. `.dark` is the
+     * class every token keys off and is the same decision in the form the stylesheet reads;
+     * storage is the persisted choice; the system preference is the default that choice overrides;
+     * light is canonical. Agreeing with the application matters more than being independently
+     * right, which is why the attribute is consulted first and everything else is a fallback for a
+     * page that has not written one. */
     detectTheme() {
       const root = document.querySelector("[data-theme]");
       if (root) return root.getAttribute("data-theme") === "dark" ? "dark" : "light";
+      if (document.documentElement.classList.contains("dark")) return "dark";
       try {
-        return window.localStorage.getItem("careloop:theme") === "dark" ? "dark" : "light";
+        const stored = window.localStorage.getItem("careloop:theme");
+        if (stored === "dark" || stored === "light") return stored;
+      } catch (_) {
+        /* No storage access. The system preference is still readable. */
+      }
+      try {
+        return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
       } catch (_) {
         return "light";
       }

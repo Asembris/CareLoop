@@ -35,6 +35,12 @@ jobs:
   probe:
     runs-on: ubuntu-latest
 
+    # A bound, for the reason `ci.yml` carries them: GitHub's default is 360 minutes, and this
+    # runs every hour. A probe that hangs against an unreachable host would otherwise burn six
+    # hours per stall, and `verify_deploy.py` speaks HTTP to a machine that may be down — which
+    # is the whole reason it exists. Generous against a slow CloudFront and still a bound.
+    timeout-minutes: 10
+
     steps:
       - uses: actions/checkout@v4
 

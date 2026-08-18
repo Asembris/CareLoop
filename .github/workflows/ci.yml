@@ -18,6 +18,15 @@ jobs:
   check:
     runs-on: ubuntu-latest
 
+    # **Every job carries a bound, and this is the reason.** GitHub's default is 360 minutes, and
+    # on 2026-08-18 the `e2e` job spent all of them: `playwright install --with-deps` blocked
+    # inside `apt-get` and nothing was there to stop it, so a transient stall on a step with
+    # nothing left to do cost six hours of runner time and reported only "cancelled". A bound does
+    # not make anything faster — it makes a hang a *failure*, which is the only thing that can be
+    # acted on. Sized as a comfortable multiple of the measured runtime rather than trimmed to it:
+    # this is a runaway detector, not a performance budget.
+    timeout-minutes: 20
+
     # No secrets, no credentials, no network calls. The suite runs entirely on the mock model
     # provider, so this job must pass on a fork PR with zero secrets configured. The variables
     # below are not credentials — they exist so that if something in the test path ever starts
@@ -92,6 +101,7 @@ jobs:
   # layer has quietly acquired a paid dependency and this job stops being free.
   evals:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     # Same zero-credential contract as `check`. The replay reaches no provider: it drives the graph
     # with a scripted adversarial planner, so a run that somehow started buying calls would fail
@@ -148,6 +158,7 @@ jobs:
   # fuzzing over every declared operation on top.
   schema:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     # The same zero-credential contract as every other Python job here.
     env:
@@ -190,6 +201,7 @@ jobs:
   # sets `testpaths = ["tests"]` so pytest never descends into `frontend/`, and ruff lints Python.
   frontend:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: frontend
@@ -236,6 +248,9 @@ jobs:
   # host, so it is `npm run test:deployed`, by hand or on a schedule, and it never gates a merge.
   e2e:
     runs-on: ubuntu-latest
+    # Two toolchains, a browser, a bundle and two servers, so the widest of the five — and the
+    # one that proved a bound was needed.
+    timeout-minutes: 30
 
     # The same zero-credential contract as `check` and `evals`. The harness binds scripted agents,
     # so a run that somehow started reaching a provider fails here rather than succeeding quietly.
@@ -279,11 +294,53 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('e2e/package-lock.json') }}
 
-      # `--with-deps` on a miss for the system libraries Chromium needs on a bare runner; on a hit
-      # the browser is already there and only those libraries are ensured.
+      # **The browser, and deliberately no longer `--with-deps`.**
+      #
+      # That flag switches to root and runs `apt-get update` and `apt-get install` on *every* run,
+      # cache hit or not — and on 2026-08-18 it stopped there. The log ends mid-`apt-get`, six
+      # hours before GitHub cancelled the job, on a step whose browser was already restored from
+      # the cache above and which therefore had nothing left to do. That is the ordinary way apt
+      # fails on a hosted runner: it blocks on the dpkg lock `unattended-upgrades` holds, and apt
+      # waits for it forever by default.
+      #
+      # The flag also buys nothing here. GitHub's Ubuntu image ships Chrome and Edge, so every
+      # package in Playwright's chromium list is already installed; `--with-deps` was paying an
+      # `apt` round trip, and the risk of one, to install what is present. On a bare container it
+      # would still be the right flag — this repository does not run one.
+      #
+      # Rather than assume any of that, the next step proves it, and repairs it if it ever stops
+      # being true.
       - name: Install Chromium
         working-directory: e2e
-        run: npx playwright install --with-deps chromium
+        timeout-minutes: 10
+        run: npx playwright install chromium
+
+      # The claim above, checked in about a second, and repaired rather than merely reported.
+      #
+      # A missing system library makes every one of the hundred-odd tests below fail together with
+      # the same opaque message; here it is one line naming the package, before anything else runs.
+      # The repair path is the `apt` work that used to be unconditional, now taken only when it is
+      # genuinely needed — and bounded twice, by `DPkg::Lock::Timeout` so apt gives up on a lock
+      # somebody else holds instead of waiting out the job, and by this step's own limit so that a
+      # stall anywhere in it is a failure in ten minutes rather than a cancellation in six hours.
+      #
+      # `install-deps` is called without `sudo`: Playwright escalates on its own, which is what the
+      # "Switching to root user to install dependencies..." line in that cancelled log was.
+      - name: Prove Chromium launches, and install its system libraries only if it cannot
+        working-directory: e2e
+        timeout-minutes: 10
+        run: |
+          launches() {
+            node -e "require('playwright').chromium.launch().then(b => b.close()).catch(e => { console.error(e.message); process.exit(1); })"
+          }
+          if launches; then
+            echo "Chromium launches on this runner as shipped; no system libraries needed."
+            exit 0
+          fi
+          echo "Chromium could not launch. Installing the system libraries it names."
+          sudo apt-get -o DPkg::Lock::Timeout=180 -o Acquire::Retries=3 update
+          npx playwright install-deps chromium
+          launches
 
       # The harness serves this from the API's own origin, which is what keeps the browser
       # same-origin against `/api` with no CORS middleware anywhere. It refuses to start without it.

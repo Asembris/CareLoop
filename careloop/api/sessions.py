@@ -36,10 +36,12 @@ still looking at it.
 from __future__ import annotations
 
 import secrets
+import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable
-from typing import Final
+from functools import wraps
+from typing import Final, cast
 
 from careloop.api.deps import ApiDeps
 from careloop.events.simulator import EventSimulator
@@ -106,6 +108,35 @@ class SessionsAtCapacity(Exception):
     """
 
 
+def serialised[M: Callable[..., object]](method: M) -> M:
+    """Run ``method`` holding the registry's lock.
+
+    The same arrangement, and the same reasoning, as
+    :func:`careloop.state.sqlite_store.serialised`: a served CareLoop reaches this from
+    Starlette's worker pool, so two requests are two threads on one registry.
+
+    **Measured, not anticipated.** Two concurrent ``POST /api/sessions`` against a registry
+    holding anything idle raised ``KeyError`` out of ``_forget_idle`` and answered 500: it
+    snapshots the ids with ``list(self._worlds)`` and then deletes them one at a time, so the
+    second thread deletes what the first already did. Reproduced during a full e2e run, and
+    every other method mutates or reads the same two structures — ``mint`` decides capacity
+    from a length it does not hold, ``world`` calls ``move_to_end`` on an ``OrderedDict``
+    another thread may be iterating.
+
+    Applied to every public method rather than to the eviction alone, for the store's reason:
+    a read taken mid-eviction is a half-answer about which worlds exist.
+    ``tests/test_session_worlds_are_serialised.py`` asserts the decorator is on all of them, so
+    a method added later cannot quietly be the one that is not.
+    """
+
+    @wraps(method)
+    def guarded(self: SessionWorlds, *args: object, **kwargs: object) -> object:
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return cast(M, guarded)
+
+
 class SessionWorlds:
     """Worlds by session id, minted on request and forgotten when they go quiet.
 
@@ -128,7 +159,10 @@ class SessionWorlds:
         self._now = now
         self._worlds: OrderedDict[str, ApiDeps] = OrderedDict()
         self._touched: dict[str, float] = {}
+        # Re-entrant: `mint` holds it and calls `_forget_idle`, which calls `busy`.
+        self._lock = threading.RLock()
 
+    @serialised
     def mint(self) -> str:
         """Create a world and return the id it answers to.
 
@@ -147,6 +181,7 @@ class SessionWorlds:
         self._touched[session_id] = self._now()
         return session_id
 
+    @serialised
     def world(self, session_id: str) -> ApiDeps:
         """The world ``session_id`` names.
 
@@ -163,20 +198,32 @@ class SessionWorlds:
         self._touched[session_id] = self._now()
         return found
 
+    @serialised
     def sessions(self) -> tuple[str, ...]:
         """Every session held, least recently used first."""
         return tuple(self._worlds)
 
+    @serialised
     def busy(self, session_id: str) -> bool:
         """Whether that world has a run in flight."""
         world = self._worlds.get(session_id)
         return world is not None and world.runs.any_in_flight() is not None
 
     async def drain(self) -> None:
-        """Wait for every world's runs to finish. For orderly shutdown."""
-        for world in list(self._worlds.values()):
+        """Wait for every world's runs to finish. For orderly shutdown.
+
+        Not :func:`serialised`, and deliberately: holding a blocking lock across an ``await``
+        would stop the event loop from making the progress being waited for. The snapshot is
+        taken under the lock, which is the part that races an eviction; draining a world that
+        has since been forgotten is harmless, and a world with a run in flight is never
+        evicted anyway.
+        """
+        with self._lock:
+            worlds = list(self._worlds.values())
+        for world in worlds:
             await world.runs.drain()
 
+    @serialised
     def _forget_idle(self) -> None:
         """Drop worlds nobody has touched lately, oldest first, sparing any that is working.
 
@@ -192,6 +239,7 @@ class SessionWorlds:
             del self._worlds[session_id]
             self._touched.pop(session_id, None)
 
+    @serialised
     def __len__(self) -> int:
         return len(self._worlds)
 

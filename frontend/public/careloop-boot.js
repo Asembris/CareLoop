@@ -192,13 +192,28 @@
     { id: "closure", from: "verify", to: "close", q: [742, 288], tone: "sage", w: 1.2, rest: 0.5 }
   ];
 
+  /* LOCAL DELTA 4 — one line, because CareLoop is not doing five things.
+   *
+   * Upstream cycles "Connecting context", "Preparing trusted actions", "Verifying workspace". Not
+   * one of those describes anything happening during this application's startup: there is no async
+   * bootstrap, no session to establish, nothing to verify — the loader is running beside a React
+   * mount and nothing else. Narrating work that is not occurring is the same small lie a decided
+   * card refuses to tell elsewhere in this product, and it would be the one piece of copy in
+   * CareLoop that is decorative rather than true.
+   *
+   * So the copy says only what is true, and the *choreography* carries the orchestration story —
+   * which is what it was drawn to do. The state machine is untouched: every state still exists,
+   * still advances, and still reads back through `CareLoopBootController.state()`. Only the
+   * sentence is the same one. */
+  const PREPARING = "Preparing CareLoop";
+
   const STATUS = {
-    entering: "Preparing your workspace",
-    orchestrating: "Connecting context",
-    authorizing: "Preparing trusted actions",
-    verifying: "Verifying workspace",
-    waiting: "Preparing your workspace",
-    ready: "CareLoop is ready"
+    entering: PREPARING,
+    orchestrating: PREPARING,
+    authorizing: PREPARING,
+    verifying: PREPARING,
+    waiting: PREPARING,
+    ready: PREPARING
   };
 
   const EASE = "cubic-bezier(0.22, 0.61, 0.36, 1)";      // settles into equilibrium
@@ -288,9 +303,19 @@
     build() {
       const root = document.createElement("div");
       root.id = "careloop-boot";
-      root.setAttribute("role", "status");
-      root.setAttribute("aria-live", "polite");
-      root.setAttribute("aria-label", "CareLoop is starting");
+      /* LOCAL DELTA 5 — the loader is decoration and leaves the accessibility tree entirely.
+       *
+       * Upstream makes the overlay a `role="status"` live region with a label, and then changes
+       * the text five times: five polite announcements for an animation, over an application that
+       * is *not* hidden from assistive technology. Nothing here is `inert`, nothing is
+       * `aria-hidden` on `#root`, and no focus is moved — so a screen-reader user is already on
+       * the real, usable CareLoop from the first committed frame, and the honest thing to say
+       * about a picture they cannot see is nothing.
+       *
+       * The same treatment `#careloop-field` gets, for the same reason. It also means the overlay
+       * contains nothing focusable and can trap nothing, which `e2e/tests/boot.spec.ts` asserts
+       * rather than assumes. */
+      root.setAttribute("aria-hidden", "true");
       root.style.cssText = `position:fixed;inset:0;z-index:9000;background:${this.P.paper};display:flex;align-items:center;justify-content:center;font-family:'Instrument Sans',system-ui,sans-serif;opacity:1;transition:opacity 560ms ${EASE_SOFT};`;
       this.root = root;
 
@@ -518,6 +543,9 @@
 
     setStatus(key) {
       if (!STATUS[key]) return;
+      // Nothing to cross-fade when the sentence is the same one; see LOCAL DELTA 4. Without this
+      // the line would blink at every beat, which is exactly the churn the single line removes.
+      if (this.status.textContent === STATUS[key]) return;
       this.status.style.opacity = 0;
       this.at(240, () => {
         this.status.textContent = STATUS[key];

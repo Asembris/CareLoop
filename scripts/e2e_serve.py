@@ -44,7 +44,13 @@ from pydantic import BaseModel
 from strands.types.content import Message
 
 from careloop.agents.planner import PlannerAgent
-from careloop.agents.schemas import PlannerIntent, TriageCategory, TriageResult, Urgency
+from careloop.agents.schemas import (
+    PlannerIntent,
+    TriageCategory,
+    TriageResult,
+    Urgency,
+    proposal_tool_call_for,
+)
 from careloop.agents.triage import TriageAgent
 from careloop.api.app import create_app
 from careloop.api.demo import DEMO_SCENARIOS
@@ -103,6 +109,19 @@ class ScriptedModel(MockModel):
             )
         async for chunk in super().structured_output(
             output_model, prompt, system_prompt=system_prompt, **kwargs
+        ):
+            yield chunk
+
+    async def stream(self, messages, tool_specs=None, system_prompt=None, **kwargs):
+        """The planner's path. Same message when the harness is under-scripted, same reason."""
+        if tool_specs and not self.remaining[2]:
+            raise E2EScriptExhausted(
+                "the e2e harness ran out of scripted proposals while the planner asked for one. "
+                "This is the harness being under-scripted, not CareLoop failing: raise "
+                "SCRIPT_DEPTH in scripts/e2e_serve.py."
+            )
+        async for chunk in super().stream(
+            messages, tool_specs=tool_specs, system_prompt=system_prompt, **kwargs
         ):
             yield chunk
 
@@ -251,7 +270,12 @@ def triage_for() -> TriageAgent:
 
 def planner_for(case_id: str) -> PlannerAgent:
     return PlannerAgent(
-        ScriptedModel(structured_outputs=repeated(SCRIPTS.get(case_id, DEFAULT_SCRIPT)))
+        ScriptedModel(
+            proposal_outputs=[
+                proposal_tool_call_for(intent)
+                for intent in repeated(SCRIPTS.get(case_id, DEFAULT_SCRIPT))
+            ]
+        )
     )
 
 

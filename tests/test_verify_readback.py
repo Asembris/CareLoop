@@ -20,7 +20,13 @@ from helpers import FIXED_NOW
 
 from careloop.agents.planner import PlannerAgent
 from careloop.agents.prompts import planner_user_prompt
-from careloop.agents.schemas import PlannerIntent, TriageCategory, TriageResult, Urgency
+from careloop.agents.schemas import (
+    PlannerIntent,
+    TriageCategory,
+    TriageResult,
+    Urgency,
+    proposal_tool_call_for,
+)
 from careloop.agents.triage import TriageAgent
 from careloop.api.projections import case_detail
 from careloop.events.inbound import REFERRAL_EVENT
@@ -78,11 +84,13 @@ def planner_booking(repeats: int = 1) -> PlannerAgent:
     """
     return PlannerAgent(
         mock_model(
-            structured=[
-                PlannerIntent(
-                    tool_name="book_appointment",
-                    rationale="the referral offers a slot",
-                    args=BOOKING,
+            proposals=[
+                proposal_tool_call_for(
+                    PlannerIntent(
+                        tool_name="book_appointment",
+                        rationale="the referral offers a slot",
+                        args=BOOKING,
+                    )
                 )
             ]
             * repeats

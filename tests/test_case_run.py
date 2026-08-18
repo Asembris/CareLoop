@@ -29,7 +29,13 @@ import pytest
 from helpers import FIXED_NOW
 
 from careloop.agents.planner import PlannerAgent
-from careloop.agents.schemas import PlannerIntent, TriageCategory, TriageResult, Urgency
+from careloop.agents.schemas import (
+    PlannerIntent,
+    TriageCategory,
+    TriageResult,
+    Urgency,
+    proposal_tool_call_for,
+)
 from careloop.agents.triage import TriageAgent
 from careloop.events.inbound import POISONED_EVENT, REFERRAL_EVENT
 from careloop.graph.runner import approve, context_for, open_case, run_case
@@ -88,7 +94,7 @@ def triage_agent() -> TriageAgent:
 
 
 def planner_proposing(*proposals: PlannerIntent) -> PlannerAgent:
-    return PlannerAgent(mock_model(structured=list(proposals)))
+    return PlannerAgent(mock_model(proposals=[proposal_tool_call_for(p) for p in proposals]))
 
 
 def run(store, inbound, planner, *, register_hook: bool = True, executor=None, **bounds):
@@ -660,13 +666,24 @@ class TestT3Idempotency:
 
 
 class TestT4LoopBound:
-    """A planner that never converges is stopped by the SDK, not by a counter and not by a hang."""
+    """A planner that never converges is stopped by the SDK, not by a counter and not by a hang.
+
+    **Every proposal here is different**, and that is what keeps this test load-bearing. The
+    liveness rule added after the B2 safety gate parks a case the moment a *refused* proposal is
+    repeated against unchanged policy inputs, so a planner that repeats itself never reaches the
+    node budget any more — it is handed to a caregiver instead, which
+    ``tests/test_liveness.py`` asserts from the other side. A planner that keeps inventing new
+    proposals is not provably futile, so nothing deduces it should stop, and the SDK's bound is the
+    only thing left. That is exactly the runaway it exists to catch.
+    """
 
     @staticmethod
     def _never_converges(bound: int = 10):
         store = InMemoryCaseStore()
         open_case(store, POISONED_EVENT, case_id=CASE_ID, now=FIXED_NOW)
-        forever = [intent("send_email", to=ATTACKER, subject="s", body="b")] * 200
+        forever = [
+            intent("send_email", to=ATTACKER, subject="s", body=f"body {n}") for n in range(200)
+        ]
         return run(
             store,
             POISONED_EVENT,

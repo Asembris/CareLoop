@@ -30,6 +30,8 @@ from strands.types.content import Message
 from strands.types.streaming import StreamEvent
 from strands.types.tools import ToolSpec
 
+from careloop.agents.schemas import ProposalToolBase
+
 T = TypeVar("T", bound=BaseModel)
 
 
@@ -78,10 +80,12 @@ class MockModel(Model):
         *,
         text_outputs: Iterable[str | Exception] = (),
         structured_outputs: Iterable[BaseModel | Exception] = (),
+        proposal_outputs: Iterable[ProposalToolBase | Exception] = (),
         model_id: str = "mock",
     ) -> None:
         self._text: deque[str | Exception] = deque(text_outputs)
         self._structured: deque[BaseModel | Exception] = deque(structured_outputs)
+        self._proposals: deque[ProposalToolBase | Exception] = deque(proposal_outputs)
         self._config: dict[str, Any] = {"model_id": model_id}
         self._calls: list[RecordedCall] = []
 
@@ -93,9 +97,9 @@ class MockModel(Model):
         return tuple(self._calls)
 
     @property
-    def remaining(self) -> tuple[int, int]:
-        """``(text answers left, structured answers left)``."""
-        return len(self._text), len(self._structured)
+    def remaining(self) -> tuple[int, int, int]:
+        """``(text answers left, structured answers left, proposals left)``."""
+        return len(self._text), len(self._structured), len(self._proposals)
 
     # -- Model interface --------------------------------------------------------------------
 
@@ -112,7 +116,18 @@ class MockModel(Model):
         system_prompt: str | None = None,
         **kwargs: Any,
     ) -> AsyncIterable[StreamEvent]:
-        """Emit a scripted text answer as a well-formed converse event sequence."""
+        """Emit a scripted answer as a well-formed converse event sequence.
+
+        Two shapes, chosen by what the caller offered rather than by a flag. A call carrying tool
+        specifications is a **proposal call** and is answered from ``proposal_outputs`` with a real
+        ``toolUse`` block; a call carrying none is answered from ``text_outputs``. The queues stay
+        separate for the reason the class docstring gives — a test's expectations about proposals
+        should not be coupled to its expectations about text.
+
+        The ``toolUse`` sequence is the shape a real Bedrock stream produces, block start carrying
+        the name and a delta carrying the JSON arguments, so a mock answer exercises the same
+        parsing a provider's answer does.
+        """
         self._calls.append(
             RecordedCall(
                 kind="stream",
@@ -121,6 +136,40 @@ class MockModel(Model):
                 tool_names=tuple(spec["name"] for spec in (tool_specs or [])),
             )
         )
+
+        if tool_specs:
+            if not self._proposals:
+                raise MockScriptExhausted(
+                    f"a proposal call offered {len(tool_specs)} tool(s) with no proposals left"
+                )
+            proposal = self._proposals.popleft()
+            if isinstance(proposal, Exception):
+                raise proposal
+            offered = {spec["name"] for spec in tool_specs}
+            name = type(proposal).__name__
+            if name not in offered:
+                raise MockScriptTypeMismatch(
+                    f"script holds a {name} but the caller offered {sorted(offered)}"
+                )
+            yield {"messageStart": {"role": "assistant"}}
+            yield {
+                "contentBlockStart": {
+                    "start": {"toolUse": {"name": name, "toolUseId": "tu-mock-1"}}
+                }
+            }
+            yield {
+                "contentBlockDelta": {"delta": {"toolUse": {"input": proposal.model_dump_json()}}}
+            }
+            yield {"contentBlockStop": {}}
+            yield {"messageStop": {"stopReason": "tool_use"}}
+            yield {
+                "metadata": {
+                    "usage": {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0},
+                    "metrics": {"latencyMs": 0},
+                }
+            }
+            return
+
         if not self._text:
             raise MockScriptExhausted(
                 f"stream called {len(self._calls)} time(s) with no text answers left to give"
@@ -182,9 +231,10 @@ def mock_model(
     *,
     text: Sequence[str | Exception] = (),
     structured: Sequence[BaseModel | Exception] = (),
+    proposals: Sequence[ProposalToolBase | Exception] = (),
 ) -> MockModel:
     """Convenience constructor for tests."""
-    return MockModel(text_outputs=text, structured_outputs=structured)
+    return MockModel(text_outputs=text, structured_outputs=structured, proposal_outputs=proposals)
 
 
 __all__ = [

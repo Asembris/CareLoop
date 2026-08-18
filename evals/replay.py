@@ -44,7 +44,14 @@ from strands.types.streaming import StreamEvent
 from strands.types.tools import ToolSpec
 
 from careloop.agents.planner import PlannerAgent
-from careloop.agents.schemas import PlannerIntent, TriageCategory, TriageResult, Urgency
+from careloop.agents.schemas import (
+    PlannerIntent,
+    TriageCategory,
+    TriageResult,
+    Urgency,
+    proposal_tool_call_for,
+    proposal_tool_name,
+)
 from careloop.agents.triage import TriageAgent
 from careloop.policy.engine import PolicyEngine
 from careloop.policy.loader import parse_rules, validate_rules_resolve
@@ -258,12 +265,42 @@ class CompliantAdversary(Model):
         system_prompt: str | None = None,
         **kwargs: Any,
     ) -> AsyncIterable[StreamEvent]:
-        # CareLoop drives both agents through structured_output and holds no tools, so nothing in
-        # a replay reaches this. Implemented because Model declares it abstract, and raising would
-        # turn a future refactor into a confusing failure rather than an obvious one.
+        """Answer a proposal call with the one hostile action this adversary always proposes.
+
+        The planner offers one closed ``propose_`` tool per registered action and reads back the
+        one that was called, so this is where the replay's hostile proposal enters. It emits the
+        real converse ``toolUse`` shape rather than a shorthand, for the reason the mock does: a
+        replay should exercise the same parsing a provider's answer gets.
+
+        Triage still arrives through ``structured_output`` below and is unchanged.
+        """
+        self.calls += 1
+        offered = {spec["name"] for spec in (tool_specs or [])}
+        if not offered:
+            # Nothing in a replay reaches this. Implemented because Model declares it abstract.
+            yield {"messageStart": {"role": "assistant"}}
+            yield {"contentBlockDelta": {"delta": {"text": ""}}}
+            yield {"messageStop": {"stopReason": "end_turn"}}
+            return
+
+        call = proposal_tool_call_for(self.intent)
+        name = proposal_tool_name(self.intent.tool_name)
+        if name not in offered:
+            raise AssertionError(
+                f"{name} was not offered to the planner, so this replay cannot propose it. "
+                f"Offered: {sorted(offered)}"
+            )
         yield {"messageStart": {"role": "assistant"}}
-        yield {"contentBlockDelta": {"delta": {"text": ""}}}
-        yield {"messageStop": {"stopReason": "end_turn"}}
+        yield {"contentBlockStart": {"start": {"toolUse": {"name": name, "toolUseId": "tu-adv"}}}}
+        yield {"contentBlockDelta": {"delta": {"toolUse": {"input": call.model_dump_json()}}}}
+        yield {"contentBlockStop": {}}
+        yield {"messageStop": {"stopReason": "tool_use"}}
+        yield {
+            "metadata": {
+                "usage": {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0},
+                "metrics": {"latencyMs": 0},
+            }
+        }
 
     async def structured_output(
         self,
@@ -282,9 +319,6 @@ class CompliantAdversary(Model):
                     patient_id="",
                 )
             }
-            return
-        if output_model is PlannerIntent:
-            yield {"output": self.intent}
             return
         raise AssertionError(
             f"the replay was asked for {output_model.__name__}, which it has no answer for; a new "

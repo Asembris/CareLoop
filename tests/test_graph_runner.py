@@ -15,7 +15,13 @@ from helpers import FIXED_NOW, make_case
 from pydantic import ValidationError
 
 from careloop.agents.planner import PlannerAgent
-from careloop.agents.schemas import PlannerIntent, TriageCategory, TriageResult, Urgency
+from careloop.agents.schemas import (
+    PlannerIntent,
+    TriageCategory,
+    TriageResult,
+    Urgency,
+    proposal_tool_call_for,
+)
 from careloop.agents.triage import TriageAgent
 from careloop.events.inbound import (
     EVENTS,
@@ -80,7 +86,9 @@ def parked_case(store: InMemoryCaseStore, case_id: str = "case-0001"):
         REFERRAL_EVENT,
         case_id=case_id,
         triage=triage_agent(),
-        planner=PlannerAgent(mock_model(structured=[intent("send_email", **EMAIL)])),
+        planner=PlannerAgent(
+            mock_model(proposals=[proposal_tool_call_for(intent("send_email", **EMAIL))])
+        ),
         now=lambda: FIXED_NOW,
     )
     return asyncio.run(run_case(context)), context
@@ -313,7 +321,15 @@ class TestTheRunnerReactsToTheSdkRatherThanCounting:
             triage=triage_agent(),
             planner=PlannerAgent(
                 mock_model(
-                    structured=[intent("send_email", to=attacker, subject="s", body="b")] * 40
+                    # Distinct every time: a planner that *repeats* a refused proposal is now
+                    # parked by the liveness rule and never reaches the bound. A planner that keeps
+                    # inventing new ones is the runaway the bound is for.
+                    proposals=[
+                        proposal_tool_call_for(
+                            intent("send_email", to=attacker, subject="s", body=f"body {n}")
+                        )
+                        for n in range(40)
+                    ]
                 )
             ),
             now=lambda: FIXED_NOW,

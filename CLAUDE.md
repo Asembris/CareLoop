@@ -824,6 +824,56 @@ claim a check that is not happening, while `400` says what is true, which is tha
 is absent. Do not "upgrade" this to `401` for looking more professional. Real authentication sits
 in front of this layer rather than replacing it.
 
+**The two motion layers are decoration, and both are held to it by measurement rather than by
+intent.** The orchestration field paints behind the interface; the boot choreography paints in
+front of it, once per tab, for about a second and a half. With `?boot=off&motion=off`, all eight
+reference states render **byte-identical** to the build before either existed — measured against
+the pre-integration commit, served on its own port, not asserted. `frontend/docs/MOTION.md` and
+`frontend/docs/BOOT.md` hold the detail; four things belong here.
+
+**Readiness is a fact about the application, and it is emitted in exactly one place.**
+`careloop:ready` fires from `useApplicationReady()` in `App`, two frames after the last effect of
+the initial mount — the first committed frame of the routed application, painted. Measured at a
+median of **89 ms**. It deliberately does **not** wait on the backend: `CareLoopProvider` starts
+from `emptyDashboard()` and mints its session lazily, so a loader that waited for `GET /api/cases`
+would sit over an unreachable backend for nine seconds and would hide `connecting` and the
+connection banner — which are designed application states saying something true, not loading states
+standing in for one. Emitted from an effect rather than after `createRoot().render()` because
+`render()` returns before React commits, and the flag against a second announcement is raised **at
+dispatch**, because `StrictMode`'s mount-teardown-remount would otherwise silence it entirely.
+
+**Cosmetic startup code gets two independent removers, for the reason the policy layer has two
+enforcement points.** The loader's own `finalize()` is idempotent, is reached from a `catch` and
+from a deadline armed before the try block, and restores the header's mark by querying
+`[data-boot-hidden]` out of the DOM. `index.html` holds a reaper that shares no reference with it —
+not the controller, not a callback — arms only if `data-booting` is present, and undoes the same
+three things twelve seconds later. The second is what covers a file that 404s, a build that throws
+after the overlay is up, and a `finalize()` a future edit breaks. **The overlay becomes
+`pointer-events: none` in the same statement that starts its fade**; upstream left it invisible and
+still taking clicks for 740 ms, which looks exactly like a broken application and does not appear in
+a screenshot. Every one of these has a mutant that turns the gate red, and the two that initially
+survived are recorded in `BOOT.md` because each exposed a real weakness rather than a weak test.
+
+**The loader says one thing and it is true.** Upstream cycles "Connecting context", "Preparing
+trusted actions", "Verifying workspace". CareLoop performs none of those at startup — there is no
+session to establish, nothing to verify, and the loader runs beside a React mount and nothing else.
+Narrating work that is not occurring is the same small lie a decided card refuses to tell, so the
+copy is "Preparing CareLoop", once, and the choreography carries the orchestration story. The
+overlay is `aria-hidden` with no `role` and no `aria-live` for the matching reason: the application
+underneath is *not* hidden from assistive technology, so announcing a picture five times would be
+noise over a page the reader is already on.
+
+**`SessionWorlds` is serialised, and it was not.** Found by running the e2e suite, not by reading:
+two concurrent `POST /api/sessions` against a registry holding anything idle raised `KeyError` out
+of `_forget_idle` and answered 500 — it snapshots the ids and then deletes them one at a time.
+Starlette runs sync endpoints in a worker pool, so two visitors arriving together are two threads on
+one `OrderedDict`, and `mint` also decided capacity from a length it did not hold. It now carries the
+same `@serialised` decorator `SqliteCaseStore` does, with the same sweep test; `drain` is excluded by
+name because holding a blocking lock across its `await` would stop the loop making the progress it
+waits for, and it takes its snapshot under the lock instead. The reproduction needs
+`sys.setswitchinterval(1e-7)` to open the window a served process opens constantly, which is stated
+in the fixture rather than left as a mystery.
+
 ## Commands
 
 ```bash

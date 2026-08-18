@@ -21,8 +21,11 @@ the integration.
 | `src/styles/global.css` | The paper, and `#root`'s stacking position |
 | `e2e/tests/field.spec.ts` | What the field must never cost |
 
-The boot choreography (`careloop-boot.js`) from the same package is **not** integrated. It is a
-separate phase.
+The boot choreography (`careloop-boot.js`) from the same package is integrated too, and has its own
+record: **[BOOT.md](BOOT.md)**. It is the field's origin state seen close up, it initialises the
+field underneath itself rather than delaying it, and it is decorative on the same terms — with
+`?boot=off&motion=off` the eight reference states are byte-identical to the build before either
+layer existed.
 
 ### The vendored scene, and its one local delta
 

@@ -28,6 +28,11 @@ paper and the interface, self-hosted, outside the React tree, and decorative in
 the strict sense — `?motion=off` gives you the application unchanged, byte for
 byte. See **[docs/MOTION.md](docs/MOTION.md)**.
 
+In front of it on first arrival, the boot choreography: an SVG loader that shows
+the same system assembling itself and hands its mark to the header's. Once per
+tab, gone in about 1.6 seconds, and decorative on the same terms — `?boot=off`
+gives you the application unchanged. See **[docs/BOOT.md](docs/BOOT.md)**.
+
 ## Routes
 
 - `/` — Home: Needs you / Working / Completed

@@ -44,6 +44,25 @@
   const CONDENSED = 1800;     // fast load: every beat, compressed
   const FULL_RUN = 3900;      // full cold-load choreography
 
+  /* LOCAL DELTA 6a — the hand-off has its own deadline, independent of whether it works.
+   *
+   * Upstream's only hard timer forces `ready()` at nine seconds, which decides *when to leave*
+   * and guarantees nothing about *leaving*. Everything after that point — measuring two rects,
+   * moving a node to `document.body`, one transform — is unguarded, and anything that throws in
+   * there leaves an opaque overlay at z-index 9000 over a working application with the navbar
+   * mark invisible underneath it. This is the timer that makes `exit()` finish whatever
+   * `exit()` does.
+   *
+   * Comfortably longer than the exit choreography it bounds, because it is an outer bound and
+   * not a schedule. `index.html` holds a third one at twelve seconds that does not depend on
+   * this object existing at all. */
+  const HARD_EXIT = 2000;
+
+  /* When the overlay starts becoming transparent, measured from the start of the hand-off. The
+   * application is perceptible from here, so it is also the moment the overlay stops taking
+   * clicks. */
+  const FADE_AT = 140;
+
   const FORCE = (() => {
     try {
       return new URLSearchParams(location.search).get("boot");
@@ -196,6 +215,7 @@
       this.t0 = performance.now();
       this.appReady = false;
       this.done = false;
+      this.finalized = false;
       this.timers = [];
       this.ambient = null;
       this.build();
@@ -707,21 +727,50 @@
       this.done = true;
       this.state = "exiting";
       if (this.ambient) clearTimeout(this.ambient);
-      // Set the final line directly — setStatus would re-raise opacity mid-dissolve.
-      this.status.textContent = STATUS.ready;
 
+      /* LOCAL DELTA 6b — the hand-off cannot be the last thing that happens.
+       *
+       * Everything below is cosmetic and everything below can throw: a rect from a node React
+       * unmounted, a transform on an element somebody moved, a style write on a frozen node. The
+       * deadline is armed *first* and outside the try, so it is already running before there is
+       * anything to fail, and `finalize` is idempotent so the ordinary path reaching it first
+       * costs nothing. `setTimeout` rather than a frame, deliberately: `requestAnimationFrame`
+       * does not run in a hidden tab, and a backgrounded boot must still end. */
+      const deadline = setTimeout(() => this.finalize(), HARD_EXIT);
+      this.timers.push(deadline);
+
+      try {
+        this.flip();
+      } catch (error) {
+        console.warn("[CareLoop] boot hand-off failed:", error && error.message);
+        this.finalize();
+      }
+    }
+
+    /** The hand-off itself. Everything here is allowed to throw; nothing here is allowed to be the
+     *  only thing that removes the overlay. */
+    flip() {
       const target = document.querySelector('[data-scene-zone="logo"] svg');
       const boot = this.markWrap.querySelector("svg");
 
-      if (!target || !boot || REDUCED) {
-        this.root.style.opacity = 0;
-        this.at(600, () => this.destroy());
+      /* LOCAL DELTA 6c — the geometry is guarded before it is trusted.
+       *
+       * Upstream divides two widths. A target that has not been laid out gives `scale = 0` and the
+       * mark shrinks to nothing; a boot svg that has not gives `Infinity`, and a `NaN` anywhere in
+       * a transform makes the browser drop the whole declaration without saying so. Neither is a
+       * case worth animating, and both degrade to the same clean fade as a missing target. */
+      const a = boot ? boot.getBoundingClientRect() : null;
+      const b = target ? target.getBoundingClientRect() : null;
+      const scale = a && b && a.width > 0 ? b.width / a.width : NaN;
+
+      if (!target || !boot || REDUCED || !b || b.width <= 0 || !isFinite(scale) || scale <= 0) {
+        this.fade();
+        // Long enough for the 560ms paper fade that `fade()` starts, and no longer. Reduced
+        // motion has no fade to wait for: `global.css` collapses every transition to nothing.
+        this.at(REDUCED ? 220 : FADE_AT + 620, () => this.finalize());
         return;
       }
 
-      const a = boot.getBoundingClientRect();
-      const b = target.getBoundingClientRect();
-      const scale = b.width / a.width;
       const dx = b.left + b.width / 2 - (a.left + a.width / 2);
       const dy = b.top + b.height / 2 - (a.top + a.height / 2);
 
@@ -734,8 +783,13 @@
       flier.style.margin = "0";
       flier.style.zIndex = "9100";
       flier.style.transformOrigin = "center center";
+      /* LOCAL DELTA 6d — both temporary changes to the page announce themselves in the DOM, so a
+       * remover that knows nothing about this object can still undo exactly them and nothing
+       * else. */
+      flier.setAttribute("data-boot-flier", "");
       document.body.appendChild(flier);
       target.style.opacity = "0";
+      target.setAttribute("data-boot-hidden", "");
 
       // Wordmark and status leave; the symbol does not.
       this.word.style.transition = `opacity 240ms ${EASE_SOFT}`;
@@ -743,10 +797,25 @@
       this.status.style.transition = `opacity 240ms ${EASE_SOFT}`;
       this.status.style.opacity = 0;
 
-      // Loader topology quiets, but the structurally relevant lines survive
-      // longest so the field underneath appears to grow out of them.
+      this.fade();
+
+      this.at(200, () => {
+        requestAnimationFrame(() => {
+          flier.style.transition = `transform 620ms ${EASE}`;
+          flier.style.transform = `translate(${dx}px, ${dy}px) scale(${scale})`;
+        });
+      });
+      // Land and swap in one frame — no cross-fade, no ghost.
+      this.at(830, () => this.restoreTarget());
+      this.at(880, () => this.finalize());
+    }
+
+    /** The overlay leaves. Topology quiets, but the structurally relevant lines survive longest so
+     *  the field underneath appears to grow out of them. */
+    fade() {
       for (const p of PATHS) {
-        const el = this.pathEls[p.id];
+        const el = this.pathEls && this.pathEls[p.id];
+        if (!el) continue;
         const keep = p.id === "closure" || p.id === "frame2";
         el.style.transition = `opacity ${keep ? 620 : 300}ms ${EASE_SOFT} ${keep ? 180 : 0}ms`;
         el.setAttribute("opacity", 0);
@@ -756,28 +825,61 @@
         n.g.style.transition = `opacity 300ms ${EASE_SOFT}`;
         n.g.setAttribute("opacity", 0);
       }
-
-      this.at(200, () => { this.root.style.opacity = 0; });
-      this.at(260, () => {
-        requestAnimationFrame(() => {
-          flier.style.transition = `transform 620ms ${EASE}`;
-          flier.style.transform = `translate(${dx}px, ${dy}px) scale(${scale})`;
-        });
+      this.at(FADE_AT, () => {
+        if (!this.root) return;
+        /* LOCAL DELTA 6e — transparent and inert in the same statement.
+         *
+         * Upstream drops the opacity at +200ms and removes the overlay at +940ms, and never sets
+         * `pointer-events`. For those 740ms the application is fully visible and every click lands
+         * on an invisible div at z-index 9000 — which looks exactly like a broken application and
+         * is invisible in a screenshot. The two writes are adjacent so that no future edit can
+         * move one without the other. */
+        this.root.style.pointerEvents = "none";
+        this.root.style.opacity = 0;
       });
-      // Land and swap in one frame — no cross-fade, no ghost.
-      this.at(890, () => {
-        target.style.opacity = "1";
-        flier.remove();
-      });
-      this.at(940, () => this.destroy(flier));
     }
 
-    destroy(flier) {
+    /** Give the header its mark back, and take the flier off the page. Safe to call any number of
+     *  times, including when neither ever happened. */
+    restoreTarget() {
+      const hidden = document.querySelectorAll("[data-boot-hidden]");
+      for (const el of hidden) {
+        el.style.opacity = "";
+        el.removeAttribute("data-boot-hidden");
+      }
+      const flier = document.querySelector("[data-boot-flier]");
+      if (flier) flier.remove();
+    }
+
+    /**
+     * LOCAL DELTA 6f — one teardown, idempotent, and it never depends on how it was reached.
+     *
+     * Upstream's `destroy(flier)` restores nothing: the navbar mark is un-hidden by a `setTimeout`
+     * inside the hand-off, so any path that reaches teardown early or by way of an exception
+     * leaves the header's brand permanently invisible. Restoration moved in here, where it is on
+     * every path by construction rather than on the happy one by arrangement.
+     *
+     * Read back out of the DOM rather than held in a field, for the same reason `index.html`'s
+     * reaper does it: what has to be undone is a fact about the page, and reading it is what makes
+     * this correct even when this object's own state is not.
+     */
+    finalize() {
+      if (this.finalized) return;
+      this.finalized = true;
+      this.done = true;
+
       this.timers.forEach(clearTimeout);
       this.timers = [];
       if (this.ambient) clearTimeout(this.ambient);
+      this.ambient = null;
       if (this.onPointer) window.removeEventListener("pointermove", this.onPointer);
-      if (flier && flier.parentNode) flier.remove();
+
+      try {
+        this.restoreTarget();
+      } catch (error) {
+        /* Nothing useful left to do here, and `index.html`'s reaper covers the same ground. */
+      }
+
       if (this.root && this.root.parentNode) this.root.remove();
       this.svg = this.net = this.pathEls = this.nodeEls = this.ripples = null;
       document.documentElement.removeAttribute("data-booting");

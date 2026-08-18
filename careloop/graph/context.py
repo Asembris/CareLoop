@@ -385,6 +385,113 @@ def prior_denials(case: Case) -> tuple[tuple[str, ReasonCode], ...]:
     return tuple(seen)
 
 
+class Refusal(BaseModel):
+    """One refusal, as the liveness rule identifies it.
+
+    Four parts, and each is load-bearing. ``tool_name`` and ``args_digest`` are the existing
+    identity of an exact call — the same pair an :class:`~careloop.state.case.Approval` is keyed on
+    — so this reuses the project's action identity rather than inventing a second one.
+    ``reason_code`` distinguishes two refusals of the same call for different reasons.
+    ``fingerprint`` is what makes the identity *conditional*: it says which case the verdict was
+    reached against, so a refusal stops matching the moment the inputs to that verdict change.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    tool_name: str
+    args_digest: str
+    reason_code: str
+    fingerprint: str
+
+
+def policy_fingerprint(case: Case) -> str:
+    """Digest of everything a policy verdict can depend on.
+
+    **Deliberately minimal, and minimal is the safe direction.** The engine reads exactly three
+    things about a case: its state (``case_state_in`` / ``case_state_not_in``), its facts (through
+    :func:`careloop.policy.engine.resolve_trust`, under each argument's declared ``trust_key``) and
+    its approvals (``args_approved``). Nothing else can change a verdict, so nothing else belongs
+    here.
+
+    Including more would be actively worse rather than merely redundant. This fingerprint is what
+    decides whether a repeated proposal counts as *no progress*; a component that churns without
+    affecting a verdict — the timeline, the action ledger, a version counter — would make every
+    fingerprint unique, no repeat would ever be recognised, and the liveness rule would quietly
+    stop working while still looking present.
+
+    Reuses :func:`careloop.tools.idempotency.args_digest` rather than hashing here, so there is one
+    canonicalisation in the system and this cannot drift from the one approvals and idempotency
+    keys already use.
+    """
+    facts = "|".join(sorted(f"{fact.key}={fact.value}@{fact.trust_level}" for fact in case.facts))
+    approvals = "|".join(
+        sorted(
+            f"{approval.tool_name}:{approval.args_digest}:{approval.status}"
+            for approval in case.approvals
+        )
+    )
+    return args_digest({"state": str(case.state), "facts": facts, "approvals": approvals})
+
+
+def prior_refusals(case: Case) -> tuple[Refusal, ...]:
+    """Every refusal recorded on ``case``, in order.
+
+    Read from the ``POLICY_DENY`` timeline entries rather than from a field, for the reason
+    :func:`latest_proposal` gives: the timeline is the durable, ordered, append-only record of what
+    happened, and a second derivation could disagree with the audit trail.
+
+    Entries written before this rule existed carry no ``args_digest`` and no ``policy_fingerprint``
+    and are skipped. That is the fail-safe direction: an unidentifiable past refusal cannot match a
+    new one, so a legacy case gets a fresh replan budget rather than being parked on evidence
+    nobody recorded.
+    """
+    found: list[Refusal] = []
+    for event in case.timeline:
+        if event.kind is not TimelineKind.POLICY_DENY:
+            continue
+        digest = event.payload.get("args_digest")
+        fingerprint = event.payload.get("policy_fingerprint")
+        if not digest or not fingerprint:
+            continue
+        found.append(
+            Refusal(
+                tool_name=event.payload["tool_name"],
+                args_digest=digest,
+                reason_code=event.payload.get("reason_code", ""),
+                fingerprint=fingerprint,
+            )
+        )
+    return tuple(found)
+
+
+def refusals_at(case: Case, fingerprint: str) -> int:
+    """How many refusals ``case`` has collected against these exact policy inputs.
+
+    Counts only refusals at ``fingerprint``, so the count resets whenever the case materially
+    changes — new evidence, a promotion, a caregiver's decision, a state transition. A case that
+    keeps *making progress* therefore never runs this budget down.
+    """
+    return sum(1 for refusal in prior_refusals(case) if refusal.fingerprint == fingerprint)
+
+
+def is_repeat_refusal(case: Case, refusal: Refusal) -> bool:
+    """Whether ``refusal`` has already happened on ``case`` under identical policy inputs.
+
+    This is the deterministic half of the liveness rule, and it is deterministic because
+    :meth:`careloop.policy.engine.PolicyEngine.evaluate` is pure: the same tool, the same canonical
+    arguments and the same case give an equal ``Decision`` every time. So a proposal that repeats
+    one already refused at the same fingerprint is *provably* futile — not heuristically stuck, not
+    probably looping. Replanning again cannot produce a different verdict, and the case belongs
+    with a person.
+
+    It is scoped to the fingerprint precisely so a legitimate reconsideration is not caught: the
+    same call after new trusted evidence, a promotion, an approval or a re-check is a different
+    question and is evaluated on its merits. Nothing is blacklisted, and no tool is ever refused
+    permanently.
+    """
+    return refusal in prior_refusals(case)
+
+
 def approval_id_for(seq: int) -> str:
     """A durable identity for one *request* for human authority.
 

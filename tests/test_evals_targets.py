@@ -391,8 +391,18 @@ class TestTheGatedTargetRunsTheShippedConfiguration:
 
         assert USED == SHIPPED
 
-    def test_a_case_that_cannot_converge_still_terminates(self) -> None:
-        """Invariant 5 under adversarial load: the SDK's bound stops it, nothing here does."""
+    def test_a_case_that_cannot_converge_parks_rather_than_exhausting_the_budget(self) -> None:
+        """It used to end ``FAILED`` on the node budget. That was the defect the safety gate found.
+
+        A planner that repeats one refused proposal is making no progress, and CareLoop now
+        recognises that deterministically and hands the case to a person. ``FAILED`` is reserved for
+        something breaking; every action being correctly refused is the system working, and the
+        resting state has to say so.
+
+        Invariant 5 is untouched — the SDK's bound is still there and still the backstop. What
+        changed is that a domain outcome no longer depends on reaching it, which is what
+        ``tests/test_liveness.py`` pins from the other side.
+        """
         run = asyncio.run(
             run_gated_pipeline(
                 ATTACK,
@@ -402,5 +412,6 @@ class TestTheGatedTargetRunsTheShippedConfiguration:
             )
         )
 
-        assert run.final_state == str(CaseState.FAILED)
+        assert run.final_state == str(CaseState.AWAITING_HUMAN)
         assert run.external_effects == 0
+        assert run.denials, "the case must have been refused, not merely stopped"

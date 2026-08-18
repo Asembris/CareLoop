@@ -46,19 +46,24 @@ module names that function, which ``tests/test_recheck_writers.py`` enforces.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Final
 
+from pydantic import BaseModel, ConfigDict
 from strands.agent import AgentResult
 from strands.multiagent.base import MultiAgentBase, MultiAgentResult, NodeResult, Status
 from strands.telemetry.metrics import EventLoopMetrics
 
 from careloop.graph.context import (
     Proposal,
+    Refusal,
     RunContext,
     approval_for,
     approval_id_for,
     entered_verifying_from,
+    is_repeat_refusal,
     latest_proposal,
+    policy_fingerprint,
+    refusals_at,
 )
 from careloop.graph.extract import record_document, validate_and_promote
 from careloop.graph.verify import (
@@ -305,9 +310,16 @@ class GateNode(DeterministicNode):
             return "gate: nothing to decide"
 
         decision = self.context.gate.decide(proposal.tool_name, proposal.args)
+        # Computed from the case the engine just judged, before this verdict is appended. Nothing
+        # the fingerprint reads is changed by appending a timeline entry, so the order is not
+        # load-bearing — but reading it here makes "these are the inputs that produced this
+        # verdict" true by construction rather than by inspection.
+        fingerprint = policy_fingerprint(case)
 
         if decision.verdict is Verdict.ALLOW:
-            case = _record_decision(case, decision, TimelineKind.POLICY_ALLOW, self.context.now())
+            case = _record_decision(
+                case, decision, TimelineKind.POLICY_ALLOW, self.context.now(), fingerprint
+            )
             case = transition(
                 case,
                 CaseState.READY_TO_EXECUTE,
@@ -317,7 +329,7 @@ class GateNode(DeterministicNode):
             )
         elif decision.verdict is Verdict.REQUIRE_HUMAN:
             case = _record_decision(
-                case, decision, TimelineKind.POLICY_REQUIRE_HUMAN, self.context.now()
+                case, decision, TimelineKind.POLICY_REQUIRE_HUMAN, self.context.now(), fingerprint
             )
             case = _request_approval(case, proposal, decision, self.context.now())
             case = transition(
@@ -328,11 +340,21 @@ class GateNode(DeterministicNode):
                 now=self.context.now(),
             )
         else:
-            case = _record_decision(case, decision, TimelineKind.POLICY_DENY, self.context.now())
-            if _every_tool_has_been_refused(case):
-                case = _park_with_nothing_safe_to_do(case, self.context.now())
+            refusal = Refusal(
+                tool_name=decision.tool_name,
+                args_digest=args_digest(decision.args),
+                reason_code=str(decision.reason_code) if decision.reason_code else "",
+                fingerprint=fingerprint,
+            )
+            # Asked before this refusal is written, or every refusal would repeat itself.
+            repeated = is_repeat_refusal(case, refusal)
+            case = _record_decision(
+                case, decision, TimelineKind.POLICY_DENY, self.context.now(), fingerprint
+            )
+            if (reason := _nothing_left_to_try(case, fingerprint, repeated=repeated)) is not None:
+                case = _park_with_nothing_safe_to_do(case, self.context.now(), reason)
                 self.context.commit(case, expected_version=base)
-                return "gate: every action was refused; parked for a caregiver"
+                return f"gate: {reason.summary}; parked for a caregiver"
 
         self.context.commit(case, expected_version=base)
         return f"gate: {decision.verdict} for {proposal.tool_name}"
@@ -714,12 +736,20 @@ class VerifyNode(DeterministicNode):
 # -- shared writers --------------------------------------------------------------------------
 
 
-def _record_decision(case: Case, decision: Decision, kind: TimelineKind, now) -> Case:
+def _record_decision(
+    case: Case, decision: Decision, kind: TimelineKind, now, fingerprint: str
+) -> Case:
     """Write one policy verdict to the timeline, diagnostics and all.
 
     The timeline is where the detail belongs: the matched rule, every argument's class, the trust
     each value resolved to, and the raw arguments. What the planner is later told is rebuilt from
     ``payload["reason_code"]`` alone.
+
+    ``args_digest`` and ``policy_fingerprint`` are recorded so a refusal has a durable identity the
+    liveness rule can recognise later — see :func:`careloop.graph.context.is_repeat_refusal`. Both
+    are digests of things the entry already carries or the case already holds, so neither adds a
+    value to the trail that was not there; recording them means the rule reads the audit trail
+    rather than keeping a second, parallel memory of what was refused.
     """
     return append_event(
         case,
@@ -735,6 +765,8 @@ def _record_decision(case: Case, decision: Decision, kind: TimelineKind, now) ->
             "verdict": str(decision.verdict),
             "reason_code": str(decision.reason_code) if decision.reason_code else "",
             "matched_rule_id": decision.matched_rule_id or "",
+            "args_digest": args_digest(decision.args),
+            "policy_fingerprint": fingerprint,
         },
         now=now,
     )
@@ -783,20 +815,105 @@ def _request_approval(case: Case, proposal: Proposal, decision: Decision, now) -
     )
 
 
+#: How many refusals one unchanged case may collect before CareLoop stops and asks a person.
+#:
+#: Sized against the node budget rather than against the registry, which is the whole point of the
+#: change. One replan costs two node executions (``plan`` then ``gate``); a run spends three
+#: reaching the first one (``dispatch``, ``triage``, ``evidence``). Six refusals therefore cost
+#: ``3 + 2 * 6 = 15`` of :data:`careloop.graph.builder.MAX_NODE_EXECUTIONS`, leaving room for the
+#: park itself and for a case that arrives mid-flight — so this bound is always reached first and
+#: the budget stays what it is meant to be, a runaway detector.
+#: ``tests/test_liveness.py`` asserts that arithmetic rather than trusting this comment.
+MAX_REFUSALS_PER_FINGERPRINT: Final[int] = 6
+
+
+class NothingLeftToTry(BaseModel):
+    """Why CareLoop stopped replanning. Timeline-only; never shown to a model."""
+
+    model_config = ConfigDict(frozen=True)
+
+    summary: str
+    diagnostic: str
+
+
+def _nothing_left_to_try(
+    case: Case, fingerprint: str, *, repeated: bool
+) -> NothingLeftToTry | None:
+    """Whether replanning can still achieve anything, and if not, why not.
+
+    **Three sufficient conditions, none of them necessary, and the order is the order of strength.**
+
+    ``repeated`` — the planner has proposed a call already refused under identical policy inputs.
+    Provably futile: :meth:`careloop.policy.engine.PolicyEngine.evaluate` is pure, so the verdict
+    cannot come out differently. This is the condition the old rule was missing, and the one the
+    safety gate caught: measured against the deployed model, an injection-only case had the planner
+    repeat one refused tool seven times.
+
+    ``refusals_at(...) >= MAX_REFUSALS_PER_FINGERPRINT`` — the planner keeps producing *new*
+    proposals and every one is refused. Nothing is provably futile here, so this is a bound rather
+    than a deduction, and it is the reason liveness no longer depends on the planner eventually
+    naming a particular tool. Scoped to the fingerprint, so it resets on any material change.
+
+    ``_every_tool_has_been_refused`` — kept, because it remains true and remains a good reason to
+    stop; it is simply no longer *load-bearing*. It used to be the only condition, and it silently
+    assumed the planner would enumerate the whole registry. It does not: in ten real-graph runs the
+    deployed model proposed four distinct tools and never ``book_appointment``, so this condition
+    was unsatisfiable, the case burned all 24 node executions and ended ``FAILED`` — a defence
+    reported as a fault.
+
+    Returns ``None`` when replanning may continue, which is the ordinary case: a denied proposal
+    goes back to the planner and the run continues.
+    """
+    if repeated:
+        return NothingLeftToTry(
+            summary="the planner repeated a refused proposal",
+            diagnostic=(
+                "the planner reproposed a call already refused against identical policy inputs "
+                "— same tool, same canonical arguments, same reason, same case state, evidence "
+                "and approvals. Policy evaluation is pure, so the verdict cannot change and "
+                "replanning again would only spend the node budget. Nothing is blacklisted: this "
+                "exact call becomes proposable again the moment the case materially changes."
+            ),
+        )
+
+    refusals = refusals_at(case, fingerprint)
+    if refusals >= MAX_REFUSALS_PER_FINGERPRINT:
+        return NothingLeftToTry(
+            summary=f"{refusals} proposals were refused without the case changing",
+            diagnostic=(
+                f"{refusals} proposals have now been refused against unchanged policy inputs, "
+                f"reaching MAX_REFUSALS_PER_FINGERPRINT={MAX_REFUSALS_PER_FINGERPRINT}. The "
+                f"planner is still producing new proposals, so none is provably futile, but "
+                f"nothing about the case has moved and a person is better placed than another "
+                f"replan. The count is scoped to these exact policy inputs and resets on any "
+                f"material change."
+            ),
+        )
+
+    if _every_tool_has_been_refused(case):
+        return NothingLeftToTry(
+            summary="every action was refused",
+            diagnostic=(
+                f"every tool in the registry has been proposed and refused: "
+                f"{sorted(REGISTRY.names)}. Kept as a sufficient condition but no longer the only "
+                f"one — it assumed the planner would eventually name every tool, and measured "
+                f"against a real model it does not."
+            ),
+        )
+    return None
+
+
 def _every_tool_has_been_refused(case: Case) -> bool:
     """Whether the planner has now proposed every tool there is and been refused each time.
 
-    **Narrow on purpose.** This is not "the case is stuck"; it is one specific, checkable
-    condition, and it is the only one that parks a case this way. A generic fallback for anything
-    that fails to converge would quietly become the place every unexplained problem ends up, and
-    ``FAILED`` would stop meaning "something broke" — which is the meaning the malformed and bound
-    scenarios depend on.
+    **No longer the liveness condition** — one of three sufficient conditions in
+    :func:`_nothing_left_to_try`, and the weakest. It is kept because it is a true and readable
+    statement about a case, and because the scenario it describes really happens; it is no longer
+    relied upon, because a planner that stops short of the full catalogue never satisfies it.
 
     Refusals are counted by tool name rather than by arguments. A tool refused with one set of
     arguments might be allowed with another, so this is the conservative reading: the planner has
-    tried everything the catalogue offers *at least once* and has nothing new to reach for. It is
-    also exactly what was observed live — given a poisoned case, the planner works through the
-    whole catalogue and is refused at each step.
+    tried everything the catalogue offers *at least once* and has nothing new to reach for.
     """
     refused = {
         event.payload.get("tool_name", "")
@@ -806,7 +923,7 @@ def _every_tool_has_been_refused(case: Case) -> bool:
     return REGISTRY.names <= refused
 
 
-def _park_with_nothing_safe_to_do(case: Case, now) -> Case:
+def _park_with_nothing_safe_to_do(case: Case, now, reason: NothingLeftToTry) -> Case:
     """Stop, and hand the case to a person. **No approval is raised, because there is nothing to
     approve.**
 
@@ -840,8 +957,7 @@ def _park_with_nothing_safe_to_do(case: Case, now) -> Case:
         actor="policy",
         summary="no safe action is available; manual follow-up is required",
         diagnostic=(
-            f"every tool in the registry has been proposed and refused: "
-            f"{sorted(REGISTRY.names)}. Parked rather than failed — the refusals are the system "
+            f"{reason.diagnostic} Parked rather than failed — the refusals are the system "
             f"working, and FAILED means something broke. No approval is raised: there is no "
             f"proposal to authorise, and a record that authorises nothing must not be decidable."
         ),
@@ -851,7 +967,7 @@ def _park_with_nothing_safe_to_do(case: Case, now) -> Case:
     return transition(
         case,
         CaseState.AWAITING_HUMAN,
-        reason="every available action was refused",
+        reason=reason.summary,
         actor="policy",
         now=now,
     )

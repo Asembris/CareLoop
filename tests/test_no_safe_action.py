@@ -200,13 +200,32 @@ class TestItDoesNotFireOnAnythingElse:
             f"parked without ever proposing {EVERY_TOOL_REFUSED[held_back].tool_name}"
         )
 
-    def test_the_same_tool_refused_repeatedly_is_not_enough(self) -> None:
-        """Five denials, one tool. Counting refusals rather than tools would park here."""
+    def test_the_same_tool_refused_repeatedly_parks_for_a_different_reason(self) -> None:
+        """**This assertion was inverted, deliberately, and the inversion is the repair.**
+
+        It used to require that five refusals of one tool did *not* park, on the grounds that the
+        every-tool condition should count distinct tools rather than denials. That reasoning was
+        right about ``_every_tool_has_been_refused`` and wrong about the system: the B2 safety gate
+        ran the real graph against a real model and watched it repeat one refused proposal seven
+        times, satisfy no park condition, and burn the entire node budget into ``FAILED``.
+
+        Repeating a refused proposal against unchanged policy inputs is now recognised as no
+        progress, which is a *different* condition reaching the same handoff. The narrowness this
+        class protects is intact — the every-tool condition still counts distinct tools, which
+        ``test_every_tool_but_one_is_not_enough`` above still proves. What changed is that it is no
+        longer the only way to stop. ``tests/test_liveness.py`` owns the new rule.
+        """
         repeated = [EVERY_TOOL_REFUSED[0]] * 5
 
         case, _ = drive(*repeated)
 
-        assert case.state is not CaseState.AWAITING_HUMAN
+        assert case.state is CaseState.AWAITING_HUMAN
+        assert case.actions == ()
+        handoff = next(
+            event for event in case.timeline if event.kind is TimelineKind.MANUAL_HANDOFF_REQUIRED
+        )
+        assert handoff.payload["reason_code"] == str(ReasonCode.NO_SAFE_ACTION_AVAILABLE)
+        assert "already refused" in handoff.diagnostic
 
     def test_a_provider_that_produces_nothing_does_not_park(self) -> None:
         """``FAILED``, or at least never ``AWAITING_HUMAN``. Breakage is not a refusal."""

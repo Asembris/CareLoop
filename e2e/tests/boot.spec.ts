@@ -59,6 +59,30 @@ async function shareWorld(page: Page): Promise<void> {
   }, world);
 }
 
+/**
+ * The orchestration field is off unless a test is about it, and that is a cost decision.
+ *
+ * Every page that boots with the field on fetches three.js, compiles shaders and holds a WebGL
+ * context; this file opens more browser contexts than the rest of the suite combined, because a
+ * tab that has already booted will not boot again. `playwright.config.ts` records what saturates
+ * this suite and it is not the backend — it is browser memory, with `page.goto` timing out at 30s
+ * as the signature. Paying for a GPU context in a test about a `setTimeout` is how a suite starves
+ * itself.
+ *
+ * **It costs no coverage, and that is checked rather than assumed.** The loader never reads
+ * `#careloop-field` and the field never reads `careloop:ready`, `careloop:booted` or
+ * `data-booting`; the hand-off target is React-rendered either way. The tests where the two layers
+ * genuinely meet — the headline arc, the click and continuity checks, `?boot=full`, the field
+ * health check and the whole flag matrix — pass `field: true` and run in the default production
+ * configuration.
+ *
+ * An explicit `motion` in the URL always wins, so the flag matrix still says exactly what it means.
+ */
+function withField(url: string, field: boolean): string {
+  if (field || /[?&]motion=/.test(url)) return url;
+  return url + (url.includes("?") ? "&" : "?") + "motion=off";
+}
+
 /** What the loader leaves in the DOM while it is running, and what it must leave behind. */
 const OVERLAY = "#careloop-boot";
 const NAVBAR_MARK = '[data-scene-zone="logo"] svg';
@@ -78,8 +102,13 @@ interface Marks {
  * code publishes no event for it — but the *value* it reads is production behaviour
  * (`pointer-events: none` on the overlay), not a probe added for this file.
  */
-async function arrive(browser: Browser, url: string, options: Parameters<Browser["newContext"]>[0] = {}) {
-  const context = await browser.newContext(options);
+async function arrive(
+  browser: Browser,
+  url: string,
+  options: Parameters<Browser["newContext"]>[0] & { field?: boolean } = {}
+) {
+  const { field = false, ...contextOptions } = options;
+  const context = await browser.newContext(contextOptions);
   const page = await context.newPage();
   await shareWorld(page);
 
@@ -103,7 +132,7 @@ async function arrive(browser: Browser, url: string, options: Parameters<Browser
     requestAnimationFrame(watch);
   });
 
-  await page.goto(url);
+  await page.goto(withField(url, field));
   return { context, page };
 }
 
@@ -171,7 +200,7 @@ async function stillUsable(page: Page): Promise<void> {
 
 test.describe("the boot loader", () => {
   test("appears, runs its whole arc, and leaves nothing behind", async ({ browser }) => {
-    const { context, page } = await arrive(browser, "/");
+    const { context, page } = await arrive(browser, "/", { field: true });
     await booted(page);
 
     const seen = await marks(page);
@@ -236,12 +265,18 @@ test.describe("the boot loader", () => {
   });
 
   test("?boot=full holds for the complete choreography without moving readiness", async ({ browser }) => {
-    const quick = await arrive(browser, "/?boot=on");
+    /* Two complete boots in one test, one of them the ~4.8s held path. Measured at 8.1s on a
+       twelve-core machine; a two-core runner with two workers has no headroom against the 30s
+       default. Raised rather than the global default, and nothing about the assertions changes:
+       this is the harness's runaway detector, sized to a bound the test itself declares. */
+    test.setTimeout(60_000);
+
+    const quick = await arrive(browser, "/?boot=on", { field: true });
     await booted(quick.page);
     const condensed = await marks(quick.page);
     await quick.context.close();
 
-    const long = await arrive(browser, "/?boot=full");
+    const long = await arrive(browser, "/?boot=full", { field: true });
     await booted(long.page);
     const full = await marks(long.page);
 
@@ -263,7 +298,7 @@ test.describe("the boot loader", () => {
   });
 
   test("the overlay never swallows a click it cannot be seen to be taking", async ({ browser }) => {
-    const { context, page } = await arrive(browser, "/");
+    const { context, page } = await arrive(browser, "/", { field: true });
 
     /* The failure this exists for: upstream drops the overlay's opacity 740ms before removing it
        and never sets `pointer-events`, so the application is fully visible and completely dead to
@@ -302,7 +337,7 @@ test.describe("the boot loader", () => {
   });
 
   test("hands the mark over without ever hiding both", async ({ browser }) => {
-    const { context, page } = await arrive(browser, "/");
+    const { context, page } = await arrive(browser, "/", { field: true });
 
     /* Continuity, sampled rather than reasoned about: at no frame may the brand be absent from
        the screen. Either the loader's mark is up, or the flier is in transit, or the header's own
@@ -412,6 +447,9 @@ test.describe("the boot loader", () => {
   });
 
   test("reduced motion gets a static composition and a prompt exit", async ({ browser }) => {
+    // Two boots, for the comparison at the end of this test. See `?boot=full` for why raised.
+    test.setTimeout(60_000);
+
     const { context, page } = await arrive(browser, "/", { reducedMotion: "reduce" });
 
     // The composition is complete from the first frame rather than drawn: every path is at its
@@ -435,15 +473,27 @@ test.describe("the boot loader", () => {
     expect(drawn!.anyVisible, "the structure is shown rather than animated into being").toBe(true);
 
     await booted(page);
-    const seen = await marks(page);
-    /* Prompt, expressed as ordering against the same page's own readiness rather than as a
-       millisecond budget: reduced motion must not sit through the arc it is not playing. It is
-       compared against the condensed path in the `?boot=full` test; here the claim is only that it
-       leaves without waiting for a choreography it skipped. */
-    expect(seen.booted! - seen.ready!, "no animation is being waited out").toBeLessThan(1500);
+    const reduced = await marks(page);
     expectNoResidue(await residue(page), "under reduced motion");
     await stillUsable(page);
     await context.close();
+
+    /* "Prompt" measured against the animated path taken on the same machine in the same run, not
+       against a millisecond budget.
+     *
+     * A constant here would be the one thing this file says it does not do, and it would be the
+     * first assertion to flake on a loaded two-core runner — where every timer drifts and the
+     * threshold is the only thing that cannot. What "prompt" actually means is that reduced motion
+     * does not sit through a choreography it is not playing, and that is a comparison. */
+    const animated = await arrive(browser, "/?boot=on");
+    await booted(animated.page);
+    const full = await marks(animated.page);
+    await animated.context.close();
+
+    expect(
+      reduced.booted! - reduced.ready!,
+      "reduced motion leaves sooner than the animated path it is skipping"
+    ).toBeLessThan(full.booted! - full.ready!);
   });
 
   test("a missing hand-off target fails open", async ({ browser }) => {
@@ -561,6 +611,10 @@ test.describe("the boot loader", () => {
   });
 
   test("readiness that never arrives cannot trap anybody", async ({ browser }) => {
+    // Bounded by whichever of the loader's fallbacks fires first, and the slowest of them is the
+    // reaper at twelve seconds. See the `?boot=full` test for why this is raised.
+    test.setTimeout(60_000);
+
     const context = await browser.newContext();
     const page = await context.newPage();
     await shareWorld(page);
@@ -585,6 +639,11 @@ test.describe("the boot loader", () => {
   });
 
   test("the reaper removes an overlay the loader itself never cleans up", async ({ browser }) => {
+    /* The slowest test in the suite, and unavoidably so: it waits out `index.html`'s twelve-second
+       reaper, which is a production constant rather than a test parameter. 12.6s measured locally,
+       plus a page load and two navigations afterwards. */
+    test.setTimeout(90_000);
+
     const context = await browser.newContext();
     const page = await context.newPage();
     await shareWorld(page);
@@ -745,7 +804,7 @@ test.describe("the boot loader", () => {
   });
 
   test("the orchestration field is healthy after the hand-off", async ({ browser }) => {
-    const { context, page } = await arrive(browser, "/");
+    const { context, page } = await arrive(browser, "/", { field: true });
     await booted(page);
 
     await page.waitForFunction(() => {
@@ -796,7 +855,7 @@ test.describe("the boot loader", () => {
 
     for (const combination of COMBINATIONS) {
       test(combination.url, async ({ browser }) => {
-        const { context, page } = await arrive(browser, combination.url);
+        const { context, page } = await arrive(browser, combination.url, { field: true });
         await expect(page.getByRole("button", { name: "CareLoop — home" })).toBeVisible();
 
         if (combination.loader) {

@@ -46,9 +46,24 @@ with **scripted agents in place of a model**. `scripts/demo_serve.py` cannot be 
 models from the environment, unset means the mock, and `build_model` constructs that mock with no
 script, so the first triage call raises and every case fails before classifying anything.
 
+## The boot loader is held off by default
+
+Every spec imports `test` from `tests/base.ts` rather than from `@playwright/test`. It is
+`@playwright/test`'s, with one init script that seeds `careloop:boot` — the loader's own shipped
+state, the thing `?boot=off` writes — so the overlay never appears. Nothing in this suite except
+`tests/boot.spec.ts` is about the loader, and a suite whose assertions race a decoration is one that
+eventually fails for a reason nobody can reproduce.
+
+Seeded in storage rather than appended to the URL because `presentation.spec.ts` asserts the address
+bar exactly; a query parameter would have to be written into its expectations, and changing what an
+existing test asserts in order to accommodate a decoration is the thing not to do.
+
+**To opt in**, import `test` from `@playwright/test` directly, as `boot.spec.ts` does. It then drives
+unmodified URLs and sees exactly what a visitor sees.
+
 ## Conventions
 
-- **Unmocked by default.** Exactly two states use `page.route`, each justified in its own spec.
+- **Unmocked by default.** Exactly three states use `page.route`, each justified in its own spec.
 - **Role and accessible name first.** Never a CSS class, `nth-child`, DOM structure, XPath or a
   coordinate. `data-testid` only where an element has no accessible name — and every such use is an
   accessibility defect noted in the commit that added it, not a workaround.

@@ -21,15 +21,43 @@
  * `careloop:ready` fires about ninety milliseconds after navigation and a listener attached from
  * the test side would routinely miss it.
  *
- * ## One page per worker
+ * ## One world per worker, and a fresh tab per test
  *
- * The same capacity fact `field.spec.ts` documents: the frontend mints a world per tab and the API
- * holds sixty-four of them. This file needs a *fresh* context per test — a tab that has already
- * booted will not boot again, which is the point of half of these — so it closes each one rather
- * than accumulating, and reaches the API for nothing.
+ * The capacity fact `field.spec.ts` documents, met from the other side. The frontend mints a world
+ * on first load and keeps it in `sessionStorage`, so a world is spent per *tab*, and the API holds
+ * sixty-four of them for half an hour after their last request. This file cannot reuse a tab — a
+ * tab that has already booted will not boot again, which is the point of half of these — so it
+ * would spend two dozen worlds on decoration and push the rest of the suite into
+ * `503 … all of them are in use`. Measured: four unrelated specs went red in a full run, and all
+ * four passed on their own.
+ *
+ * So the tabs are fresh and the *world* is shared: one is minted per worker and seeded into every
+ * context before it loads. Nothing here reads a case, presses a scenario or asserts on any data,
+ * so sharing costs this file nothing — and seeding `careloop.session` is the same move
+ * `tests/base.ts` makes with `careloop:boot`, putting the browser in a state a real visitor can be
+ * in rather than adding a hook to the application.
  */
 
 import { expect, test, type Browser, type Page } from "@playwright/test";
+import { mintSession } from "./helpers";
+
+/** One world for this worker's tabs. Minted once; every context below is pointed at it. */
+let world: string;
+
+test.beforeAll(async ({ request }) => {
+  world = await mintSession(request);
+});
+
+/** Point a tab at this worker's world before anything on it runs. */
+async function shareWorld(page: Page): Promise<void> {
+  await page.addInitScript((session: string) => {
+    try {
+      window.sessionStorage.setItem("careloop.session", session);
+    } catch {
+      /* Then this tab mints its own, which costs a world and changes nothing else. */
+    }
+  }, world);
+}
 
 /** What the loader leaves in the DOM while it is running, and what it must leave behind. */
 const OVERLAY = "#careloop-boot";
@@ -53,6 +81,7 @@ interface Marks {
 async function arrive(browser: Browser, url: string, options: Parameters<Browser["newContext"]>[0] = {}) {
   const context = await browser.newContext(options);
   const page = await context.newPage();
+  await shareWorld(page);
 
   await page.addInitScript(() => {
     const marks: Record<string, number | boolean> = { overlaySeen: false };
@@ -314,6 +343,7 @@ test.describe("the boot loader", () => {
     test(`paints in the application's own ${theme} paper`, async ({ browser }) => {
       const context = await browser.newContext();
       const page = await context.newPage();
+      await shareWorld(page);
       await page.addInitScript((value: string) => localStorage.setItem("careloop:theme", value), theme);
       await page.goto("/");
 
@@ -533,6 +563,7 @@ test.describe("the boot loader", () => {
   test("readiness that never arrives cannot trap anybody", async ({ browser }) => {
     const context = await browser.newContext();
     const page = await context.newPage();
+    await shareWorld(page);
 
     // Silence the announcement before anything can make it. The loader's own nine-second timeout
     // and `index.html`'s twelve-second reaper are all that is left, which is the point.
@@ -556,6 +587,7 @@ test.describe("the boot loader", () => {
   test("the reaper removes an overlay the loader itself never cleans up", async ({ browser }) => {
     const context = await browser.newContext();
     const page = await context.newPage();
+    await shareWorld(page);
 
     /* The second enforcement point, tested with the first one gone.
      *
@@ -650,6 +682,7 @@ test.describe("the boot loader", () => {
     for (const theme of ["light", "dark"] as const) {
       const context = await browser.newContext();
       const page = await context.newPage();
+      await shareWorld(page);
       await page.addInitScript((value: string) => localStorage.setItem("careloop:theme", value), theme);
       await page.goto("/");
 

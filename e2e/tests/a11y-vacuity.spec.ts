@@ -15,7 +15,7 @@
  * knowingly inaccessible page to prove the tests can spot one.
  */
 
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./base";
 import { freezeAnimations, scanner } from "./axe";
 
 /** Deliberately broken, in two independent ways. */

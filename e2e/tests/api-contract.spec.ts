@@ -8,7 +8,7 @@
  * rather than against that table — the table says itself that the repository is the source of truth.
  */
 
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./base";
 import { CAREGIVER_HEADER, SESSION_HEADER, mintSession, withSession } from "./helpers";
 
 test.describe("sessions", () => {

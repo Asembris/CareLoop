@@ -12,6 +12,7 @@
  */
 
 import { expect, test as base, type Page } from "@playwright/test";
+import { holdBootOff } from "./base";
 
 /* One page per worker, not one per test — and that is a capacity fact rather than a style choice.
  *
@@ -30,6 +31,10 @@ const test = base.extend<Record<string, never>, { field: Page }>({
     async ({ browser }, use) => {
       const context = await browser.newContext();
       const page = await context.newPage();
+      /* The boot loader is held off here as it is everywhere outside `boot.spec.ts`, and by hand
+         rather than through `tests/base.ts`: this page is minted from `browser` directly, so the
+         fixture that seeds every other spec's context never sees it. */
+      await holdBootOff(page);
       await use(page);
       await context.close();
     },

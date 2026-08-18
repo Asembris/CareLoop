@@ -7,7 +7,7 @@
  * fold, both themes, real backend data.
  */
 
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./base";
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { runScenario, sessionFromPage, settled } from "./helpers";

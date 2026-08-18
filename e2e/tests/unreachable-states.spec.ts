@@ -26,7 +26,7 @@
  * `tests/test_observation_outcome.py` own that, in-process, where the divergence is reachable.
  */
 
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./base";
 
 const CASE_ID = "demo-referral";
 const AT = "2026-08-16T09:00:00+00:00";

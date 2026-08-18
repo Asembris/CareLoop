@@ -4,7 +4,7 @@
  * URL, so no amount of direct-load testing reaches them, and jsdom has no layout to move.
  */
 
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./base";
 import { settled } from "./helpers";
 
 test.describe("theme", () => {

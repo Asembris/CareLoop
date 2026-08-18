@@ -9,7 +9,7 @@
  * outage the health probe exists to catch, while the process serves everyone else undisturbed.
  */
 
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "./base";
 import { runScenario, sessionFromPage, settled } from "./helpers";
 
 async function seed(page: Page, request: APIRequestContext, key: string): Promise<string> {

@@ -872,9 +872,19 @@
        * remover that knows nothing about this object can still undo exactly them and nothing
        * else. */
       flier.setAttribute("data-boot-flier", "");
-      document.body.appendChild(flier);
-      target.style.opacity = "0";
+
+      /* The marker goes on before the opacity, and the brand is taken before the flier is moved.
+       *
+       * Both orderings are about what is true if the next line throws. `restoreTarget` finds what
+       * to undo by querying `[data-boot-hidden]`, so setting the opacity first leaves a window in
+       * which the brand is invisible and unfindable; and everything between here and the end of
+       * this method can fail, so the two writes that have to be undone happen as early as they
+       * can. Nothing visual depends on the order — this whole method is one synchronous task, so
+       * no frame is painted part-way through it. */
       target.setAttribute("data-boot-hidden", "");
+      target.style.opacity = "0";
+
+      document.body.appendChild(flier);
 
       // Wordmark and status leave; the symbol does not.
       this.word.style.transition = `opacity 240ms ${EASE_SOFT}`;

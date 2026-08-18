@@ -33,16 +33,20 @@ from careloop.agents.prompts import (
     triage_system_prompt,
 )
 from careloop.agents.schemas import (
+    PROPOSAL_TOOLS,
     PlannerIntent,
     TriageCategory,
     TriageResult,
     Urgency,
+    proposal_tool_call_for,
+    proposal_tool_name,
 )
 from careloop.agents.triage import TriageAgent
 from careloop.llm.mock import MockModel, MockScriptExhausted, MockScriptTypeMismatch, mock_model
 from careloop.policy.verdicts import ReasonCode
 from careloop.state.case import CaseState
 from careloop.tools.documents import POISONED_DOCUMENT_ID, default_document_store
+from careloop.tools.registry import REGISTRY
 
 POISON = default_document_store().get(POISONED_DOCUMENT_ID).text
 
@@ -123,7 +127,7 @@ class TestTriageAgent:
         model = mock_model(structured=[a_triage_result()])
         asyncio.run(TriageAgent(model).classify("Referral received."))
         assert len(model.calls) == 1
-        assert model.remaining == (0, 0)
+        assert model.remaining == (0, 0, 0)
 
     def test_the_event_reaches_the_user_message_and_not_the_system_prompt(self):
         model = mock_model(structured=[a_triage_result()])
@@ -151,45 +155,72 @@ class TestTriageAgent:
 
 
 class TestPlannerAgent:
-    def test_returns_the_scripted_intent(self):
-        expected = an_intent()
-        agent = PlannerAgent(mock_model(structured=[expected]))
-        case = make_case(state=CaseState.PLANNING)
-        assert asyncio.run(agent.propose(case)) is expected
+    """The planner offers proposal tools and reads back the one the model called.
 
-    def test_asks_for_the_intent_schema_with_the_planner_system_prompt(self):
-        model = mock_model(structured=[an_intent()])
+    Every assertion here is about the *proposal* boundary. Nothing about a proposal being
+    schema-valid says it is trusted or authorised — the policy engine decides that and has not run
+    at this point — and ``TestTheProposalToolsCannotAct`` below is what keeps that honest.
+    """
+
+    def test_returns_the_scripted_proposal_canonicalised(self):
+        expected = an_intent()
+        agent = PlannerAgent(mock_model(proposals=[proposal_tool_call_for(expected)]))
+        case = make_case(state=CaseState.PLANNING)
+        assert asyncio.run(agent.propose(case)) == expected
+
+    def test_offers_one_proposal_tool_per_registered_action(self):
+        model = mock_model(proposals=[proposal_tool_call_for(an_intent())])
         asyncio.run(PlannerAgent(model).propose(make_case(state=CaseState.PLANNING)))
         (call,) = model.calls
-        assert call.output_model_name == "PlannerIntent"
+        assert call.kind == "stream"
+        assert set(call.tool_names) == {proposal_tool_name(name) for name in REGISTRY.names}
         assert call.system_prompt == planner_system_prompt()
+
+    def test_offers_no_tool_that_could_be_executed(self):
+        """A tool offered is a tool that could be called. None of these is a registered tool."""
+        model = mock_model(proposals=[proposal_tool_call_for(an_intent())])
+        asyncio.run(PlannerAgent(model).propose(make_case(state=CaseState.PLANNING)))
+        assert not (set(model.calls[0].tool_names) & REGISTRY.names)
 
     def test_the_user_message_is_the_case_projection(self):
         case = make_case(state=CaseState.PLANNING, facts=(make_fact("patient_id", "PT-4417"),))
-        model = mock_model(structured=[an_intent()])
+        model = mock_model(proposals=[proposal_tool_call_for(an_intent())])
         asyncio.run(PlannerAgent(model).propose(case))
         (call,) = model.calls
         assert call.messages[0]["content"][0]["text"] == planner_user_prompt(case, ())
 
     def test_prior_denials_reach_the_user_message_as_reason_text_only(self):
         case = make_case(state=CaseState.PLANNING)
-        model = mock_model(structured=[an_intent()])
+        model = mock_model(proposals=[proposal_tool_call_for(an_intent())])
         denials = [("send_email", ReasonCode.DESTINATION_NOT_TRUSTED)]
         asyncio.run(PlannerAgent(model).propose(case, denials))
         user_text = model.calls[0].messages[0]["content"][0]["text"]
         assert "Recipients must come from approved configuration." in user_text
         assert "DESTINATION_NOT_TRUSTED" not in user_text
 
-    def test_offers_the_model_no_tools(self):
-        """A tool offered is a tool that could be called. The planner offers none."""
-        model = mock_model(structured=[an_intent()])
+    def test_calls_the_model_exactly_once(self):
+        model = mock_model(proposals=[proposal_tool_call_for(an_intent())])
         asyncio.run(PlannerAgent(model).propose(make_case(state=CaseState.PLANNING)))
-        assert model.calls[0].tool_names == ()
+        assert len(model.calls) == 1
 
-    def test_a_wrong_typed_answer_raises(self):
-        agent = PlannerAgent(mock_model(structured=[a_triage_result()]))
-        with pytest.raises(MockScriptTypeMismatch):
+    def test_a_provider_failure_propagates(self):
+        agent = PlannerAgent(mock_model(proposals=[RuntimeError("provider is down")]))
+        with pytest.raises(RuntimeError):
             asyncio.run(agent.propose(make_case(state=CaseState.PLANNING)))
+
+
+class TestTheProposalToolsCannotAct:
+    """The tools the planner offers are specifications, not capabilities."""
+
+    def test_no_proposal_tool_name_is_a_registered_tool(self):
+        assert not (set(PROPOSAL_TOOLS) & REGISTRY.names)
+
+    def test_every_registered_tool_has_exactly_one_proposal_tool(self):
+        assert set(PROPOSAL_TOOLS) == {proposal_tool_name(name) for name in REGISTRY.names}
+
+    def test_a_proposal_tool_carries_no_callable(self):
+        for schema in PROPOSAL_TOOLS.values():
+            assert not any(callable(getattr(schema, name, None)) for name in ("run", "invoke"))
 
 
 class TestStructuredCall:

@@ -17,9 +17,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-from careloop.agents.invoke import structured_call
+from careloop.agents.invoke import proposal_tool_call
 from careloop.agents.prompts import planner_system_prompt, planner_user_prompt
-from careloop.agents.schemas import PlannerIntent, PlannerIntentBase
+from careloop.agents.schemas import PROPOSAL_TOOLS, PlannerIntentBase
 from careloop.llm.providers import ModelRole, model_for
 from careloop.policy.verdicts import ReasonCode
 from careloop.state.case import Case
@@ -57,13 +57,27 @@ class PlannerAgent:
 
         The returned intent is a proposal. Nothing here has evaluated it, and nothing here can
         carry it out.
+
+        **The model is offered one closed proposal schema per registered action** and calls exactly
+        one of them; :meth:`~careloop.agents.schemas.ProposalToolBase.canonical` turns that back
+        into the ``(tool_name, args, rationale)`` this method has always returned. Every provider
+        detail — the tool specifications, the stream, the ``toolUse`` block, what to do when there
+        are none or several — lives behind
+        :func:`~careloop.agents.invoke.proposal_tool_call`.
+
+        **A schema-valid proposal is not a trusted or an authorised one**, and nothing here treats
+        it as either. The schema constrains shape; the values are still whatever the model wrote,
+        the trust of each is still resolved from ``case.facts`` under its declared ``trust_key``,
+        and the deterministic policy engine still decides. A proposal naming an attacker's address
+        is perfectly well-formed and is exactly what the gate exists to refuse.
         """
-        return await structured_call(
+        proposal = await proposal_tool_call(
             self._model,
-            PlannerIntent,
+            PROPOSAL_TOOLS,
             system_prompt=planner_system_prompt(),
             user_prompt=planner_user_prompt(case, prior_denials),
         )
+        return proposal.canonical()
 
 
 __all__ = ["PlannerAgent"]

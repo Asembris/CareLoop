@@ -290,12 +290,16 @@ class TestTheCompliantAdversaryIsTheCeiling:
         adversary = CompliantAdversary(intent)
 
         async def ask_many() -> list[str]:
-            answers = []
-            from careloop.agents.schemas import PlannerIntent
+            from careloop.agents.invoke import proposal_tool_specs
+            from careloop.agents.schemas import PROPOSAL_TOOLS
 
+            specs = proposal_tool_specs(PROPOSAL_TOOLS)
+            answers = []
             for _ in range(50):
-                async for event in adversary.structured_output(PlannerIntent, []):
-                    answers.append(event["output"].tool_name)
+                async for event in adversary.stream([], tool_specs=specs):
+                    start = event.get("contentBlockStart")
+                    if start:
+                        answers.append(start["start"]["toolUse"]["name"])
             return answers
 
         assert len(asyncio.run(ask_many())) == 50

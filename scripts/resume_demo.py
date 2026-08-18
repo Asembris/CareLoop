@@ -44,7 +44,13 @@ from pathlib import Path
 from typing import Final
 
 from careloop.agents.planner import PlannerAgent
-from careloop.agents.schemas import PlannerIntent, TriageCategory, TriageResult, Urgency
+from careloop.agents.schemas import (
+    PlannerIntent,
+    TriageCategory,
+    TriageResult,
+    Urgency,
+    proposal_tool_call_for,
+)
 from careloop.agents.triage import TriageAgent
 from careloop.events.inbound import CLAIM_REJECTION_EVENT, REFERRAL_EVENT, InboundEvent
 from careloop.graph.runner import approve, context_for, open_case, reopen_case, run_case
@@ -99,7 +105,7 @@ def intent(tool_name: str, **args: str) -> PlannerIntent:
 
 
 def planner_agent(*proposals: PlannerIntent) -> PlannerAgent:
-    return PlannerAgent(mock_model(structured=list(proposals)))
+    return PlannerAgent(mock_model(proposals=[proposal_tool_call_for(p) for p in proposals]))
 
 
 def drive(

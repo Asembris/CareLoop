@@ -13,6 +13,8 @@ import pytest
 from pydantic import BaseModel
 from strands.models import Model
 
+from careloop.agents.invoke import proposal_tool_specs
+from careloop.agents.schemas import PROPOSAL_TOOLS
 from careloop.llm.mock import (
     MockModel,
     MockScriptExhausted,
@@ -155,12 +157,12 @@ class TestScriptsAreIndependent:
     def test_streaming_does_not_consume_structured_answers(self):
         model = mock_model(text=["ok"], structured=[Classification(urgency="LOW", patient_id="P")])
         asyncio.run(collect_stream(model, [user("hello")]))
-        assert model.remaining == (0, 1)
+        assert model.remaining == (0, 1, 0)
 
     def test_structured_output_does_not_consume_text_answers(self):
         model = mock_model(text=["ok"], structured=[Classification(urgency="LOW", patient_id="P")])
         asyncio.run(collect_structured(model, Classification, [user("classify")]))
-        assert model.remaining == (1, 0)
+        assert model.remaining == (1, 0, 0)
 
 
 class TestCallRecording:
@@ -173,13 +175,40 @@ class TestCallRecording:
         assert call.messages[0]["content"][0]["text"] == "classify this"
 
     def test_records_tool_names_offered_to_the_model(self):
-        model = mock_model(text=["ok"])
-        specs = [
-            {"name": "send_email", "description": "", "inputSchema": {}},
-            {"name": "fetch_document", "description": "", "inputSchema": {}},
-        ]
+        """A call carrying tool specs is a proposal call, answered from the proposal queue."""
+        proposal = PROPOSAL_TOOLS["propose_fetch_document"](
+            rationale="read what we already hold", document_id="doc-0001-referral"
+        )
+        model = mock_model(proposals=[proposal])
+        specs = proposal_tool_specs(PROPOSAL_TOOLS)
         asyncio.run(collect_stream(model, [user("plan")], tool_specs=specs))
-        assert model.calls[0].tool_names == ("send_email", "fetch_document")
+        assert model.calls[0].tool_names == tuple(sorted(PROPOSAL_TOOLS))
+
+    def test_a_proposal_call_is_answered_with_a_real_tool_use_block(self):
+        """The wire shape, not a shorthand — the same parsing a provider's answer gets."""
+        proposal = PROPOSAL_TOOLS["propose_fetch_document"](
+            rationale="read what we already hold", document_id="doc-0001-referral"
+        )
+        model = mock_model(proposals=[proposal])
+        events = asyncio.run(
+            collect_stream(model, [user("plan")], tool_specs=proposal_tool_specs(PROPOSAL_TOOLS))
+        )
+        starts = [e for e in events if "contentBlockStart" in e]
+        assert (
+            starts[0]["contentBlockStart"]["start"]["toolUse"]["name"] == "propose_fetch_document"
+        )
+        assert events[-2]["messageStop"]["stopReason"] == "tool_use"
+
+    def test_a_proposal_the_caller_did_not_offer_is_refused(self):
+        proposal = PROPOSAL_TOOLS["propose_send_email"](
+            rationale="r", to="a@b.example", subject="s", body="b"
+        )
+        model = mock_model(proposals=[proposal])
+        only_fetch = proposal_tool_specs(
+            {"propose_fetch_document": PROPOSAL_TOOLS["propose_fetch_document"]}
+        )
+        with pytest.raises(MockScriptTypeMismatch):
+            asyncio.run(collect_stream(model, [user("plan")], tool_specs=only_fetch))
 
     def test_an_exhausted_call_is_still_recorded(self):
         # The call happened. A mock that only records successful calls would hide the call that

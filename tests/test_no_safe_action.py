@@ -25,7 +25,13 @@ import pytest
 from helpers import FIXED_NOW
 
 from careloop.agents.planner import PlannerAgent
-from careloop.agents.schemas import PlannerIntent, TriageCategory, TriageResult, Urgency
+from careloop.agents.schemas import (
+    PlannerIntent,
+    TriageCategory,
+    TriageResult,
+    Urgency,
+    proposal_tool_call_for,
+)
 from careloop.agents.triage import TriageAgent
 from careloop.api.projections import NEEDS_YOU, decision_view, section_for
 from careloop.events.inbound import POISONED_ONLY_EVENT
@@ -91,7 +97,7 @@ def drive(*proposals: PlannerIntent, **bounds):
                 ]
             )
         ),
-        planner=PlannerAgent(mock_model(structured=list(proposals))),
+        planner=PlannerAgent(mock_model(proposals=[proposal_tool_call_for(p) for p in proposals])),
         now=lambda: FIXED_NOW,
     )
     with contextlib.suppress(MockScriptExhausted):

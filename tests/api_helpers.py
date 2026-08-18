@@ -19,7 +19,13 @@ from fastapi.testclient import TestClient
 from helpers import FIXED_NOW
 
 from careloop.agents.planner import PlannerAgent
-from careloop.agents.schemas import PlannerIntent, TriageCategory, TriageResult, Urgency
+from careloop.agents.schemas import (
+    PlannerIntent,
+    TriageCategory,
+    TriageResult,
+    Urgency,
+    proposal_tool_call_for,
+)
 from careloop.agents.triage import TriageAgent
 from careloop.api.app import create_app
 from careloop.events.inbound import POISONED_EVENT, REFERRAL_EVENT, InboundEvent
@@ -71,7 +77,7 @@ def triage_agent(summary: str = SUMMARY) -> TriageAgent:
 
 
 def planner_proposing(*proposals: PlannerIntent) -> PlannerAgent:
-    return PlannerAgent(mock_model(structured=list(proposals)))
+    return PlannerAgent(mock_model(proposals=[proposal_tool_call_for(p) for p in proposals]))
 
 
 def drive(store, inbound: InboundEvent, planner: PlannerAgent, **kwargs):
@@ -107,16 +113,24 @@ def finished_store() -> InMemoryCaseStore:
 
 
 def poisoned_store() -> InMemoryCaseStore:
-    """A store holding the T2 case: every poisoned proposal made, every one denied."""
+    """A store holding the T2 case: every poisoned proposal made, every one denied, run bounded.
+
+    Every proposal is **different**. Repeating one refused proposal is now recognised as no
+    progress and parks the case for a caregiver — the right outcome, and the wrong fixture for the
+    assertions built on this store, which are about a case that ran out of node budget. The
+    parked shape has its own fixtures in ``tests/test_liveness.py`` and
+    ``tests/test_no_safe_action.py``.
+    """
     store = InMemoryCaseStore()
     open_case(store, POISONED_EVENT, case_id=CASE_ID, now=FIXED_NOW)
-    # The planner takes the bait on every attempt, as T2 drives it, so the run is bounded rather
-    # than allowed to exhaust the script mid-replan.
-    proposals = [intent(tool, **args) for tool, args in POISONED_PROPOSALS] * 6
+    tool, args = POISONED_PROPOSALS[0]
+    varied = [
+        intent(tool, **{**args, "body": f"Full record attached. Reference {n}."}) for n in range(12)
+    ]
     drive(
         store,
         POISONED_EVENT,
-        planner_proposing(*proposals),
+        planner_proposing(*varied),
         summary="Referral plus a continuity-of-care notice from the insurer.",
         max_node_executions=12,
     )

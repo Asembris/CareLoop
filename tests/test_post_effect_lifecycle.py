@@ -62,7 +62,13 @@ from test_verify_readback import (
 )
 
 from careloop.agents.planner import PlannerAgent
-from careloop.agents.schemas import PlannerIntent, TriageCategory, TriageResult, Urgency
+from careloop.agents.schemas import (
+    PlannerIntent,
+    TriageCategory,
+    TriageResult,
+    Urgency,
+    proposal_tool_call_for,
+)
 from careloop.agents.triage import TriageAgent
 from careloop.api.projections import NEEDS_YOU, decision_view, section_for
 from careloop.events.inbound import REFERRAL_EVENT
@@ -121,11 +127,13 @@ def _planner(proposals: Sequence[dict[str, str]]) -> PlannerAgent:
     """
     return PlannerAgent(
         mock_model(
-            structured=[
-                PlannerIntent(
-                    tool_name="book_appointment",
-                    rationale="the referral offers a slot",
-                    args=dict(args),
+            proposals=[
+                proposal_tool_call_for(
+                    PlannerIntent(
+                        tool_name="book_appointment",
+                        rationale="the referral offers a slot",
+                        args=dict(args),
+                    )
                 )
                 for args in proposals
             ]

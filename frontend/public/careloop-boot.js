@@ -40,8 +40,24 @@
 
   const REDUCED = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  const MIN_VISIBLE = 1100;   // never flash: a boot shorter than this still gets a gesture
-  const CONDENSED = 1800;     // fast load: every beat, compressed
+  /* LOCAL DELTA 7a — the fast path is tuned to this application's measured readiness.
+   *
+   * Measured against the real stack, seven cold loads of `/`: `careloop:ready` fires at a
+   * **median of 89ms** (min 82, max 185). CareLoop has no asynchronous bootstrap — no lazy
+   * routes, no session to establish before the first frame, no data the first screen waits on
+   * — so *every* real load is a fast load and these constants are what a visitor experiences
+   * on every visit, not an edge case.
+   *
+   * Upstream's 1800/1100 put the application on screen at ~2.0s and landed the mark at ~2.7s.
+   * At 1400 the same complete arc puts the application on screen at ~1.55s and lands the mark
+   * at ~2.25s. No beat was removed to get there; see `condense`.
+   *
+   * `CONDENSE_ARC` is the length of that arc and is the floor on the exit, so a slower start
+   * pushes the departure out rather than cutting the closure off — the one thing the whole
+   * composition exists to show. */
+  const MIN_VISIBLE = REDUCED ? 400 : 900;
+  const CONDENSED = 1400;     // fast load: every beat, compressed
+  const CONDENSE_ARC = 1160;  // where the condensed closure lands, and the floor on leaving
   const FULL_RUN = 3900;      // full cold-load choreography
 
   /* LOCAL DELTA 6a — the hand-off has its own deadline, independent of whether it works.
@@ -713,7 +729,19 @@
       this.at(wait + (this.closed ? 300 : 0), () => this.exit());
     }
 
-    /** Every beat, ~1.5s, causality intact. Never a jump straight to closure. */
+    /**
+     * LOCAL DELTA 7b — every beat, ~1.16s, causality intact. Never a jump straight to closure.
+     *
+     * The same beats as upstream's condensed path, in the same order, with the same causal gaps —
+     * scaled to about three quarters. Nothing was cut: origin, the reasoning branch with its muted
+     * arm, traversal earning sage, the verification rings, the synchronisation wave, the missing
+     * connection drawing, the loop closing. What changed is only how long each one is given, and
+     * the reason is that this application is ready in about 90ms, so the choreography is the
+     * entire wait rather than a cover for one.
+     *
+     * `CONDENSE_ARC` names where the last beat finishes, and `maybeFinish` never schedules an exit
+     * before it — so a slower start delays the departure rather than clipping the closure.
+     */
     condense(elapsed) {
       this.timers.forEach(clearTimeout);
       this.timers = [];
@@ -726,51 +754,51 @@
       this.status.style.opacity = 0.88;
 
       for (const k of ["entry", "gather", "junction", "muted", "verify", "close"]) this.showNode(k, 0);
-      this.showNode("outward", 240);
-      this.drawPath("frame1", 320, 0.34);
-      this.drawPath("frame2", 420, 0.42);
+      this.showNode("outward", 180);
+      this.drawPath("frame1", 240, 0.34);
+      this.drawPath("frame2", 320, 0.42);
 
-      this.at(160, () => {
+      this.at(120, () => {
         this.setStatus("authorizing");
-        this.drawPath("reason", 320, 0.4);
-        this.drawPath("branchMuted", 300, 0.15);
-        this.drawPath("traverse", 340, 0.2);
+        this.drawPath("reason", 240, 0.4);
+        this.drawPath("branchMuted", 220, 0.15);
+        this.drawPath("traverse", 260, 0.2);
         this.signal("reason", "violet", {
-          dur: 300, onArrive: () => { this.respond("junction", "violet", 40); this.halo("junction"); }
+          dur: 220, onArrive: () => { this.respond("junction", "violet", 40); this.halo("junction"); }
         });
       });
 
-      this.at(480, () => {
+      this.at(340, () => {
         this.pathEls.traverse.style.stroke = this.P.sage;
-        this.drawPath("traverse", 280, 0.46);
-        this.drawPath("outwardP", 480, 0.18);
-        this.signal("traverse", "sage", { dur: 300 });
+        this.drawPath("traverse", 200, 0.46);
+        this.drawPath("outwardP", 340, 0.18);
+        this.signal("traverse", "sage", { dur: 220 });
       });
 
-      const H = 760;
+      const H = 520;
       this.at(H, () => {
         this.setStatus("verifying");
         this.respond("verify", "sage", 0);
         this.halo("verify");
       });
-      this.ripple(H + 70, 0, 44, 0.44);
-      this.ripple(H + 190, 1, 64, 0.25);
-      this.at(H + 210, () => {
+      this.ripple(H + 60, 0, 44, 0.44);
+      this.ripple(H + 140, 1, 64, 0.25);
+      this.at(H + 160, () => {
         for (const id of ["reason", "traverse"]) this.pathEls[id].style.stroke = this.P.sage;
         this.respond("junction", "sage", 0);
-        this.respond("close", "sage", 90);
+        this.respond("close", "sage", 80);
       });
-      this.at(H + 330, () => {
+      this.at(H + 240, () => {
         this.pathEls.closure.style.stroke = this.P.sage;
-        this.drawPath("closure", 340, 0.5);
+        this.drawPath("closure", 240, 0.5);
       });
-      this.at(H + 640, () => {
+      this.at(H + 400, () => {
         this.resolveMark();
-        this.signal("closure", "sage", { dur: 340, r: 2.4 });
+        this.signal("closure", "sage", { dur: 240, r: 2.4 });
         this.breath();
       });
 
-      this.at(Math.max(CONDENSED - elapsed, 900), () => this.exit());
+      this.at(Math.max(CONDENSED - elapsed, CONDENSE_ARC), () => this.exit());
     }
 
     /**

@@ -34,6 +34,7 @@ from careloop.api.projections import (
     SOURCES,
     TIMELINE_PAYLOAD_FIELDS,
     WITHHELD,
+    WITHHELD_PAYLOAD_FIELDS,
     WORKING,
     SectionsAreNotAPartition,
     UndecidedField,
@@ -47,6 +48,7 @@ from careloop.api.projections import (
     section_for,
     timeline_event_view,
 )
+from careloop.graph.context import prior_refusals
 from careloop.state.case import (
     Approval,
     ApprovalStatus,
@@ -247,14 +249,20 @@ class TestThePayloadAllowlistIsHonest:
         assert {"tool_name", "reason_code", "matched_rule_id", "event_id"} <= written
 
     def test_every_key_a_shipped_writer_emits_is_decided(self) -> None:
-        """An allowlist drops silently, so a key nobody listed must fail loudly instead."""
+        """An allowlist drops silently, so a key nobody listed must fail loudly instead.
+
+        Two ways to decide, and the distinction is the point: serialize it, or withhold it and say
+        why. What must not be possible is a third state where a writer emits a key, the API drops
+        it, and nobody ever looked.
+        """
         written = payload_keys_written_under(Path(careloop.__file__).parent)
 
-        undecided = sorted(written - TIMELINE_PAYLOAD_FIELDS)
+        undecided = sorted(written - TIMELINE_PAYLOAD_FIELDS - set(WITHHELD_PAYLOAD_FIELDS))
 
         assert undecided == [], (
-            f"{undecided} are written to timeline payloads but not in TIMELINE_PAYLOAD_FIELDS, so "
-            f"the API silently drops them. Add them, or decide not to and say why."
+            f"{undecided} are written to timeline payloads but are in neither "
+            f"TIMELINE_PAYLOAD_FIELDS nor WITHHELD_PAYLOAD_FIELDS, so the API silently drops them. "
+            f"Add them, or decide not to and say why."
         )
 
     def test_the_allowlist_names_nothing_no_writer_emits(self) -> None:
@@ -262,6 +270,21 @@ class TestThePayloadAllowlistIsHonest:
         written = payload_keys_written_under(Path(careloop.__file__).parent)
 
         assert sorted(TIMELINE_PAYLOAD_FIELDS - written) == []
+
+    def test_the_withholding_list_names_nothing_no_writer_emits(self) -> None:
+        """Same drift check on the other table. A withholding for a dead key is a stale claim."""
+        written = payload_keys_written_under(Path(careloop.__file__).parent)
+
+        assert sorted(set(WITHHELD_PAYLOAD_FIELDS) - written) == []
+
+    def test_no_key_is_both_projected_and_withheld(self) -> None:
+        """The allowlist wins in the projector, so a key in both would be exposed by a table
+        claiming it was not."""
+        assert TIMELINE_PAYLOAD_FIELDS & set(WITHHELD_PAYLOAD_FIELDS) == set()
+
+    def test_every_payload_withholding_states_a_reason(self) -> None:
+        for key, reason in WITHHELD_PAYLOAD_FIELDS.items():
+            assert len(reason) > 40, f"payload key {key!r} is withheld without saying why"
 
     def test_a_key_nobody_decided_about_is_dropped(self) -> None:
         event = TimelineEvent(
@@ -279,7 +302,73 @@ class TestThePayloadAllowlistIsHonest:
 
     def test_real_cases_carry_only_decided_keys(self) -> None:
         for case in (finished_case(), poisoned_case()):
-            assert payload_keys_in(case) <= TIMELINE_PAYLOAD_FIELDS
+            decided = TIMELINE_PAYLOAD_FIELDS | set(WITHHELD_PAYLOAD_FIELDS)
+            assert payload_keys_in(case) <= decided
+
+
+class TestInternalLivenessMetadataIsWithheld:
+    """The graph keeps it; the API never serializes it.
+
+    ``args_digest`` and ``policy_fingerprint`` are written onto every ``POLICY_DENY`` so the graph
+    can recognise a proposal it has already refused against unchanged policy inputs and park the
+    case for a caregiver instead of spending the node budget. They are how CareLoop decides, not
+    part of what a caregiver is told, and no frontend or API consumer reads either.
+
+    They reached the response once, in the commit that introduced them, because the allowlist was
+    the only way to satisfy "every emitted key is decided" and adding them there was the shortest
+    route. ``e2e/tests/withholding.spec.ts`` — a hand-written mirror of the allowlist, maintained
+    out of process precisely so a key cannot be added in the same motion as the code that emits it
+    — is what caught it. This class is the same question asked in the backend, so it fails in
+    seconds rather than at the end of a browser run.
+    """
+
+    LIVENESS_KEYS = ("args_digest", "policy_fingerprint")
+
+    @pytest.mark.parametrize("key", LIVENESS_KEYS)
+    def test_it_is_withheld_with_a_reason(self, key: str) -> None:
+        assert key in WITHHELD_PAYLOAD_FIELDS
+        assert key not in TIMELINE_PAYLOAD_FIELDS
+
+    @pytest.mark.parametrize("key", LIVENESS_KEYS)
+    def test_the_projector_drops_it(self, key: str) -> None:
+        event = TimelineEvent(
+            seq=0,
+            at=FIXED_NOW,
+            kind=TimelineKind.POLICY_DENY,
+            actor="policy",
+            summary="DENY for send_email",
+            payload={"tool_name": "send_email", "reason_code": "DESTINATION_NOT_TRUSTED", key: "x"},
+        )
+
+        assert timeline_event_view(event).payload == {
+            "tool_name": "send_email",
+            "reason_code": "DESTINATION_NOT_TRUSTED",
+        }
+
+    def test_a_real_refused_case_still_stores_them(self) -> None:
+        """Withholding is a projection decision. The graph must still have what liveness needs."""
+        case = poisoned_case()
+        denials = [event for event in case.timeline if event.kind is TimelineKind.POLICY_DENY]
+
+        assert denials, "the fixture must actually carry refusals or this proves nothing"
+        for event in denials:
+            assert event.payload["args_digest"]
+            assert event.payload["policy_fingerprint"]
+
+    def test_and_the_projection_of_that_same_case_carries_neither(self) -> None:
+        case = poisoned_case()
+        projected = {key for event in case.timeline for key in timeline_event_view(event).payload}
+
+        assert not (projected & set(self.LIVENESS_KEYS))
+
+    def test_refusal_identity_still_works_over_the_stored_payload(self) -> None:
+        """The consumer that does read them, reading them from where they still are."""
+        case = poisoned_case()
+
+        refusals = prior_refusals(case)
+
+        assert refusals, "prior_refusals must still see the refusals the case carries"
+        assert all(refusal.args_digest and refusal.fingerprint for refusal in refusals)
 
 
 # =================================================================================================

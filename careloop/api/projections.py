@@ -21,7 +21,10 @@ It is withheld rather than filtered. A filter over free text is the sanitiser th
 everywhere else — ``fetch_document`` does not clean the poisoned fixture and the prompt framing
 quotes untrusted content rather than escaping it, both because a filter that looks like a defence is
 worse than none. ``payload`` is projected through an **allowlist** for the same reason in the other
-direction: a payload key nobody has decided about is invisible to the API until somebody does.
+direction: a payload key nobody has decided about is invisible to the API until somebody does. A
+key a shipped writer emits must then be in :data:`TIMELINE_PAYLOAD_FIELDS` or in
+:data:`WITHHELD_PAYLOAD_FIELDS` with a reason — "not decided yet" and "decided to withhold" are
+different states and only the first should be able to sit there unnoticed.
 
 **The two properties, both enforced at import rather than only in tests.**
 
@@ -175,14 +178,6 @@ TIMELINE_PAYLOAD_FIELDS: Final[frozenset[str]] = frozenset(
         "verdict",
         "reason_code",
         "matched_rule_id",
-        # the refusal's durable identity, which is how the graph recognises a proposal it has
-        # already refused against unchanged policy inputs and stops replanning. Both are digests
-        # of things this API already exposes — ``args_digest`` covers the ``args`` above, and
-        # ``policy_fingerprint`` covers the case state, facts and approvals the case endpoints
-        # already return — so exposing them reveals nothing new, and they are what lets the panel
-        # explain *why* a case was handed to a caregiver rather than merely that it was.
-        "args_digest",
-        "policy_fingerprint",
         # state machine
         "from",
         "to",
@@ -222,6 +217,67 @@ TIMELINE_PAYLOAD_FIELDS: Final[frozenset[str]] = frozenset(
         "observation",
     }
 )
+
+#: Timeline payload keys a shipped writer emits and the API deliberately does **not** serialize.
+#:
+#: The counterpart of :data:`WITHHELD` for payload keys, and it exists for the same reason: the
+#: allowlist alone cannot tell "nobody has decided about this yet" apart from "somebody decided to
+#: withhold it", and only the first should be allowed to sit there quietly. A key here has been
+#: looked at and refused a place in the response; a key in neither table fails
+#: ``tests/test_api_projections.py`` on the next run.
+#:
+#: **Both entries are internal liveness bookkeeping.** The graph writes them onto ``POLICY_DENY``
+#: so that :func:`careloop.graph.context.is_repeat_refusal` can recognise a proposal it has already
+#: refused against unchanged policy inputs, which is what lets a case park for a caregiver instead
+#: of spending the node budget. They are how CareLoop *decides*; they are not part of what a
+#: caregiver, or a judge reading the under-the-hood panel, is being told. No frontend or API
+#: consumer reads either, and the audit narrative is complete without them: the panel already shows
+#: the tool, the arguments, the verdict, the reason code and the matched rule.
+#:
+#: ``args_digest`` is the sharper of the two, because the *name* is already part of the public
+#: contract on :class:`~careloop.api.models.ApprovalView` and
+#: :class:`~careloop.api.models.ActionView` — where it identifies one exact call a caregiver
+#: decided about, or one effect that happened once. Those are unchanged. Letting the same name onto
+#: a third surface as a by-product of an internal rule would blur an identity the frontend reasons
+#: about carefully into one nobody asked for.
+#:
+#: ``policy_fingerprint`` digests case state, every fact's key, value and trust level, and every
+#: approval. Those are exposed individually and on purpose — they are the demo — but a digest over
+#: them is a different object: it answers "did anything material change?" without saying what, which
+#: is a question no consumer has and an oracle a client could learn to key off. It is withheld for
+#: the reason the diagnostic is: nothing needs it, and it is easier to keep out than to take back.
+WITHHELD_PAYLOAD_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "args_digest": (
+            "internal liveness bookkeeping. The graph records it on POLICY_DENY so a repeated "
+            "refusal can be recognised; no consumer reads it, and ApprovalView.args_digest and "
+            "ActionView.args_digest already carry that name for a different and public purpose."
+        ),
+        "policy_fingerprint": (
+            "internal liveness bookkeeping. A digest over case state, facts and approvals, used "
+            "to scope refusal identity so a materially changed case is reconsidered. It says only "
+            "that something changed, which is a question no consumer has."
+        ),
+    }
+)
+
+
+def _refuse_a_payload_key_that_is_both_allowed_and_withheld() -> None:
+    """A key cannot be both serialized and withheld, and the contradiction must fail at import.
+
+    The allowlist wins in :func:`timeline_event_view` by construction, so a key in both tables
+    would be *exposed* while a table claimed it was not — a comment asserting the opposite of the
+    behaviour, which is the failure mode both tables exist to prevent.
+    """
+    both = sorted(TIMELINE_PAYLOAD_FIELDS & set(WITHHELD_PAYLOAD_FIELDS))
+    if both:  # pragma: no cover - the import-time check is the thing being asserted
+        raise RuntimeError(
+            f"payload key(s) {both} are in both TIMELINE_PAYLOAD_FIELDS and "
+            f"WITHHELD_PAYLOAD_FIELDS; a key is either projected or withheld, never both"
+        )
+
+
+_refuse_a_payload_key_that_is_both_allowed_and_withheld()
 
 
 # -- what is withheld, and what is derived --------------------------------------------------------
@@ -789,6 +845,7 @@ __all__: list[str] = [
     "SOURCE_MODELS",
     "TIMELINE_PAYLOAD_FIELDS",
     "WITHHELD",
+    "WITHHELD_PAYLOAD_FIELDS",
     "WORKING",
     "SectionsAreNotAPartition",
     "UndecidedField",

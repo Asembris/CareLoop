@@ -8,6 +8,14 @@
 **Raw records:** [`docs/live-runs/`](live-runs/)
 **Total spend:** ~$0.45 in session A, ~$0.14 in session B, against a $2.00 ceiling
 
+> **Pre-B2.** Both sessions drove the planner through `Model.structured_output` against a flat
+> `PlannerIntent` wrapper. Session V replaced that seam with closed `propose_*` tool calls, for a
+> reason this page anticipates without reaching: the schema shootout below is about which *shape*
+> a provider can satisfy, and B2 found that the wrapper's **description** was the remaining
+> problem — the model read it as describing an object rather than as an instruction to call one.
+> The findings here are unretracted and were true of the seam they measured;
+> [`model-benchmark-post-b2.md`](model-benchmark-post-b2.md) measures the current one.
+
 ## Transcripts are evidence, not fixtures
 
 Everything under `docs/live-runs/` is a record of what happened once. **Nothing in the test suite

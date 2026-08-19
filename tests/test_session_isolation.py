@@ -21,13 +21,18 @@ from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 import pytest
-from api_helpers import CARER, EMAIL, factory_proposing, intent, planner_proposing, triage_agent
+from api_helpers import CARER, factory_proposing
 from fastapi.testclient import TestClient
-from helpers import FIXED_NOW
+from session_helpers import (
+    isolated_client,
+    open_session,
+    scripted_factory,
+    scripted_worlds,
+    whose,
+)
 
 import demoworld
 from careloop.api.app import build_dependencies, create_app
-from careloop.api.demo import DEMO_SCENARIOS
 from careloop.api.deps import ApiDeps
 from careloop.api.sessions import (
     CLINIC_SESSION_HEADER,
@@ -38,28 +43,8 @@ from careloop.api.sessions import (
     UnknownSession,
     demo_session_worlds,
 )
-from careloop.graph.runner import context_for
 from careloop.state import CaseState
 from careloop.state.sqlite_store import SqliteCaseStore
-from careloop.tools.clinic import DEFAULT_TIMEOUT, ClinicClient
-
-BOOKING = {
-    "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
-    "patient_id": "PT-4417",
-    "slot_start": "2026-09-03T09:30:00",
-    "reason": "cardiology review",
-}
-
-#: What the planner proposes, by the case it is planning for.
-#:
-#: Keyed on the case rather than on the order presses arrive in, so the *same* script drives the
-#: isolated app and the single-world one. The two runs of ``TestTheIsolationProof`` then differ in
-#: exactly one thing — whether the visitors share a world — which is what makes it a proof.
-SCRIPTS = {
-    DEMO_SCENARIOS["referral"].case_id: intent("book_appointment", **BOOKING),
-    DEMO_SCENARIOS["resume"].case_id: intent("send_email", **EMAIL),
-    DEMO_SCENARIOS["injection"].case_id: intent("book_appointment", **BOOKING),
-}
 
 
 def session_worlds(*proposals, **over) -> SessionWorlds:
@@ -77,60 +62,6 @@ def session_worlds(*proposals, **over) -> SessionWorlds:
         )
 
     return SessionWorlds(build, **over)
-
-
-def scripted_factory(clinic: ClinicClient | None = None):
-    """A context factory whose planner proposes what the case it is planning for needs."""
-
-    def build(store, inbound, case_id: str):
-        return context_for(
-            store,
-            inbound,
-            case_id=case_id,
-            triage=triage_agent(),
-            planner=planner_proposing(SCRIPTS[case_id]),
-            now=lambda: FIXED_NOW,
-            clinic=clinic,
-        )
-
-    return build
-
-
-def scripted_worlds(clinic_url: str = "") -> SessionWorlds:
-    """Worlds shaped like the deployed ones, with scripted agents in place of a model."""
-
-    def build(session_id: str) -> ApiDeps:
-        clinic = (
-            ClinicClient(
-                clinic_url,
-                client=httpx.Client(
-                    timeout=DEFAULT_TIMEOUT, headers={CLINIC_SESSION_HEADER: session_id}
-                ),
-            )
-            if clinic_url
-            else None
-        )
-        return ApiDeps(
-            store=SqliteCaseStore(":memory:"),
-            context_factory=scripted_factory(clinic),
-            clinic=clinic,
-        )
-
-    return SessionWorlds(build)
-
-
-def isolated_client(worlds: SessionWorlds) -> TestClient:
-    return TestClient(create_app(sessions=worlds, demo=True))
-
-
-def open_session(client: TestClient) -> str:
-    minted = client.post("/api/sessions")
-    assert minted.status_code == 201
-    return minted.json()["session"]
-
-
-def whose(session_id: str) -> dict[str, str]:
-    return {SESSION_HEADER: session_id}
 
 
 class TestTwoVisitorsAtOnce:
@@ -465,13 +396,19 @@ class TestWorldsAreBounded:
 
 
 class TestNeitherRegistryOutlivesTheOther:
-    """CareLoop may not hold more worlds than Demo World does.
+    """CareLoop may not hold more worlds than Demo World does. Defence in depth, and no more.
 
-    The two registries are independent and a session is one entry in each. If CareLoop's cap were
-    the larger, a visitor still using their world could have their *clinic* evicted and reseeded
-    underneath them — and the read-back of an appointment that really was made would report
-    ``ABSENT``, which is CareLoop's strongest statement that an external record has gone missing,
-    for a reason that has nothing to do with the outside world.
+    This inequality used to be the *whole* guard on the two registries agreeing, and it was a number
+    standing in for a lifecycle. Equal capacities do not synchronise eviction **order**, and order
+    was the disagreement: CareLoop expired by idle time refreshed on every API request, Demo World
+    dropped its least-recently-touched *clinic*, and a visitor polling the dashboard was alive on
+    one side and the victim on the other. ``tests/test_session_lifecycle.py`` owns the property now
+    — CareLoop ends a session's clinic when it lets the session go, and Demo World removes a world
+    only when told to.
+
+    Kept because it is still true and still worth being true: with the coupling working, Demo World
+    holds at most what CareLoop holds, so the clinic is never the binding constraint on how many
+    judges can be looking at the demo at once.
     """
 
     def test_careloop_holds_no_more_worlds_than_the_clinic_does(self) -> None:

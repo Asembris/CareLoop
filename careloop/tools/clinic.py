@@ -49,8 +49,28 @@ from careloop.tools.results import AppointmentBooked
 #: the thing that should be deciding a run has taken too long.
 DEFAULT_TIMEOUT: Final[float] = 10.0
 
+#: How long the call that ends a world may take.
+#:
+#: Shorter than :data:`DEFAULT_TIMEOUT` because the caller is different in kind: a booking is the
+#: work a run exists to do, and ending a world is housekeeping performed on the way through
+#: ``POST /api/sessions``. A clinic that is not answering must cost an arriving visitor two seconds,
+#: not ten — and the divergence it leaves behind is queued and retried rather than waited out.
+END_SESSION_TIMEOUT: Final[float] = 2.0
+
 #: The header the idempotency key travels in.
 IDEMPOTENCY_HEADER: Final[str] = "Idempotency-Key"
+
+#: The header naming which of Demo World's worlds this client reaches.
+#:
+#: Declared here rather than imported: ``careloop`` may not depend on ``demoworld``, which is the
+#: whole basis of the read-back being independent. ``tests/test_session_isolation.py`` asserts the
+#: two spellings agree, so this is a drift check rather than a shared constant — the same
+#: arrangement as the seeded slot the referral names.
+#:
+#: It lives beside the client rather than in ``careloop.api.sessions`` because it is a fact about
+#: the clinic's protocol: this client is the thing that speaks it, and the one method that ends a
+#: world has to know whether it is scoped to one.
+CLINIC_SESSION_HEADER: Final[str] = "X-Demo-Session"
 
 
 class ClinicUnavailable(Exception):
@@ -114,16 +134,32 @@ class ClinicClient:
         self,
         base_url: str,
         *,
+        session: str | None = None,
         timeout: float = DEFAULT_TIMEOUT,
         client: httpx.Client | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._client = client if client is not None else httpx.Client(timeout=timeout)
+        if session is not None:
+            self._client.headers[CLINIC_SESSION_HEADER] = session
+        # Read back off the transport rather than kept only from the argument: a caller that built
+        # the transport itself and stamped the header on it has said which world this client
+        # reaches just as clearly, and two places to look would be two answers to disagree about.
+        self._session: Final[str | None] = self._client.headers.get(CLINIC_SESSION_HEADER)
 
     @property
     def base_url(self) -> str:
         """Where this client reaches the clinic."""
         return self._base_url
+
+    @property
+    def session(self) -> str | None:
+        """Which of Demo World's worlds this client reaches, or ``None`` for the default one.
+
+        A namespace and not a credential: Demo World mints none and verifies none. What it decides
+        here is whether this client has a world with a *lifetime* — see :meth:`put_back`.
+        """
+        return self._session
 
     def book(self, args: Mapping[str, str], idempotency_key: str) -> AppointmentBooked:
         """Book an appointment. :data:`~careloop.tools.executor.Handler`-shaped.
@@ -173,8 +209,57 @@ class ClinicClient:
         return _appointment(response)
 
     def reset(self) -> None:
-        """Put the clinic back to its seeded world. Demo control only."""
+        """Reseed the world this client reaches. Every booking forgotten, every slot free again.
+
+        Demo control only, and one of the two primitives :meth:`put_back` chooses between.
+        """
         self._request("POST", "/demo/reset")
+
+    def end_session(self) -> bool:
+        """End this client's world. Returns whether Demo World was still holding one.
+
+        **The lifecycle verb, and CareLoop is the only caller.** Demo World removes a world only
+        when it is told to: it does not know who is still looking at the demo and must not guess.
+        Until session V it did guess — it evicted least-recently-used, where "used" meant *the
+        clinic* was touched, while CareLoop expired a world by idle time refreshed on every API
+        request. A visitor polling the dashboard was alive on one side and the eviction victim on
+        the other, and the appointment CareLoop had verified for them vanished.
+
+        Idempotent by contract: ending a world twice is the same successful outcome as ending it
+        once, because a caller repairing a divergence must not be told it failed to.
+
+        Raises:
+            ValueError: if this client reaches the default world, which has no lifetime to end.
+            ClinicUnavailable: if the clinic could not be reached.
+            ClinicRefused: if the clinic answered and declined.
+        """
+        if self._session is None:
+            raise ValueError(
+                "this client reaches the clinic's default world, which has no lifetime to end; "
+                "only a session-scoped client may end the world it is scoped to"
+            )
+        response = self._request("DELETE", "/demo/session", timeout=END_SESSION_TIMEOUT)
+        return bool(response.json()["existed"])
+
+    def put_back(self) -> None:
+        """Put the world this client reaches back the way it started.
+
+        A **session-scoped** client ends its world. That is a reset — the next booking gets a
+        freshly seeded one — and it is also the thing that keeps CareLoop's registry and Demo
+        World's agreeing about who is still here, so a visitor's clinic is only ever removed by the
+        component that knows whether they have gone.
+
+        A client with **no** session reseeds the default world instead, which is what a single-world
+        CareLoop reaches and which has no lifetime to end.
+
+        The branch lives here rather than at the call site because which world a client reaches is
+        already settled by how it was built; the API layer asking about it would be the API layer
+        deciding something.
+        """
+        if self._session is None:
+            self.reset()
+        else:
+            self.end_session()
 
     def close(self) -> None:
         """Release the underlying connection pool."""
@@ -243,7 +328,9 @@ def clinic_executor(client: ClinicClient) -> MockExternalExecutor:
 
 
 __all__ = [
+    "CLINIC_SESSION_HEADER",
     "DEFAULT_TIMEOUT",
+    "END_SESSION_TIMEOUT",
     "IDEMPOTENCY_HEADER",
     "AppointmentNotFound",
     "ClinicClient",

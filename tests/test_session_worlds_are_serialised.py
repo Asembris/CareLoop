@@ -31,29 +31,57 @@ def a_world(_session_id: str) -> ApiDeps:
 
 
 class TestEverySessionMethodIsSerialised:
-    """The lock is not optional on any of them, and a new method must not be the exception.
+    """The lock is not optional on anything that touches the registry, and it is held across no I/O.
 
     Asserted on the decorator rather than by racing threads, because a race that happens to pass is
     not evidence — the timing test below is the reproduction, and this is the invariant.
+
+    Two lists rather than one, and the second is as load-bearing as the first. :data:`METHODS` is
+    what must hold the lock. :data:`NOT_HELD` is what must **not**, each for a stated reason, and
+    asserting it stops the sweep being "fixed" by decorating one of them — which would reintroduce
+    exactly the stall each of them exists to avoid.
     """
 
-    METHODS: ClassVar[tuple[str, ...]] = ("mint", "world", "sessions", "busy", "_forget_idle")
+    #: Everything that reads or writes the registry's own structures.
+    METHODS: ClassVar[tuple[str, ...]] = (
+        "_mint",
+        "world",
+        "sessions",
+        "busy",
+        "orphans",
+        "_forget_idle",
+        "_orphan",
+        "_take_orphans",
+    )
 
-    def test_the_list_covers_everything_that_touches_the_registry(self) -> None:
-        """Vacuity: a method missing from this list is a method the sweep never looks at.
+    #: Everything that must not hold the lock, and why.
+    #:
+    #: ``drain`` is a coroutine: holding a blocking lock across its ``await`` would stop the loop
+    #: from making the progress it is waiting for. It takes its snapshot under the lock instead,
+    #: which is the part that races an eviction.
+    #:
+    #: The other three end a forgotten world's clinic **over HTTP**. A lock held across a network
+    #: round trip stalls every other visitor's request for as long as Demo World takes to answer,
+    #: and a Demo World that is not answering would make one arriving visitor's mint block every
+    #: page on the site. ``mint`` is the outer half of a pair: the registry mutation is ``_mint``,
+    #: which is guarded, and the ending happens after it returns.
+    NOT_HELD: ClassVar[frozenset[str]] = frozenset(
+        {"drain", "mint", "_end_forgotten", "_end_or_orphan"}
+    )
 
-        ``drain`` is excluded by name and with a reason: it is a coroutine, and holding a blocking
-        lock across its ``await`` would stop the loop from making the progress it is waiting for.
-        It takes its snapshot under the lock instead, which is the part that races an eviction.
+    def test_the_lists_cover_every_method_there_is(self) -> None:
+        """Vacuity: a method in neither list is a method the sweep never looks at.
+
+        Read off ``vars`` rather than ``dir`` and without a name-shape filter, so a **private**
+        method added later is caught too — three of the four things that touch the registry's
+        queues are private, and a filter that skipped them would have skipped the interesting ones.
         """
-        touching = {
+        defined = {
             name
-            for name in dir(SessionWorlds)
-            if callable(getattr(SessionWorlds, name))
-            and (not name.startswith("_") or name in {"_forget_idle", "__len__"})
-            and name not in {"drain"}
+            for name, value in vars(SessionWorlds).items()
+            if callable(value) and (not name.startswith("__") or name == "__len__")
         }
-        assert touching == {*self.METHODS, "__len__"}
+        assert defined == {*self.METHODS, "__len__", *self.NOT_HELD}
 
     def test_every_one_of_them_holds_the_lock(self) -> None:
         unguarded = [
@@ -62,6 +90,19 @@ class TestEverySessionMethodIsSerialised:
             if not hasattr(getattr(SessionWorlds, name), "__wrapped__")
         ]
         assert unguarded == []
+
+    def test_and_the_ones_that_must_not_hold_it_do_not(self) -> None:
+        """The other direction, and it is not symmetry for its own sake.
+
+        Decorating ``mint`` would put an HTTP round trip inside the lock and pass the test above,
+        which is precisely the shape of "fix" a sweep is supposed to make impossible.
+        """
+        guarded = [
+            name
+            for name in sorted(self.NOT_HELD)
+            if hasattr(getattr(SessionWorlds, name), "__wrapped__")
+        ]
+        assert guarded == []
 
     def test_the_detector_notices_an_undecorated_method(self) -> None:
         """Vacuity: ``__wrapped__`` is the decorator's fingerprint, so a plain method has none."""
@@ -101,6 +142,10 @@ def test_concurrent_mints_over_an_evictable_registry_never_raise() -> None:
     so each mint walks the whole list — the condition the failure needs, reached without sleeping.
     Measured against a registry with the decorators stripped: eight threads, five runs out of five,
     seven of the eight raising ``KeyError`` from ``_forget_idle``.
+
+    ``a_world`` binds no clinic, so every world this evicts has nothing external to end and the
+    ending is a no-op. That keeps this a test about the lock rather than about the coupling, which
+    ``tests/test_session_lifecycle.py`` owns.
     """
     worlds = SessionWorlds(a_world, limit=4096, idle_seconds=0.0, now=lambda: 1.0)
     for _ in range(200):

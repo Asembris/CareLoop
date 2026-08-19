@@ -719,7 +719,11 @@ def reset_world(deps: ApiDeps) -> dict[str, object]:
 
     removed = deps.store.clear()
     if deps.clinic is not None:
-        deps.clinic.reset()
+        # `put_back`, not `reset`: a session-scoped clinic has its world *ended*, which is the same
+        # observable outcome — the next booking gets a freshly seeded world — and is also what keeps
+        # this registry and Demo World's agreeing about who is still here. Which of the two happens
+        # is settled by how the client was built, so there is nothing for this route to decide.
+        deps.clinic.put_back()
     return {
         "cases_cleared": removed,
         "clinic_reset": deps.clinic is not None,

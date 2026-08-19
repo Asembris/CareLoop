@@ -1,0 +1,15 @@
+{
+  "name": "careloop-site-tests",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Runtime gate for the CareLoop dossier. Separate from e2e/ because it tests a static artifact, not the application.",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1"
+  }
+}

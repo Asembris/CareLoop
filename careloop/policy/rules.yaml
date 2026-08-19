@@ -50,7 +50,8 @@ rules:
     reason_code: DESTINATION_NOT_TRUSTED
     diagnostic: >-
       send_email.to resolved below TRUSTED. DESTINATION-class arguments are not promotable by
-      validation; the address must come from trusted config or an explicit human decision.
+      validation; the address must come from trusted config. A caregiver's approval authorises one
+      exact call and mints no fact, so it can never raise this argument's trust either.
 
   - id: deny-upload-to-untrusted-portal
     effect: DENY
@@ -76,7 +77,7 @@ rules:
     reason_code: DESTINATION_NOT_TRUSTED
     diagnostic: >-
       grant_portal_access.grantee resolved below TRUSTED. Who receives access is DESTINATION-class
-      and must come from trusted config or a human decision.
+      and must come from trusted config; an approval authorises a call and mints no fact.
 
   # The grant's *other* destination. `grantee` says who receives access; this says on which
   # system, and it is DESTINATION-class for the same reason — a portal named by document content
@@ -104,13 +105,14 @@ rules:
           arg_class: DESTINATION
     reason_code: DESTINATION_NOT_TRUSTED
     diagnostic: >-
-      grant_portal_access.portal_id resolved below TRUSTED. Which portal an access grant is made on
-      is DESTINATION-class and must come from trusted config or a human decision. A caregiver's
-      approval cannot substitute for it: DENY is evaluated first and unconditionally, so this
-      refuses the call before REQUIRE_HUMAN is considered and the question is never put to a person
-      at all. That ordering is the point — asking somebody to approve a grant on a portal nothing
-      established would be putting a decision to a caregiver that CareLoop should already have
-      refused.
+      grant_portal_access.portal_id resolved below TRUSTED. Which portal an access grant is made
+      on is DESTINATION-class and must come from trusted config. A caregiver's approval cannot
+      substitute for it, for two independent reasons. An approval releases one exact call and mints
+      no fact, so nothing a person presses can raise this argument's trust at all. And DENY is
+      evaluated first and unconditionally, so this refuses the call before REQUIRE_HUMAN is
+      considered and the question is never put to a person — asking somebody to approve a grant on
+      a portal nothing established would be putting a decision to a caregiver that CareLoop should
+      already have refused.
 
   # The only rule keyed on the system's only AUTHORITY argument. It is the mirror of the
   # destination rules: a role lifted out of a document and then validated is still CONTROLLED, and
@@ -128,8 +130,9 @@ rules:
       grant_portal_access.role resolved below TRUSTED. This is NOT the not-yet-validated case that
       INSUFFICIENT_FACT_TRUST covers: AUTHORITY-class arguments are absent from
       PROMOTABLE_ARG_CLASSES, so no validator can ever raise one, and revalidating this value would
-      change nothing. What powers a grant confers must come from trusted config or a human
-      decision. Contrast deny-booking-on-unvalidated-slot, where validation is the remedy.
+      change nothing. What powers a grant confers must come from trusted config, and an approval
+      is not a second route to it: a caregiver's decision authorises one exact call and mints no
+      fact. Contrast deny-booking-on-unvalidated-slot, where validation is the remedy.
       Note that promotion was never the only way in. Trust is resolved against the fact key the
       argument declares (role), and until it was, naming the configured portal id as a role
       resolved TRUSTED by collision and walked past this rule with no promotion involved at all.

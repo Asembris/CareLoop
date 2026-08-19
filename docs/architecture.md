@@ -28,11 +28,18 @@ to an outside address is *read*, and it changes nothing about what may happen.
 `{source_doc, page, trust_level}` and may be promoted `UNTRUSTED → CONTROLLED` by deterministic
 validation. Only `VALUE`-class arguments are promotable at all; `DESTINATION` and `AUTHORITY` —
 recipients, addresses, URLs, permission changes — never are, whatever a validator says. Trust
-resolves to the *lowest* level among facts matching a value, so a poisoned duplicate cannot be
-laundered by a legitimate twin.
+resolves to the *lowest* level among facts sharing the argument's declared fact key **and** its
+canonical value, so a poisoned duplicate cannot be laundered by a legitimate twin — and a
+configured literal that happens to appear in a document under some other key cannot be dragged
+down by it either.
 
 **TRUSTED — application code, the policy engine, `rules.yaml`.** Trust is never manufactured by
-validation. It comes from configuration a person wrote, or from a person pressing approve.
+validation. It comes from configuration a person wrote — `careloop/graph/trusted.py` and nothing
+else. **A caregiver pressing approve does not produce it**, and this page said otherwise until
+session W: an approval is a capability for one exact `(tool_name, args_digest)`, it writes no
+fact, and no fact's trust level moves when a person decides. Deterministic trust and human
+approval are separate dimensions, read by separate predicates, which is exactly why an approval
+can never satisfy a rule about *where* an effect lands.
 
 Zone colours are claims about *authority*, not about code quality. UNTRUSTED does not mean badly
 written; it means nothing there may decide anything, whoever wrote it.

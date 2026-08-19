@@ -4,7 +4,8 @@ Two orthogonal ideas live here:
 
 ``TrustLevel``
     How much we trust a *value*. Anything lifted out of a document or an email starts
-    ``UNTRUSTED``. Validation can raise it. Trusted configuration is born ``TRUSTED``.
+    ``UNTRUSTED``. Validation can raise it to ``CONTROLLED``. ``TRUSTED`` is not reachable from
+    here at all: it is what :mod:`careloop.graph.trusted` seeds onto a new case and nothing else.
 
 ``ArgClass``
     What a tool *argument* controls. A ``VALUE`` argument affects the content of an action; a
@@ -12,8 +13,17 @@ Two orthogonal ideas live here:
 
 The load-bearing rule of the whole system is the interaction between the two: validation may raise
 the trust of a value, but it may never make a document-sourced value acceptable as a
-``DESTINATION`` or ``AUTHORITY`` argument. Those must come from trusted configuration or explicit
-human approval. See :data:`PROMOTABLE_ARG_CLASSES`.
+``DESTINATION`` or ``AUTHORITY`` argument. Those must come from trusted configuration. See
+:data:`PROMOTABLE_ARG_CLASSES`.
+
+**A caregiver's approval is not a third way to reach ``TRUSTED``, and saying so was wrong for long
+enough to be worth a paragraph.** An :class:`~careloop.state.case.Approval` is a capability for one
+exact ``(tool_name, args_digest)``: deciding it releases that call and nothing else. It writes no
+:class:`~careloop.provenance.facts.Fact`, and no fact's ``trust_level`` moves when a person presses
+approve. The policy engine reads the two through different predicates — ``arg_trust_at_least``
+resolves trust from ``case.facts``, ``args_approved`` looks up an approval — precisely because they
+are different dimensions, which is also why an approval says a caregiver was asked about one exact
+call and never says where that call lands.
 """
 
 from __future__ import annotations
@@ -32,7 +42,11 @@ class TrustLevel(StrEnum):
     """Extracted, then validated by a deterministic checker (format, range, cross-reference)."""
 
     TRUSTED = "TRUSTED"
-    """Originates from trusted configuration or an explicit human decision."""
+    """Originates from trusted configuration — :mod:`careloop.graph.trusted`, and nowhere else.
+
+    Not reachable by promotion (:func:`careloop.provenance.facts.promote` refuses it outright) and
+    not reachable by a human decision, which produces an approval rather than a fact.
+    """
 
 
 class ArgClass(StrEnum):
@@ -81,5 +95,5 @@ def check_promotable(arg_class: ArgClass) -> None:
     if arg_class not in PROMOTABLE_ARG_CLASSES:
         raise PromotionForbidden(
             f"{arg_class} arguments can never be promoted by validation; "
-            f"they must come from trusted config or human approval"
+            f"they must come from trusted config"
         )

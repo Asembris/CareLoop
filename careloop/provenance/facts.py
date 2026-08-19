@@ -98,14 +98,14 @@ def promote(
     Raises:
         PromotionForbidden: if ``arg_class`` may never be satisfied by promotion, or if ``to`` is
             not above the fact's current level. Promotion to ``TRUSTED`` is always refused:
-            ``TRUSTED`` is reserved for values that never passed through untrusted content.
+            ``TRUSTED`` is reserved for values that never passed through untrusted content, and
+            :mod:`careloop.graph.trusted` is the only thing that produces one.
     """
     check_promotable(arg_class)
 
     if to is TrustLevel.TRUSTED:
         raise PromotionForbidden(
-            "validation cannot produce TRUSTED; that level is reserved for trusted config "
-            "and human decisions"
+            "validation cannot produce TRUSTED; that level is reserved for trusted config"
         )
     if to is not TrustLevel.CONTROLLED:
         raise PromotionForbidden(f"cannot promote to {to}")

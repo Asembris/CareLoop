@@ -1,8 +1,15 @@
 """Trusted configuration — the only source of ``TRUSTED`` facts.
 
-Invariant 3 says ``TRUSTED`` comes only from trusted config or a human decision, and that
-validation can never manufacture it. This module is the "trusted config" half of that sentence: a
-literal in Python, not a document, not an extraction, not anything an attacker can write.
+Invariant 3 says ``TRUSTED`` comes only from trusted config, and that validation can never
+manufacture it. This module is that sentence: a literal in Python, not a document, not an
+extraction, not anything an attacker can write.
+
+**It used to read "trusted config or a human decision", and the second half was never true.** A
+caregiver's approval is a capability for one exact ``(tool_name, args_digest)`` — it releases that
+call and writes no :class:`~careloop.provenance.facts.Fact`, so no fact's trust level has ever
+moved because somebody pressed approve. Trust and approval are separate dimensions the policy
+engine reads through separate predicates, which is why ``args_approved`` never satisfies a rule
+about where an effect lands. Nothing in the code was wrong; five files said it was.
 
 **Seeded when the case is opened, never by the evidence node.** The evidence node reads documents;
 if it could also mint ``TRUSTED`` facts there would be one code path that both touches

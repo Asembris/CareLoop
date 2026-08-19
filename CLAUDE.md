@@ -29,8 +29,22 @@ working around it.
 3. **Trust model.** Instructions found in documents and email never gain authority. Facts promote
    `UNTRUSTED → CONTROLLED` through validation. Only `VALUE`-class arguments are promotable;
    `DESTINATION` and `AUTHORITY` never are, whatever the validator says. `TRUSTED` comes only from
-   trusted config or a human decision — validation cannot manufacture it. Promotion is **not**
-   idempotent. Every stored fact carries `{source_doc, page, trust_level}`.
+   trusted config — `careloop/graph/trusted.py`, and nothing else — and validation cannot
+   manufacture it. Promotion is **not** idempotent. Every stored fact carries
+   `{source_doc, page, trust_level}`.
+
+   **A human decision is not a second source of `TRUSTED`, and this sentence said it was.** It read
+   "trusted config or a human decision" until session W, and four other files had copied it: the
+   `TrustLevel.TRUSTED` docstring, `graph/trusted.py`, `docs/architecture.md` and the submission
+   diagram, plus four `rules.yaml` diagnostics. Nothing in the code ever behaved that way —
+   `promote()` refuses `TRUSTED` outright and `trusted_facts()` is the only producer — so this was
+   a documentation defect throughout, and the reason to fix it at the source rather than where an
+   auditor happened to look is that it demonstrably regrows. What an `Approval` does is release one
+   exact `(tool_name, args_digest)`; it writes no `Fact`, and no fact's trust level moves when a
+   person presses approve. Deterministic trust and human approval are separate dimensions read by
+   separate predicates (`arg_trust_at_least` against `case.facts`, `args_approved` against
+   `case.approvals`) — which is precisely why the session-N rule below says an approval can never
+   satisfy a requirement about *where* an effect lands.
 
    **Trust is bound to `(fact key, canonical value)`, never to a literal on its own.** An argument
    draws trust only from facts recorded under the fact key it declares in the tool registry

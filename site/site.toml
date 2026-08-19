@@ -1,0 +1,62 @@
+# The one edit surface for the CareLoop dossier.
+#
+# Everything here is substituted into a copy of `vendor/dossier.bundle.html` by `adapt.py`, which
+# writes `index.html`. Never edit `index.html` and never edit the vendored bundle: the first is
+# generated, and the second is the pristine Claude Design artifact whose embedded rendering
+# manifest is the fidelity surface this whole arrangement exists to protect.
+#
+# **Empty means pending, and pending is a designed state.** The dossier renders `—` with
+# "Verified result pending" for an empty result, and "Deployment pending" / "Repository pending"
+# for an empty destination, falling back to an in-page anchor rather than a dead link. Leaving a
+# value empty is therefore always safe; filling one with a guess is not.
+
+[site]
+# Absolute origin the deployed site answers on, with no trailing slash — for example
+# "https://asembris.github.io/CareLoop". Empty until GitHub Pages is actually live.
+#
+# While it is empty, `canonical`, `og:url` and the absolute form of `og:image` are omitted and the
+# social image is emitted as a page-relative path instead. A relative `og:image` resolves correctly
+# for a browser and for any crawler that resolves relative URLs, and it is honest: it claims no
+# address this site does not yet have. Filling this in is a Phase-2 step that happens after the
+# first successful deployment, not before it.
+pages_base_url = ""
+
+# The dossier's own copy, lifted verbatim from its `<helmet>` block so the crawler-visible head and
+# the hydrated head say the same thing. These are not new marketing lines; changing them here
+# changes only what a crawler sees, which is why they live beside the tags they populate.
+title = "CareLoop — Agency with boundaries. Care with receipts."
+description = "CareLoop proposes actions, checks authority against deterministic policy, executes only what is permitted, and verifies the external result before a case is closed."
+og_title = "CareLoop — Agency with boundaries. Care with receipts."
+og_description = "An autonomous back office for family caregiving. The loop is only closed when the world agrees."
+
+# Loose files, because a social crawler cannot reach an image that only exists base64-encoded
+# inside the bundle's manifest. Page-relative on purpose: a leading slash would 404 under the
+# GitHub project path `/<repo>/`.
+og_image = "assets/product/authority.png"
+favicon = "assets/careloop-mark.svg"
+
+# Where the dossier's calls to action point. All four are read by the page's own PROJECT object.
+# Phase 1 ships every one of them empty; Phase 2 fills only the ones the repository can defend.
+[destinations]
+live_url = ""
+github_url = ""
+devpost_url = ""
+video_url = ""
+
+# The six proof-ledger results, by their id in the page's EVIDENCE array.
+#
+# **A number goes here only when the repository can produce it on demand**, and only under a label
+# that describes what was actually measured. An empty string leaves the entry reading `—` /
+# "Verified result pending", which is the honest state and the one Phase 1 ships.
+[evidence]
+unauthorized = ""
+injection = ""
+mutation = ""
+readback = ""
+e2e = ""
+tests = ""
+
+# The two rows of the boundary-removed counterfactual. Empty keeps the pristine em dash.
+[counterfactual]
+careloop = ""
+boundary_removed = ""

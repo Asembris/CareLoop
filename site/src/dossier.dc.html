@@ -47,6 +47,16 @@ a:hover { color: #315e52; }
     padding-top: 58px !important; padding-bottom: 58px !important; min-height: 0 !important; }
   main > section[data-story-scrub] { height: 400vh !important; padding: 0 22px !important; }
   main > section[data-nav="closure"]:last-of-type { padding-top: 76px !important; padding-bottom: 76px !important; }
+  /* Four layouts size their columns with hard pixel minimums — the widest reserves 700px before
+     its 56px gap — so on a phone they, and every capture and row inside them, push the document
+     past the viewport. Collapsing those four to a single column is the whole fix; the stacking
+     order is already the reading order, so nothing is rearranged.
+
+     The selector matches on `minmax(` coming first, which is exactly what the seven other grids
+     do not do: `repeat(auto-fit, minmax(...))` and `repeat(3, minmax(0, 1fr))` already collapse
+     on their own and are deliberately left alone. Inline styles carry the original columns, so
+     `!important` is what the existing rules in this block already use. */
+  main [style*='grid-template-columns: minmax('] { grid-template-columns: 1fr !important; }
 }
 /* With large morphs disabled there is nothing for a long scroll to reveal. */
 @media (prefers-reduced-motion: reduce) {

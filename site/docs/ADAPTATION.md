@@ -1,13 +1,14 @@
 # The adaptation layer
 
 Why there is a generated `index.html`, what it is generated from, exactly what changes, and what
-is deliberately left broken.
+is deliberately left alone.
 
 ## The shape
 
 ```
 vendor/dossier.bundle.html      pristine Claude Design export — the fidelity surface
-        +  site.toml            the one edit surface
+        +  site.toml            destinations and results
+        +  src/dossier.dc.html  the mobile stylesheet, and only that
         ↓  adapt.py             a short list of textual adaptations
    index.html                   generated, untracked, what Pages serves
 ```
@@ -15,6 +16,9 @@ vendor/dossier.bundle.html      pristine Claude Design export — the fidelity s
 The bundle is a self-extracting document: a base64 **manifest** carrying every font, capture,
 script and the runtime; a JSON **template** carrying the page; and a small runtime that mints blob
 URLs and swaps the document. The manifest is why the page renders and animates the way it does.
+
+`src/` is a second, deliberately narrow input: `adapt.py` reads exactly one CSS block out of it
+(see §6) and nothing else.
 
 **`adapt.py` never opens the manifest.** It hashes it before and after and refuses to write if a
 single byte moved. That is the invariant the whole arrangement exists to hold, and
@@ -29,9 +33,10 @@ that needed changing are plain literals in the template, and the metadata that n
 in a stub head the bundle never touches.
 
 Re-platforming would have put the page's rendering — its type, its layout, its damped topology, its
-pinned scrub — at risk to buy a smaller download. Measured, the transform changes **six lines** of
-the template and adds thirteen to the head, and the rendered result is pixel-identical across
-twenty captured states. A rebuild could not have offered that evidence.
+pinned scrub — at risk to buy a smaller download. Measured, the transform touches **two hunks** of
+the file: thirteen lines added to the stub head, and one template line rewritten. Every desktop
+state is pixel-identical to the untransformed bundle across twenty captures. A rebuild could not
+have offered that evidence.
 
 The cost is honest and unpaid: `index.html` is 1.83 MiB, of which about 878 KB is four product
 captures inlined into the critical path, and their `loading="lazy"` cannot help in that form. For a
@@ -40,7 +45,10 @@ page a judge opens once, on a host that gzips, that was ranked below fidelity.
 ## Exactly what changes
 
 Measured against the vendored bundle. Two hunks in the file: thirteen lines inserted into the stub
-head, and one template line rewritten.
+head, and one template line rewritten — the template is a single long line, so its 22 changed
+lines all sit inside that one rewrite.
+
+Only §6 is intended to change what anything looks like, and only below 721px.
 
 ### 1. Crawler-visible metadata (stub head)
 
@@ -94,27 +102,40 @@ The page already carries a `PROJECT` object and an `EVIDENCE` array. `adapt.py` 
 `site.toml` — and leaves an empty value byte-for-byte alone, so the dossier's pending states are
 preserved rather than rewritten to the same thing.
 
-## What is deliberately still broken
+### 6. The mobile stylesheet, carried from `src/`
 
-**The page overflows horizontally at 375px.** Measured identically on the pristine bundle and the
-adapted page: a document 778px wide in a 375px viewport, with 54 overflowing elements.
+The handoff overflowed horizontally on a phone: **778px of document in a 375px viewport**, with 54
+overflowing elements, measured identically on the pristine bundle. Four layouts sized their columns
+with hard pixel minimums — the widest reserving 700px before its 56px gap — and the
+`max-width: 720px` media query adjusted padding and section height without ever collapsing them.
 
-The cause is in the design. Two chapters set their capture beside their prose with hard grid
-floors — `minmax(300px, 0.78fr) minmax(400px, 1fr)` and `minmax(260px, 0.56fr) minmax(420px, 1fr)`,
-about 756px before the gap — and the `max-width: 720px` media query adjusts padding and section
-height without ever collapsing them to one column.
+The fix is one rule, made at source in `src/dossier.dc.html`:
 
-It is **not** repaired here. Fixing it means changing the layout, which is outside the adaptations
-this layer is allowed to make, and doing it by injecting CSS around a locked artifact is precisely
-the "compensate by editing the runtime" move this approach exists to refuse. It belongs at source,
-in `src/dossier.dc.html`, followed by a Claude Design re-export and a replaced vendored bundle.
+```css
+main [style*='grid-template-columns: minmax('] { grid-template-columns: 1fr !important; }
+```
 
-Note that `docs/BUILD.md`'s pre-ship checklist claims no horizontal overflow at mobile. That claim
-was untrue when the handoff was written.
+It matches on `minmax(` coming first, which is exactly what the seven other grids do not do:
+`repeat(auto-fit, minmax(...))` and `repeat(3, minmax(0, 1fr))` already collapse on their own and
+are left alone. The columns live in inline styles, so `!important` is required — the same thing the
+three rules already in that block do.
 
-Until it is fixed, `tests/dossier.spec.ts` holds a ratchet rather than the goal: the artifact may
-not get worse than the figure measured on the pristine bundle. When the design is fixed, tighten it
-to the same bar the desktop test already holds.
+**`adapt.py` carries the block from `src/` into the bundle**, because the bundle cannot be rebuilt
+from source without Claude Design and a responsive fix that stayed in `src/` would never reach the
+page anybody loads. The sync is scoped to that one `@media` block and matches braces by depth, so
+an unrelated edit to `src/` cannot ride along and a nested rule cannot truncate the match. This is
+the only path by which the editable source reaches the deployed page without a re-export.
+
+Measured after the change: every width from **320 to 720px** has `scrollWidth == innerWidth`, and
+all ten desktop states remain **pixel-identical** to the previous output.
+
+**A narrower band at 721–799px still overflows**, at an unchanged 796px, exactly as it did before.
+Those grids need roughly 756px plus padding and the breakpoint sits at 720, so the only cure is
+moving the breakpoint — which would change the tablet layout this change was required to preserve
+exactly. It is left alone deliberately, and it is the one piece of this defect still open.
+
+Note that `docs/BUILD.md`'s pre-ship checklist claimed no horizontal overflow at mobile. That claim
+was untrue when the handoff was written; it is true now below 721px.
 
 ## Re-exporting from Claude Design
 

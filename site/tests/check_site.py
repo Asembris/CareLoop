@@ -40,6 +40,7 @@ from adapt import adapt, manifest_digest
 
 SITE: Final = Path(__file__).resolve().parents[1]
 VENDOR: Final = SITE / "vendor" / "dossier.bundle.html"
+SOURCE_PAGE: Final = SITE / "src" / "dossier.dc.html"
 GENERATED: Final = SITE / "index.html"
 CONFIG: Final = SITE / "site.toml"
 
@@ -93,9 +94,13 @@ def main() -> int:
         return 1
     generated = _read(GENERATED)
     config = tomllib.loads(_read(CONFIG))
-    rebuilt = adapt(vendor, config)
+    source_page = _read(SOURCE_PAGE)
+    rebuilt = adapt(vendor, config, source_page)
     check("re-running adapt.py reproduces it byte for byte", rebuilt == generated)
-    check("the transform is deterministic across runs", adapt(vendor, config) == rebuilt)
+    check(
+        "the transform is deterministic across runs",
+        adapt(vendor, config, source_page) == rebuilt,
+    )
     check(".nojekyll is present at the artifact root", (SITE / ".nojekyll").exists())
 
     print("\nthe rendering manifest never moved")
@@ -135,6 +140,22 @@ def main() -> int:
         check(f"lightbox -> {rel}", (SITE / rel).is_file())
         check(f"the page points the {shot} lightbox at it", f'"{rel}"' in _template(generated))
 
+    print("\nthe mobile stylesheet is carried from src/ into the page")
+    collapse = (
+        "main [style*='grid-template-columns: minmax('] { grid-template-columns: 1fr !important; }"
+    )
+    check("src/dossier.dc.html collapses the hard-minimum grids", collapse in source_page)
+    check("and the generated page carries the same rule", collapse in _template(generated))
+    # Non-vacuous: without the sync the rule cannot reach the page, so the two must disagree.
+    unsynced = adapt(vendor, config)
+    check("omitting the sync would leave it out", collapse not in _template(unsynced))
+    # Counted inside `style="…"` only: the rule's own attribute selector contains the same
+    # substring, and matching it would make this assertion count itself.
+    inline_hard = re.findall(r'style="[^"]*grid-template-columns: minmax\(', _template(generated))
+    inline_soft = re.findall(r'style="[^"]*grid-template-columns: repeat\(', _template(generated))
+    check("four inline grids carry hard minimums", len(inline_hard) == 4, str(len(inline_hard)))
+    check("seven inline grids collapse already", len(inline_soft) == 7, str(len(inline_soft)))
+
     print("\nnothing reaches an origin the site does not serve")
     template = _template(generated)
     hosts = {
@@ -165,7 +186,7 @@ def main() -> int:
     probe["destinations"]["github_url"] = "https://repo.invalid"
     probe["evidence"]["tests"] = "PROBE-EVIDENCE"
     probe["counterfactual"]["careloop"] = "PROBE-ROW"
-    filled = adapt(vendor, probe)
+    filled = adapt(vendor, probe, source_page)
     filled_template = _template(filled)
     ft = filled_template
     check("a configured live_url reaches PROJECT", 'liveUrl: "https://live.invalid"' in ft)

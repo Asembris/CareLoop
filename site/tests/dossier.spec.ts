@@ -273,36 +273,71 @@ test.describe("the dossier under the GitHub project path", () => {
   });
 
   /**
-   * The dossier overflows horizontally at 375px, and it did so before this integration existed.
+   * The dossier used to overflow horizontally on a phone: 778px of document in a 375px viewport,
+   * measured identically on the pristine handoff bundle, so it was a defect in the design rather
+   * than anything the adaptation introduced. Four layouts sized their columns with hard pixel
+   * minimums — the widest reserving 700px before its 56px gap — and the `max-width: 720px` media
+   * query adjusted padding and section height without ever collapsing them.
    *
-   * Measured identically against the pristine handoff bundle and the adapted page: both report a
-   * document 778px wide in a 375px viewport. The cause is in the design, not the adaptation — two
-   * chapters lay their capture beside their prose with hard grid floors,
-   * `minmax(300px, 0.78fr) minmax(400px, 1fr)` and `minmax(260px, 0.56fr) minmax(420px, 1fr)`,
-   * which reserve ~756px before the gap, and the `max-width: 720px` media query adjusts padding
-   * and section height without ever collapsing those grids to one column.
+   * The fix is one rule in `src/dossier.dc.html`, carried into the bundle by `adapt.py`. This now
+   * holds the real bar rather than a ratchet.
    *
-   * It is therefore **not** repaired here. Fixing it means changing the layout, which is outside
-   * the transformations this integration is allowed to make, and doing it by injecting CSS around
-   * a locked artifact would be exactly the "compensate by editing the runtime" move Path A exists
-   * to refuse. It belongs at source, in a Claude Design re-export, and it is recorded as a Phase-2
-   * blocker in docs/ADAPTATION.md.
-   *
-   * So this asserts a ratchet rather than the goal: the artifact may not get *worse* than the
-   * figure that was measured on the pristine bundle. When the design is fixed, tighten this to
-   * `toBeLessThanOrEqual(innerWidth)` — the same bar the desktop test already holds.
+   * Every width from 320 to 720 is clean. A separate band at **721–799px** still overflows, at an
+   * unchanged 796px: those grids need ~756px plus padding, and the breakpoint sits at 720. Curing
+   * that means moving the breakpoint, which would change the tablet layout this change is required
+   * to preserve exactly, so it is left alone and recorded in docs/ADAPTATION.md.
    */
-  const KNOWN_MOBILE_OVERFLOW = 778;
+  for (const width of [320, 360, 375, 414, 600, 720]) {
+    test(`no horizontal overflow at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 812 });
+      await open(page);
+      const overflow = await page.evaluate(() => ({
+        scrollWidth: document.documentElement.scrollWidth,
+        innerWidth: window.innerWidth,
+      }));
+      expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.innerWidth);
+    });
+  }
 
-  test("mobile overflow is no worse than the pristine handoff's", async ({ page }) => {
+  test("the phone renders the hero, the workflow and a product capture cleanly", async ({ page }) => {
     const faults = watch(page);
     await page.setViewportSize({ width: 375, height: 812 });
     await open(page);
-    const overflow = await page.evaluate(() => ({
-      scrollWidth: document.documentElement.scrollWidth,
-      innerWidth: window.innerWidth,
-    }));
-    expect(overflow.scrollWidth).toBeLessThanOrEqual(KNOWN_MOBILE_OVERFLOW);
+
+    // Each collapsed grid must occupy one column, inside the viewport, with its capture intact.
+    const collapsed = await page.evaluate(() => {
+      const vw = document.documentElement.clientWidth;
+      return [...document.querySelectorAll('[style*="grid-template-columns: minmax("]')].map((el) => {
+        const box = el.getBoundingClientRect();
+        return {
+          columns: getComputedStyle(el).gridTemplateColumns.split(" ").length,
+          withinViewport: box.left >= -1 && box.right <= vw + 1,
+        };
+      });
+    });
+    // Four declarations in the source, but the failure and architecture rows are rendered per
+    // item, so the DOM holds more instances than the stylesheet holds rules. What matters is that
+    // every one of them collapsed, not how many the list happened to produce.
+    expect(collapsed.length).toBeGreaterThanOrEqual(4);
+    for (const grid of collapsed) {
+      expect(grid.columns).toBe(1);
+      expect(grid.withinViewport).toBe(true);
+    }
+
+    // The pinned chapter still reserves its scroll, and the captures still render at full width.
+    await expect(page.locator("[data-story-scrub]")).toHaveCount(1);
+    const captures = await page.evaluate(() =>
+      [...document.images].map((im) => ({
+        width: Math.round(im.getBoundingClientRect().width),
+        loaded: im.naturalWidth > 0,
+      })),
+    );
+    expect(captures.length).toBe(4);
+    for (const capture of captures) {
+      expect(capture.loaded).toBe(true);
+      expect(capture.width).toBeLessThanOrEqual(375);
+    }
+
     expectClean(faults);
   });
 

@@ -60,8 +60,19 @@ from typing import Final
 
 HERE: Final = Path(__file__).resolve().parent
 VENDOR_BUNDLE: Final = HERE / "vendor" / "dossier.bundle.html"
+SOURCE_PAGE: Final = HERE / "src" / "dossier.dc.html"
 CONFIG_FILE: Final = HERE / "site.toml"
 OUTPUT: Final = HERE / "index.html"
+
+#: The mobile stylesheet, carried from ``src/`` into the bundle.
+#:
+#: This is the one place the editable source reaches the deployed page without a Claude Design
+#: re-export, and it is scoped to a single CSS block on purpose. Everything else in ``src/`` is
+#: reference until the bundle is re-exported; a responsive rule is different, because leaving it
+#: only in the source would mean the file that documents the fix is the one file that cannot
+#: apply it. Nothing outside these braces is read, so an unrelated edit to ``src/`` cannot ride
+#: along.
+MOBILE_MEDIA_OPENER: Final = "@media (max-width: 720px) {"
 
 #: The manifest is the fidelity surface: every font, every capture, React, the runtime and the
 #: topology module. Matched non-greedily so a later ``</script>`` cannot extend the span.
@@ -146,6 +157,46 @@ def _repoint_lightbox_sources(text: str, prefix: str) -> str:
             f"lightbox source {shot}",
         )
     return text
+
+
+def _extract_mobile_media_query(text: str) -> str:
+    """Return the whole ``@media (max-width: 720px) { … }`` block, braces included."""
+    start = text.find(MOBILE_MEDIA_OPENER)
+    if start < 0:
+        raise AdaptationError("no @media (max-width: 720px) block")
+    if text.find(MOBILE_MEDIA_OPENER, start + 1) >= 0:
+        raise AdaptationError("more than one @media (max-width: 720px) block")
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    raise AdaptationError("unterminated @media (max-width: 720px) block")
+
+
+def _sync_mobile_media_query(text: str, source_page: str) -> str:
+    """Carry the mobile stylesheet from ``src/dossier.dc.html`` into the bundle.
+
+    The bundle cannot be rebuilt from source without Claude Design, so a responsive fix made only
+    in ``src/`` would never reach the page anybody loads. This transports exactly one block and
+    nothing else: the source and the bundle carry it byte-identically today, and if they ever stop
+    matching in *shape* the extraction raises rather than guessing.
+
+    Braces are matched by depth rather than by regex because the block contains nested rules, and
+    a lazy match would stop at the first inner ``}``.
+    """
+    wanted = _extract_mobile_media_query(source_page)
+    # Inside the bundle the template is a JSON string: newlines are escaped and double quotes are
+    # backslashed. The block's own rules use double quotes, so both forms have to be produced.
+    current = _extract_mobile_media_query(text.replace("\\n", "\n").replace('\\"', '"'))
+    if current == wanted:
+        return text
+    escaped_current = current.replace('"', r"\"").replace("\n", "\\n")
+    escaped_wanted = wanted.replace('"', r"\"").replace("\n", "\\n")
+    return _replace_exactly_once(text, escaped_current, escaped_wanted, "mobile media query")
 
 
 def _fill_project_config(text: str, destinations: dict[str, str]) -> str:
@@ -263,7 +314,7 @@ def _inject_crawler_head(text: str, site: dict[str, str]) -> str:
     return text[:close] + _crawler_head(site) + text[close:]
 
 
-def adapt(bundle: str, config: dict) -> str:
+def adapt(bundle: str, config: dict, source_page: str | None = None) -> str:
     """Apply every approved transform, proving the manifest never moved."""
     before = manifest_digest(bundle)
 
@@ -272,7 +323,10 @@ def adapt(bundle: str, config: dict) -> str:
     image = site.get("og_image", "")
     social = f"{base}/{image}" if base and image else image
 
-    text = _strip_dead_preconnects(bundle)
+    text = bundle
+    if source_page is not None:
+        text = _sync_mobile_media_query(text, source_page)
+    text = _strip_dead_preconnects(text)
     text = _repoint_social_image(text, social)
     text = _repoint_lightbox_sources(text, "assets/product/")
     text = _fill_project_config(text, config.get("destinations", {}))
@@ -291,6 +345,7 @@ def adapt(bundle: str, config: dict) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Adapt the dossier bundle for GitHub Pages.")
     parser.add_argument("--bundle", type=Path, default=VENDOR_BUNDLE)
+    parser.add_argument("--source", type=Path, default=SOURCE_PAGE)
     parser.add_argument("--config", type=Path, default=CONFIG_FILE)
     parser.add_argument("--out", type=Path, default=OUTPUT)
     parser.add_argument(
@@ -302,7 +357,7 @@ def main(argv: list[str] | None = None) -> int:
 
     bundle = args.bundle.read_text(encoding="utf-8")
     config = tomllib.loads(args.config.read_text(encoding="utf-8"))
-    adapted = adapt(bundle, config)
+    adapted = adapt(bundle, config, args.source.read_text(encoding="utf-8"))
 
     if args.check:
         if not args.out.exists():

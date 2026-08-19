@@ -102,6 +102,27 @@ The page already carries a `PROJECT` object and an `EVIDENCE` array. `adapt.py` 
 `site.toml` — and leaves an empty value byte-for-byte alone, so the dossier's pending states are
 preserved rather than rewritten to the same thing.
 
+**A destination has to be written in two places, and the second is the one that decides.** The page
+resolves each one as:
+
+```js
+const live = P.liveUrl ?? PROJECT.liveUrl;
+```
+
+Props first, `PROJECT` as fallback. The dc-runtime builds `P` from the `data-props` attribute, whose
+declared default is the empty string — and `??` falls back only on `null` or `undefined`. An empty
+string is neither, so the empty prop wins and `PROJECT` is never read.
+
+Filling `PROJECT` alone is therefore inert, which was measured rather than reasoned about: with both
+URLs sitting in `PROJECT`, all seven call-to-action anchors still rendered "Deployment pending" and
+"Repository pending" and still pointed at in-page anchors. `adapt.py` now sets the prop default as
+well and keeps `PROJECT` in step with it, and `tests/check_site.py` asserts both, so a URL that
+reaches only one of them fails the gate instead of quietly rendering as pending.
+
+Empty stays empty in both places, which is what keeps the absent video and Devpost destinations
+correct: an empty `video_url` leaves the demo panel a same-page jump to the demo chapter and hides
+"Play film", and `devpost_url` is read by no markup at all.
+
 ### 6. The mobile stylesheet, carried from `src/`
 
 The handoff overflowed horizontally on a phone: **778px of document in a 375px viewport**, with 54

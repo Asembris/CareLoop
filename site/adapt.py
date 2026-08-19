@@ -200,10 +200,22 @@ def _sync_mobile_media_query(text: str, source_page: str) -> str:
 
 
 def _fill_project_config(text: str, destinations: dict[str, str]) -> str:
-    """Fill the page's own PROJECT object.
+    """Fill the page's destinations, in both places the page reads them from.
 
-    An empty value is left exactly as it was rather than rewritten to the same thing, so the
-    dossier's pending states survive byte for byte.
+    **Two writes, and the second is the one that actually decides.** The page resolves each
+    destination as ``P.liveUrl ?? PROJECT.liveUrl`` — props first, the ``PROJECT`` object as
+    fallback. The dc-runtime supplies props from the ``data-props`` attribute, whose declared
+    default is the empty string, and ``??`` falls back only on ``null``/``undefined``. An empty
+    string is neither, so the empty prop wins every time and ``PROJECT`` is never consulted.
+
+    Filling ``PROJECT`` alone is therefore inert: measured before this was understood, both URLs
+    sat in ``PROJECT`` while all seven call-to-action anchors still rendered "Deployment pending"
+    and "Repository pending" and pointed at in-page anchors.
+
+    So the prop default is set as well, and ``PROJECT`` is kept in step with it rather than left
+    behind — the two disagreeing would be a trap for whoever reads this next. An empty value is
+    still left exactly as it was in both places, so the dossier's pending states survive byte for
+    byte, which is what keeps the absent video and Devpost destinations correct.
     """
     for key, prop in (
         ("live_url", "liveUrl"),
@@ -211,13 +223,24 @@ def _fill_project_config(text: str, destinations: dict[str, str]) -> str:
         ("devpost_url", "devpostUrl"),
         ("video_url", "videoUrl"),
     ):
-        literal = rf"{prop}: \"\""
-        seen = text.count(literal)
+        fallback = rf"{prop}: \"\""
+        seen = text.count(fallback)
         if seen != 1:
             raise AdaptationError(f"PROJECT.{prop}: expected exactly 1 empty literal, found {seen}")
+        # The prop declaration lives in an HTML-escaped JSON attribute, so its quotes are entities.
+        q = "&quot;"
+        declared = f"{q}{prop}{q}: {{{q}editor{q}: {q}text{q}, {q}default{q}: {q}{q}"
+        seen = text.count(declared)
+        if seen != 1:
+            raise AdaptationError(f"props.{prop}: expected exactly 1 empty default, found {seen}")
+
         value = destinations.get(key, "")
-        if value:
-            text = text.replace(literal, rf"{prop}: \"{value}\"", 1)
+        if not value:
+            continue
+        if '"' in value or "&" in value or "<" in value:
+            raise AdaptationError(f"{key}: refusing to inject a value needing escaping: {value!r}")
+        text = text.replace(fallback, rf"{prop}: \"{value}\"", 1)
+        text = text.replace(declared, declared[: -len("&quot;&quot;")] + f"&quot;{value}&quot;", 1)
     return text
 
 

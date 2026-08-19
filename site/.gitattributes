@@ -1,0 +1,4 @@
+# The vendored Claude Design bundle is a fidelity surface whose SHA-256 is asserted by
+# tests/check_site.py. Line-ending normalisation would change those bytes on a checkout with
+# different settings, so it is excluded from it. The file is LF today and must stay LF.
+vendor/dossier.bundle.html -text

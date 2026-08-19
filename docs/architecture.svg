@@ -46,7 +46,7 @@
     <path d="M 540 87 L 592 87" stroke="#b4622f" stroke-width="2" stroke-dasharray="7 4" marker-end="url(#arrow-copper)"/>
     <text x="600" y="91">independent read-back</text>
     <text x="740" y="91" font-weight="600" fill="#b4622f">LLM</text>
-    <text x="772" y="91">one of exactly two model calls, and neither holds authority</text>
+    <text x="772" y="91">one of exactly two agents, and neither holds authority</text>
   </g>
 
   <!-- ======================= UNTRUSTED zone ======================= -->
@@ -75,7 +75,7 @@
 
     <rect x="490" y="158" width="140" height="80" rx="7" fill="#ffffff" stroke="#cf8d7f"/>
     <text x="502" y="178" font-size="11.5" font-weight="600" fill="#22221f">PlannerIntent</text>
-    <text x="502" y="196" font-family="ui-monospace, Consolas, monospace" font-size="8.4">Model.structured_output</text>
+    <text x="502" y="196" font-family="ui-monospace, Consolas, monospace" font-size="8.4">one propose_* tool call</text>
     <text x="502" y="209">one proposed tool call.</text>
     <text x="502" y="222">A proposal, not an order.</text>
   </g>
@@ -162,8 +162,8 @@
   <rect x="34" y="424" width="132" height="68" rx="7" fill="#ffffff" stroke="#315e52"/>
   <text x="44" y="444" font-size="10.5" font-weight="700" fill="#22221f">Caregiver</text>
   <text x="44" y="461" font-size="8.6" fill="#4a4a45">approve or reject.</text>
-  <text x="44" y="473" font-size="8.6" fill="#4a4a45">The only other source</text>
-  <text x="44" y="485" font-size="8.6" fill="#4a4a45">of TRUSTED there is.</text>
+  <text x="44" y="473" font-size="8.6" fill="#4a4a45">Releases one exact</text>
+  <text x="44" y="485" font-size="8.6" fill="#4a4a45">call. Mints no fact.</text>
 
   <!-- the policy engine: one box, three arrows into it -->
   <rect x="182" y="424" width="358" height="108" rx="8" fill="#315e52"/>
@@ -192,7 +192,7 @@
     <path d="M 660 396 L 660 420"/>
   </g>
 
-  <text x="40" y="552" font-size="9.4" fill="#2f5c50">Application code, the policy engine and rules.yaml. TRUSTED is never manufactured by validation: it comes from configuration a person wrote, or a person pressing approve.</text>
+  <text x="40" y="552" font-size="9.4" fill="#2f5c50">Application code, the policy engine and rules.yaml. TRUSTED is never manufactured by validation and never by an approval: it comes only from configuration a person wrote.</text>
   <text x="40" y="568" font-size="9.4" fill="#2f5c50">Case is frozen and transition() is its only writer, so DONE is reachable only from VERIFYING. No graph edge leaves DONE; only an inbound event can.</text>
 
   <!-- ==================== OUTSIDE: Demo World ==================== -->
@@ -269,8 +269,8 @@
 
     <rect x="172" y="818" width="126" height="60" rx="7" fill="#ffffff" stroke="#6b6b66"/>
     <text x="184" y="840" font-size="10.5" font-weight="600" fill="#22221f">CloudFront</text>
-    <text x="184" y="858">HTTPS, and one</text>
-    <text x="184" y="870">origin so no CORS</text>
+    <text x="184" y="858">HTTPS. One browser</text>
+    <text x="184" y="870">origin, so no CORS</text>
 
     <rect x="326" y="810" width="430" height="76" rx="8" fill="#f2f1ee" stroke="#6b6b66"/>
     <text x="338" y="826" font-size="10" font-weight="600" fill="#22221f">EC2 t4g.small</text>

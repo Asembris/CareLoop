@@ -7,6 +7,11 @@
  * keeps the API alive for every other spec running in parallel, and killing it would fail them
  * for the wrong reason. `route.abort()` on `/api/**` is one browser context experiencing the
  * outage the health probe exists to catch, while the process serves everyone else undisturbed.
+ *
+ * The second use, in the same test.describe and for the same reason one step over: a demo with no
+ * worlds left needs all sixty-four of them held, and minting sixty-four here would fill the shared
+ * backend every other spec is using. Fulfilling the mint with a **503** — the exact status
+ * `SessionsAtCapacity` produces — is one browser context arriving at a full demo.
  */
 
 import { expect, test, type APIRequestContext, type Page } from "./base";
@@ -29,6 +34,26 @@ test.describe("connection truth", () => {
     // that must NOT appear: "Nothing needs you right now." over data that could not be read is
     // an outage rendered as the product's proudest claim.
     await expect(page.getByText("CareLoop can't be reached — retrying automatically.")).toBeVisible();
+    await expect(page.getByText("Nothing needs you right now.")).toHaveCount(0);
+  });
+
+  test("a full demo says so, and does not say the backend is down", async ({ page }) => {
+    // Every world in use is a *different fact* from nobody answering: the service is up, it is
+    // answering, and the remedy is a few minutes rather than a refresh. Rendering it as the outage
+    // state would be this product making a false statement about its own health on the screen that
+    // exists to say true things — and it would send whoever read it to reload, which cannot help.
+    await page.route("**/api/sessions", (route) =>
+      route.fulfill({ status: 503, contentType: "application/json", body: "{}" })
+    );
+    await page.goto("/");
+
+    await expect(
+      page.getByText("The demo is full right now — every world is in use. Trying again shortly.")
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "The demo is full right now." })
+    ).toBeVisible();
+    await expect(page.getByText("CareLoop can't be reached — retrying automatically.")).toHaveCount(0);
     await expect(page.getByText("Nothing needs you right now.")).toHaveCount(0);
   });
 });

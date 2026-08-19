@@ -48,6 +48,25 @@ export function unreachableHero(showingLastKnown: boolean): { line: string; sub:
   };
 }
 
+/** Every world this demo holds is in use.
+ *
+ *  Not `unreachableHero`, and the difference is the whole point of having it. The backend is up and
+ *  answering; what it has run out of is worlds to hand out, because each visitor gets their own case
+ *  store and their own clinic and there are sixty-four of them. "CareLoop can't be reached" would be
+ *  a false statement about a healthy service, and it would send whoever is reading it to refresh —
+ *  which is the one thing that does not help. Waiting does.
+ *
+ *  `showingLastKnown` is carried for `unreachableHero`'s reason: a page that already has cases on it
+ *  is showing something real and stale, and a page that has none has nothing to explain itself. */
+export function atCapacityHero(showingLastKnown: boolean): { line: string; sub: string } {
+  return {
+    line: "The demo is full right now.",
+    sub: showingLastKnown
+      ? "Every world is in use — the cases below are the last state this page saw. Try again in a few minutes."
+      : "Every world is in use. They free up as visitors finish; try again in a few minutes."
+  };
+}
+
 /** Between the press and the first case.
  *
  *  Measured on the deployed demo: pressing a scenario navigated home in 67ms and then showed

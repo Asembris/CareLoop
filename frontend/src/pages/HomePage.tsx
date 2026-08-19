@@ -4,7 +4,15 @@ import DashboardHero from "@/components/dashboard/DashboardHero";
 import SectionHeading from "@/components/dashboard/SectionHeading";
 import DecisionCard from "@/components/dashboard/DecisionCard";
 import CaseRow from "@/components/dashboard/CaseRow";
-import { connectingHero, greeting, heroLine, heroSub, startingHero, unreachableHero } from "@/lib/tone";
+import {
+  atCapacityHero,
+  connectingHero,
+  greeting,
+  heroLine,
+  heroSub,
+  startingHero,
+  unreachableHero
+} from "@/lib/tone";
 
 /**
  * Home. Needs you / Working / Completed.
@@ -35,12 +43,16 @@ export default function HomePage() {
         ? // An unreachable backend outranks a press: the last thing that happened is that the page
           // stopped being able to read the world, and that is what it has to say.
           unreachableHero(anyCases)
-        : awaitingFirstCase
-          ? startingHero()
-          : {
-              line: heroLine(needs.length, manualOnly),
-              sub: heroSub(needs.length, working.length, done.length)
-            };
+        : connection === "at_capacity"
+          ? // A healthy backend with no world left to give. It outranks a press for the same
+            // reason and says something different, because it is something different.
+            atCapacityHero(anyCases)
+          : awaitingFirstCase
+            ? startingHero()
+            : {
+                line: heroLine(needs.length, manualOnly),
+                sub: heroSub(needs.length, working.length, done.length)
+              };
 
   return (
     /* The dashboard owns the first screen rather than floating in its top third. Measured before

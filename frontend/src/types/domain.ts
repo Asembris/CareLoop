@@ -179,11 +179,18 @@ export interface AgentRun {
 /** What the adapter currently knows about its own connection to the backend.
  *
  *  `connecting` is only ever the state before the first read has answered; after that the page is
- *  `live` or `unreachable` forever. The distinction the UI must respect: a dashboard that cannot
- *  be read is not a dashboard with nothing on it, so the calm success line may only render on
- *  `live` — an unreachable backend rendering "Nothing needs you right now." is a false statement
- *  on the one product whose claim is that the trail tells the truth. */
-export type ConnectionState = "connecting" | "live" | "unreachable";
+ *  `live`, `unreachable` or `at_capacity`. The distinction the UI must respect: a dashboard that
+ *  cannot be read is not a dashboard with nothing on it, so the calm success line may only render
+ *  on `live` — an unreachable backend rendering "Nothing needs you right now." is a false statement
+ *  on the one product whose claim is that the trail tells the truth.
+ *
+ *  `at_capacity` is its own state for the same reason, one step finer. The deployed demo gives
+ *  every visitor their own world and holds sixty-four of them; when all sixty-four are in use,
+ *  `POST /api/sessions` answers **503** and this page has no world to read. That is a *different
+ *  fact* from a backend that cannot be reached — the service is up, it is answering, and the
+ *  remedy is a few minutes rather than a refresh — and showing them as one would be this product
+ *  telling a small lie about its own state on the screen that exists to say true things. */
+export type ConnectionState = "connecting" | "live" | "unreachable" | "at_capacity";
 
 export interface DashboardState {
   cases: CareCase[];

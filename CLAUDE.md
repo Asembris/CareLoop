@@ -874,6 +874,59 @@ waits for, and it takes its snapshot under the lock instead. The reproduction ne
 `sys.setswitchinterval(1e-7)` to open the window a served process opens constantly, which is stated
 in the fixture rather than left as a mystery.
 
+**A visitor's world has one owner, and it had two.** A session is a CareLoop store *and* a Demo World
+clinic, and each registry decided on its own when that world ended: `SessionWorlds` expired by idle
+time, refreshed on every API request; `Clinics` ordered by *clinic* access and dropped its oldest
+unconditionally. So a judge polling the dashboard was alive on one side and the eviction victim on
+the other — the appointment CareLoop had booked and verified disappeared from the external system,
+and a later read-back that should have been `MATCHED` came back `ABSENT` against a world recreated
+empty, with nothing raised anywhere. The guard in place was `DEFAULT_SESSION_LIMIT <=
+DEFAULT_WORLD_LIMIT`, which is a number standing in for a lifecycle: **equal capacities do not
+synchronise eviction order, and order was the whole disagreement.**
+
+So **Demo World no longer removes a world on its own**. `Clinics.end` is the only remover and
+CareLoop is its only caller — on expiry, on a demo reset, and on shutdown — reached over HTTP by
+`ClinicClient.end_session`, the direction `POST /demo/reset` already went, because `demoworld` may
+not import `careloop`. With nothing evicting there is no eviction order and nothing left for the two
+registries to disagree about; there is deliberately no age, no clock and no last-used ordering left
+in `Clinics` to tempt anyone into re-deriving one.
+
+**At the cap Demo World refuses a new world rather than taking an existing one**, which is the trade
+`SessionsAtCapacity` already documents one process over and is what makes the property structural
+rather than dependent on a network call succeeding: a world CareLoop failed to end costs a *capacity
+slot*, never a live visitor's appointment. It also forces a second change — **reads create nothing**.
+A world is created by the act that puts something in it, which is booking; without that, an anonymous
+`GET /clinic/slots?session=<anything>` in a loop would fill a registry that never evicts, and the
+eviction that used to clean it up is gone. `Clinics.view` answers reads out of the held world or an
+unregistered seeded one, identically either way.
+
+**A failed end is queued, never swallowed**, and CareLoop lets the world go regardless — holding one
+open here to repair a record over there is the wrong direction. The session is named on
+`SessionWorlds.orphans()`, logged, and retried on the next mint; one `ClinicUnavailable`
+short-circuits the sweep, because a service that did not answer this call will not answer the next
+and a queue of twenty would otherwise cost twenty timeouts on one request. A `ClinicRefused` is the
+clinic *answering*, which an idempotent delete has no reason to do, so it is logged as a bug rather
+than retried forever. `mint` is therefore **not** `@serialised` — `_mint` is, and the HTTP happens
+after it returns, because a lock held across a round trip stalls every other visitor for as long as
+Demo World takes. `tests/test_session_worlds_are_serialised.py` now asserts both directions: what
+must hold the lock, and what must not.
+
+`tests/test_session_lifecycle.py` owns the property, driven against a real Demo World on a loopback
+socket. The reproducer is the audit's own construction and it separates the two halves: removing the
+coupling leaves Demo World holding a world for a visitor CareLoop forgot an hour ago and the next
+arrival is refused a clinic, while the visitor still being served keeps everything — so without the
+coupling the demo degrades, and without the refusal it degrades *onto the wrong person, quietly*.
+`scripts/verify_deploy.py` reads `clinic_world_ended` off `POST /api/demo/reset` to assert the
+**deployed pair** are coupled; that is the coupling half only, and the crossed-order half stays local
+because a world has to age past a half-hour idle window to reach it.
+
+**What is deferred, and what it now costs.** A CareLoop process that is *killed* rather than shut
+down orphans every clinic world it held — the lifespan ends them on `SIGINT`, which covers an
+ordinary redeploy, and covers nothing else. With Demo World no longer evicting, **those orphans are
+permanent rather than self-healing**: this session changed the shape of that failure, and the next
+person needs to know it. Closing it wants a bulk `DELETE /demo/sessions` swept at startup, which
+hands any anonymous caller the ability to wipe every visitor's clinic and deserves its own decision.
+
 ## Commands
 
 ```bash

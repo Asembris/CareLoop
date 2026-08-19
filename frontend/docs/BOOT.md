@@ -204,8 +204,21 @@ it was drawn to do. The state machine is untouched: every state still exists, st
 still reads back through `CareLoopBootController.state()`.
 
 axe cannot judge that line — the container is `aria-hidden`, so the contrast rule skips it — which is
-the right call for the scan and the reason `boot.spec.ts` measures it directly instead: **4.86:1**
-light and **6.61:1** dark, both against the blend the reader actually gets.
+the right call for the scan and the reason `boot.spec.ts` measures it directly instead: **6.45:1**
+light and **8.19:1** dark, both against the blend the reader actually gets.
+
+**And it is those numbers on every frame it exists for, because it no longer fades in.** Upstream
+brings the line up from zero over 620 ms and rests it at 0.88, which measured 4.86:1 light and
+6.61:1 dark *at rest* — fine — while every frame of the fade was a real, visible, sub-AA
+intermediate. Against the deployed build `boot.spec.ts` caught two of them, at **2.953:1** and
+**3.138:1** in light. Text that is on screen and being read has to clear 4.5:1 while it is being
+read, not once it settles, so the line now renders at opacity 1 with no opacity transition at all.
+
+Nothing was done to the assertion or to how long the test waits: an accessibility test adjusted
+until it passes is worth nothing, and the test was catching something real. The line still *leaves*
+on a fade, in `exit()`, where it is going away rather than being read. The wordmark beside it still
+fades in from zero and is untouched — it is `--foreground` at 27px and clears AA at every point of
+that fade.
 
 ## Performance
 
@@ -221,7 +234,7 @@ of the reader. The scene never references `careloop:ready`, `careloop:booted` or
 the loader never touches `#careloop-field`; `boot.spec.ts` checks that one canvas, one context and
 one agreed theme survive the hand-off.
 
-## The vendored loader, and its seven local deltas
+## The vendored loader, and its local deltas
 
 `public/careloop-boot.js` is the package's `src/careloop-boot.js` with each departure marked
 `LOCAL DELTA` and numbered in a block at the top of the file, so the next upgrade is a diff rather
@@ -233,6 +246,7 @@ than a merge — the same discipline `MOTION.md` records for the scene.
 | 2 | Dark paper `#26241f` → `#1a1713` |
 | 3 | Theme chain extended through `.dark` and `prefers-color-scheme` |
 | 4 | One neutral line of copy |
+| 4b | That line at full opacity, never faded in — a fade is sub-AA while it is readable |
 | 5 | The overlay leaves the accessibility tree |
 | 6 | Fail open: idempotent `finalize()`, guarded FLIP, hard exit timer, inert-while-fading, DOM markers |
 | 7 | Condensed path tuned to this application's measured readiness |

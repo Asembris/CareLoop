@@ -244,7 +244,25 @@ class TestReset:
 
     def test_reset_reports_that_it_did_not_reset_a_clinic_when_there_is_none(self) -> None:
         with demo_client(InMemoryCaseStore()) as client:
-            assert client.post("/api/demo/reset").json()["clinic_reset"] is False
+            body = client.post("/api/demo/reset").json()
+
+        assert body["clinic_reset"] is False
+        assert body["clinic_world_ended"] is None
+
+    def test_a_default_world_clinic_is_reseeded_and_reports_no_world_ended(
+        self, clinic, clinic_state
+    ) -> None:
+        """A single-world CareLoop reaches the clinic's default world, which has no lifetime.
+
+        ``null`` rather than ``false``: "there was nothing to end" and "there was a world and it is
+        gone" are different answers, and a reader of the deployed check has to be able to tell a
+        CareLoop with no session apart from one whose world had already been ended.
+        """
+        with clinic_demo_client(InMemoryCaseStore(), clinic, intent("send_email", **EMAIL)) as c:
+            body = c.post("/api/demo/reset").json()
+
+        assert body["clinic_reset"] is True
+        assert body["clinic_world_ended"] is None
 
     def test_a_bound_clinic_makes_the_demo_booking_real(self, clinic, clinic_state) -> None:
         """One argument to ``create_app`` is the whole difference between a simulated demo and a

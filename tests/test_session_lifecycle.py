@@ -304,10 +304,31 @@ class TestEveryWayAWorldGoesEndsItsClinic:
             mine, theirs = open_session(client), open_session(client)
             kept, lost = book(client, worlds, mine), book(client, worlds, theirs)
 
-            assert client.post("/api/demo/reset", headers=whose(theirs)).status_code == 200
+            cleared = client.post("/api/demo/reset", headers=whose(theirs))
+            assert cleared.status_code == 200
+            # Reported, because this is the one place the coupling is observable from outside the
+            # process — `scripts/verify_deploy.py` reads exactly this against the deployed pair.
+            assert cleared.json()["clinic_world_ended"] is True
 
             assert not clinic_holds(crowded_clinic, theirs, lost)
             assert clinic_holds(crowded_clinic, mine, kept)
+
+    def test_a_second_reset_reports_that_there_was_nothing_left_to_end(
+        self, crowded_clinic: str
+    ) -> None:
+        """Which is what makes the report above worth reading: it can say either thing."""
+        clock = [1000.0]
+        worlds = crowded_worlds(crowded_clinic, clock)
+
+        with isolated_client(worlds) as client:
+            visitor = open_session(client)
+            book(client, worlds, visitor)
+
+            first = client.post("/api/demo/reset", headers=whose(visitor)).json()
+            second = client.post("/api/demo/reset", headers=whose(visitor)).json()
+
+        assert first["clinic_world_ended"] is True
+        assert second["clinic_world_ended"] is False
 
     def test_a_reset_frees_the_place_it_was_holding(self, crowded_clinic: str) -> None:
         """Which is the reason it is worth ending rather than reseeding: the room comes back."""

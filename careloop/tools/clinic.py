@@ -241,8 +241,13 @@ class ClinicClient:
         response = self._request("DELETE", "/demo/session", timeout=END_SESSION_TIMEOUT)
         return bool(response.json()["existed"])
 
-    def put_back(self) -> None:
+    def put_back(self) -> bool | None:
         """Put the world this client reaches back the way it started.
+
+        Returns whether Demo World was still holding a world to end, or ``None`` when there was no
+        world with a lifetime and the default one was reseeded instead. Reported rather than
+        discarded because it is the one place the coupling between the two registries is observable
+        from outside this process — see ``POST /api/demo/reset``.
 
         A **session-scoped** client ends its world. That is a reset — the next booking gets a
         freshly seeded one — and it is also the thing that keeps CareLoop's registry and Demo
@@ -258,8 +263,8 @@ class ClinicClient:
         """
         if self._session is None:
             self.reset()
-        else:
-            self.end_session()
+            return None
+        return self.end_session()
 
     def close(self) -> None:
         """Release the underlying connection pool."""

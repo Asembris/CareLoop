@@ -180,6 +180,43 @@ def verify(base: str) -> None:
     still = settled_case(base, first, "demo-referral")
     check("the first visitor's case is still there", still["state"] == "DONE", still["state"])
 
+    print("\nCareLoop owns the lifetime of a visitor's clinic")
+    # The defect this closes: CareLoop expired a world by idle time and Demo World evicted by order
+    # of *clinic* access, so a visitor polling the dashboard was alive on one side and the eviction
+    # victim on the other — their appointment gone from the external system, and a read-back that
+    # should have been MATCHED coming back ABSENT. Equal capacities never helped; the two disagreed
+    # about order. Now CareLoop ends the clinic of every world it lets go, and Demo World removes a
+    # world only when told to.
+    #
+    # **This covers the coupling half only, and says so.** The crossed-order reproduction needs a
+    # world to age past the idle window, which is half an hour on this deployment — so it runs
+    # locally in `tests/test_session_lifecycle.py`, against a real Demo World on a socket with a
+    # clock a test can drive. What is asserted here is the thing that cannot be checked anywhere
+    # else: that the *deployed pair* really are coupled. A Demo World deployed without the
+    # lifecycle verb, or a CareLoop that stopped calling it, is a silent return to two owners, and
+    # every unit test in the repository would stay green through it.
+    #
+    # Read off `POST /api/demo/reset`'s own answer rather than by calling Demo World's DELETE
+    # through the distribution: CareLoop reaches the clinic over loopback, so whether the CDN
+    # forwards that method is a fact about the CDN and not about the property.
+    status, ended, _ = call(base, "/api/demo/reset", method="POST", session=first)
+    check("the first visitor resets the world they booked in", status == 200, f"got {status}")
+    check(
+        "and CareLoop ended their clinic world rather than reseeding it",
+        isinstance(ended, dict) and ended.get("clinic_world_ended") is True,
+        json.dumps(ended),
+    )
+
+    # Non-vacuous in both directions: the field can say either thing, and it says the other one for
+    # a visitor whose world has already gone. Without this, a route that answered `true`
+    # unconditionally would pass the check above.
+    status, again, _ = call(base, "/api/demo/reset", method="POST", session=first)
+    check(
+        "and a second reset reports there was nothing left to end",
+        isinstance(again, dict) and again.get("clinic_world_ended") is False,
+        json.dumps(again),
+    )
+
     print("\nthe frontend that is served is the one that carries a session")
     status, _, headers = call(base, "/")
     check("the shell is served", status == 200, f"got {status}")

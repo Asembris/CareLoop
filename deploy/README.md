@@ -6,7 +6,9 @@ would otherwise decide.
 
 ## The shape, and why
 
-One EC2 instance runs two processes; CloudFront puts HTTPS and one origin in front of them.
+One EC2 instance runs two processes. **One CloudFront distribution, two backend origins** — the
+instance on `:8000` and the instance on `:8100` are separate origin definitions with their own
+behaviours, which is the only way one hostname can route to two ports.
 
 ```
 https://<distribution>.cloudfront.net
@@ -15,11 +17,14 @@ https://<distribution>.cloudfront.net
   /clinic/*    →  instance:8100   Demo World, so a judge can check the booking themselves
 ```
 
-**One origin is the point.** `careloop/` mounts no `CORSMiddleware` anywhere and this arrangement
-is what keeps that true off a developer's machine: the frontend keeps making relative `/api` calls
-exactly as it does behind the Vite dev proxy, and no cross-origin request is ever made. Serving the
-built app from a different host would need CORS, and weakening that is not a deployment's decision
-to take.
+**One *browser* origin is the point, and the two senses of the word are worth keeping apart.** A
+CloudFront origin is a backend the distribution forwards to, and there are two. A browser origin is
+scheme-host-port as the page sees it, and there is one: everything above is served from the same
+`https://<distribution>.cloudfront.net`. That second one is what matters to the same-origin policy.
+`careloop/` mounts no `CORSMiddleware` anywhere and this arrangement is what keeps that true off a
+developer's machine: the frontend keeps making relative `/api` calls exactly as it does behind the
+Vite dev proxy, and no cross-origin request is ever made. Serving the built app from a different
+host would need CORS, and weakening that is not a deployment's decision to take.
 
 **Two processes, not one.** Demo World is a system CareLoop does not own, and `demoworld/` may
 never import `careloop`. Routing both through one CDN does not couple them — they are separate
@@ -55,9 +60,12 @@ ownership of a case across processes**. That claim belongs to `scripts/resume_de
 the single-session path — this same script without the flag — that they exercise.
 
 Bounded at 64 worlds, measured at about 300 KB each with all four demo scenarios run, and never
-more than Demo World's own cap: if this side held more, a live visitor's clinic could be evicted
-underneath them and a read-back would report an appointment missing for a reason that has nothing
-to do with the outside world.
+more than Demo World's own cap. **That inequality is defence in depth and is no longer the
+property**, which is a session-V correction this page had not caught up with: equal capacities do
+not synchronise eviction *order*, and order was the whole disagreement. Demo World now removes a
+world only when told to, and this registry tells it — so there is no eviction order left for the
+two sides to disagree about. `careloop/api/sessions.py` and `demoworld/clinic.py` carry the
+argument; `tests/test_session_lifecycle.py` carries the property.
 
 ## Files
 

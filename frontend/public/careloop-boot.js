@@ -26,6 +26,7 @@
  *   2  dark paper      #26241f -> #1a1713, CareLoop's actual --background
  *   3  theme chain     data-theme -> .dark -> storage -> system -> light
  *   4  status copy     one neutral line; CareLoop performs no boot-time work
+ *   4b status contrast that line renders at full opacity; a fade-in is sub-AA while readable
  *   5  accessibility   the overlay leaves the accessibility tree entirely
  *   6  fail open       idempotent finalize(), guarded FLIP, hard exit timer
  *   7  timing          condensed path tuned to this application's readiness
@@ -406,7 +407,23 @@
 
       const status = document.createElement("span");
       status.textContent = STATUS.entering;
-      status.style.cssText = `font-size:13px;letter-spacing:0.01em;color:${this.P.statusInk};opacity:0;transition:opacity 620ms ${EASE_SOFT};`;
+      /* LOCAL DELTA 4b — the one line is readable from the frame it appears on.
+       *
+       * Upstream fades this in from zero over 620ms and rests it at 0.88. The rest is fine —
+       * `#5c584f` on `#f7f4ee` at 0.88 blends to 4.83:1 — but every frame of the fade is a real,
+       * visible, sub-AA intermediate, and `e2e/tests/boot.spec.ts` caught two of them against the
+       * deployed build: **2.953:1 and 3.138:1** in light. Text that is on screen and being read
+       * has to clear 4.5:1 while it is being read, not once it settles.
+       *
+       * So it renders at full opacity with no opacity transition at all: **6.45:1 in light,
+       * 8.19:1 in dark**, on every frame it exists for. Nothing was done to the assertion or to
+       * how long the test waits — an accessibility test adjusted until it passes is worth nothing.
+       * The line still *leaves* on a fade, in `exit()`, where it is going away rather than being
+       * read.
+       *
+       * The wordmark beside it is untouched: it fades in from zero too, and it is `--foreground`
+       * at 27px, which clears AA at every point of that fade. */
+      status.style.cssText = `font-size:13px;letter-spacing:0.01em;color:${this.P.statusInk};opacity:1;`;
       this.status = status;
 
       stack.appendChild(lock);
@@ -562,11 +579,10 @@
       // Nothing to cross-fade when the sentence is the same one; see LOCAL DELTA 4. Without this
       // the line would blink at every beat, which is exactly the churn the single line removes.
       if (this.status.textContent === STATUS[key]) return;
-      this.status.style.opacity = 0;
-      this.at(240, () => {
-        this.status.textContent = STATUS[key];
-        this.status.style.opacity = 0.88;
-      });
+      /* Unreachable while STATUS is one sentence, and deliberately left correct rather than
+       * deleted: a swap is a *replacement* of the text, not a fade of it, so the line is never
+       * partially transparent while it is legible. See LOCAL DELTA 4b. */
+      this.status.textContent = STATUS[key];
     }
 
     /** Marks the closure complete: the mark reaches perfect optical sharpness. */
@@ -582,7 +598,6 @@
         this.resolveMark();
         this.word.style.opacity = 1;
         this.word.style.transform = "none";
-        this.status.style.opacity = 0.88;
         for (const key in this.nodeEls) this.nodeEls[key].g.setAttribute("opacity", 1);
         for (const p of PATHS) this.pathEls[p.id].setAttribute("opacity", p.rest);
         this.state = "waiting";
@@ -602,7 +617,6 @@
         this.word.style.opacity = 1;
         this.word.style.transform = "none";
       });
-      this.at(470, () => { this.status.style.opacity = 0.88; });
 
       /* Phase 02 — Awakening. Only enough structure to imply more beyond frame. */
       this.at(760, () => {
@@ -751,7 +765,6 @@
       this.lock.style.filter = "none";
       this.word.style.opacity = 1;
       this.word.style.transform = "none";
-      this.status.style.opacity = 0.88;
 
       for (const k of ["entry", "gather", "junction", "muted", "verify", "close"]) this.showNode(k, 0);
       this.showNode("outward", 180);

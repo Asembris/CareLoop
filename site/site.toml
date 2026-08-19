@@ -25,7 +25,7 @@ pages_base_url = ""
 # the hydrated head say the same thing. These are not new marketing lines; changing them here
 # changes only what a crawler sees, which is why they live beside the tags they populate.
 title = "CareLoop — Agency with boundaries. Care with receipts."
-description = "CareLoop proposes actions, checks authority against deterministic policy, executes only what is permitted, and verifies the external result before a case is closed."
+description = "CareLoop proposes actions, checks authority against deterministic policy, executes only what is permitted, and re-reads the clinic's own record before a booking is called done."
 og_title = "CareLoop — Agency with boundaries. Care with receipts."
 og_description = "An autonomous back office for family caregiving. The loop is only closed when the world agrees."
 
@@ -62,19 +62,33 @@ video_url = ""
 #
 # **A number goes here only when the repository can produce it on demand**, and only under a label
 # that describes what was actually measured. An empty string leaves the entry reading `—` /
-# "Verified result pending", which is the honest state and the one Phase 1 ships.
+# "Verified result pending", which is the honest state and was the one Phase 1 shipped.
+#
+# Filled in session W, each against a command a reader can run:
+#
+#   unauthorized  python -m evals.replay            offline, $0, ~1s, no credentials
+#   mutation      the same command, second target   the allow-all mutant it prints beside it
+#   injection     scripts/verify_lock.py            13 runs of the poison-only scenario, 2026-08-19
+#   readback      tests/test_verify_readback.py     four booking fields, one mutant each
+#   e2e           scripts/verify_lock.py            25 deployed runs, 2026-08-19
+#   tests         python -m pytest -q               offline, on the mock provider, $0
+#
+# **`e2e` is `24 of 25` and not `25 of 25`, deliberately.** One resume run ended FAILED because the
+# model failed twice running to form a proposal satisfying its own schema. Nothing unsafe happened
+# and nothing was performed, but it is a real outcome and the entry's own caveat line says what it
+# was. Publishing the round number would be the exact dishonesty this ledger exists to refuse.
 [evidence]
-unauthorized = ""
-injection = ""
-mutation = ""
-readback = ""
-e2e = ""
-tests = ""
+unauthorized = "0 of 320"
+injection = "0 of 13"
+mutation = "320 of 320"
+readback = "4 of 4"
+e2e = "24 of 25"
+tests = "2720 passed"
 
 # The two rows of the boundary-removed counterfactual. Empty keeps the pristine em dash.
 [counterfactual]
-careloop = ""
-boundary_removed = ""
+careloop = "0 of 320"
+boundary_removed = "320 of 320"
 
 
 # Source receipts — where each claim on the page can be checked in the repository.
@@ -120,11 +134,14 @@ verify = ["careloop/graph/verify.py", "tests/test_verify_readback.py"]
 # that states the result and its limits, and the harness that produces it, are different artifacts
 # and each earns its own receipt.
 #
-# `injection` and `e2e` are deliberately unmapped. Their labels do not yet describe what the
-# repository measures — see the evidence audit — and a receipt under a wrong label would lend the
-# label credibility it has not earned. They stay pending until the label is fixed.
+# `injection` and `e2e` were unmapped while their labels described measurements nobody had made.
+# Session W fixed the labels and made the measurements, so both now point at the script that
+# produces them. Two rows sharing one receipt is correct rather than a compromise: one run of
+# `verify_lock.py` produces both numbers, and pretending otherwise would invent a second source.
 [source_receipts.evidence]
 unauthorized = { path = "docs/security-evaluation.md", label = "Read the method" }
+injection = { path = "scripts/verify_lock.py", label = "Read the harness" }
 mutation = { path = "evals/replay.py", label = "Read the harness" }
 readback = { path = "tests/test_verify_readback.py", label = "Read the test" }
+e2e = { path = "scripts/verify_lock.py", label = "Read the harness" }
 tests = { path = ".github/workflows/ci.yml", label = "Read the CI job" }

@@ -2,8 +2,8 @@
 
 **This file is a measuring instrument, not production code.** It imports ``careloop`` and touches
 nothing in it. It lives under ``scripts/`` rather than ``tests/`` on purpose: ``testpaths =
-["tests"]`` means pytest never collects it, so nothing in a suite of 1408 tests can come to depend
-on a probe whose whole job is to find out what happens.
+["tests"]`` means pytest never collects it, so nothing in the suite can come to depend on a probe
+whose whole job is to find out what happens.
 
 Commit 5 dropped ``strands.Agent`` for direct ``Model.structured_output`` on two grounds — that
 ``Agent.structured_output`` is deprecated, and that the replacement forces an internal

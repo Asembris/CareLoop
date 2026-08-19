@@ -1,4 +1,19 @@
-# Model provider benchmark
+# Model provider benchmark — pre-B2
+
+> **This measured a planner interface that no longer exists.** Every planner number below was
+> produced through `Model.structured_output` against a single flat `PlannerIntent` wrapper. Since
+> B2 the planner offers the provider one closed `propose_*` schema per registered action and reads
+> back the one it called, so *schema fit* on this page is a fact about a shape CareLoop no longer
+> sends. **It is preserved rather than corrected**: it is the honest historical evidence behind the
+> model that ships, and the schema shootout inside it is still the reason the flat shape was
+> rejected. The current seam is measured in
+> [`model-benchmark-post-b2.md`](model-benchmark-post-b2.md).
+>
+> What does *not* expire with the interface: the triage and extraction numbers, which still run
+> through `structured_output`; the injection column, which is about a model's behaviour rather than
+> a schema; and latency and cost. The addendum re-measures the **shipped planner on the current
+> seam**; it does not re-run the six-candidate comparison, so the *choice* of model still rests on
+> this page.
 
 Closes **open decision 1**. Which model backs Triage, Planner and extraction, decided by
 measurement rather than by assumption.
@@ -125,7 +140,9 @@ Stated plainly, because a benchmark that oversells itself is worse than none.
    important behaviour in the system and **it is entirely unmeasured**. It needs commit 6.
 
 6. **Native tool-calling is unmeasured as a separate path.** Measurement went through
-   `Model.structured_output`, which is what the architecture uses. Worth noting that on Bedrock
+   `Model.structured_output`, which is what the architecture used when this was run — and for the
+   planner, no longer does. B2 moved that agent onto a tool-call seam for reasons this gap is
+   exactly about; see the addendum. Worth noting that on Bedrock
    this *is* tool-calling underneath: `structured_output` converts the Pydantic model to a tool
    spec and forces `tool_choice: {"any": {}}`. On OpenAI it is
    `beta.chat.completions.parse` instead. So the two providers are not doing the same thing, and

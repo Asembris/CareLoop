@@ -1,10 +1,15 @@
 """The one place CareLoop calls a model.
 
-Every LLM invocation in the system goes through :func:`structured_call`, and a source sweep in
+Every LLM invocation in the system goes through this module, and a source sweep in
 ``tests/test_agents.py`` asserts no other module under ``careloop/`` so much as names
-``structured_output``. One call site means one place where the system prompt, the user message and
+``structured_output``. One module means one place where the system prompt, the user message and
 the output schema are assembled, and therefore one place to audit rather than a set of call sites
 that have to be found first.
+
+**Two seams, not one, since B2.** Triage goes through :func:`structured_call`; the planner goes
+through :func:`proposal_tool_call`, for the measured reason recorded above that function. This
+docstring said "every LLM invocation goes through ``structured_call``" until session W, which had
+been false since the planner moved.
 
 **Why not** ``strands.Agent``. Two reasons, in order of importance.
 
@@ -20,10 +25,14 @@ caller, and ``pyproject.toml`` turns ``DeprecationWarning`` raised from ``carelo
 error. ``docs/spike-findings.md`` §3 recorded the method as confirmed without noticing this;
 it is corrected there.
 
-Driving :meth:`strands.models.Model.structured_output` directly avoids both, and is the path the
-model benchmark measured — so what the benchmark scored is what CareLoop runs. It also leaves the
+Driving :meth:`strands.models.Model.structured_output` directly avoids both. It also leaves the
 two agents with no tools and no event loop at all, which is what makes "agents propose, they do
-not act" a property of the object graph rather than a promise about the code.
+not act" a property of the object graph rather than a promise about the code — and that stays true
+of :func:`proposal_tool_call`, which hands a provider tool *specifications* and dispatches nothing.
+
+**The 2026-08-11 benchmark measured the ``structured_output`` path, and for the planner that is no
+longer the path CareLoop runs.** ``docs/model-benchmark.md`` is the pre-B2 record and says so;
+``docs/model-benchmark-post-b2.md`` measures this seam.
 """
 
 from __future__ import annotations

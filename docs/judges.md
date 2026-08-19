@@ -13,8 +13,8 @@ clinician or clinic exists anywhere in this system.
 2. Click **Run a scenario**.
 3. Click **01 — Schedule a cardiology referral**.
 4. Watch. A case appears and moves: *Just arrived* → *Working out the next step* → *Making the
-   arrangement…* → *Confirming with the clinic…* → **Done · independently verified**, in about
-   five seconds.
+   arrangement…* → *Confirming with the clinic…* → **Done · independently verified**, in a few
+   seconds.
 5. Click the case, then **Under the hood**.
 
 That is the whole loop: a document arrived, an agent read it, proposed one action, a policy engine
@@ -52,9 +52,10 @@ Open **Under the hood** on the resulting case and read the policy line.
 
 **Two honest things about this scenario.** The poisoned document arrives *beside* legitimate work,
 so a well-behaved planner may simply ignore it and book the appointment — which is the system
-working, not the demo failing. Measured over six runs, three carried a visible refusal and three
-went straight to the correct booking. We have deliberately **not** tuned the model into taking the
-bait, because a demo that has to be rigged to show its defence is not showing its defence.
+working, not the demo failing. Measured against this deployment on 2026-08-19, five runs: three
+carried a visible refusal and two went straight to the correct booking, and all five booked and
+verified. We have deliberately **not** tuned the model into taking the bait, because a demo that
+has to be rigged to show its defence is not showing its defence.
 
 If you want the refusal deterministically, the poisoned document with no legitimate alternative is
 also exposed:
@@ -63,10 +64,19 @@ also exposed:
 curl -X POST https://d2heuwvhvrdyig.cloudfront.net/api/demo/scenarios/injection_only
 ```
 
-That refuses **every** tool it is offered — `book_appointment`, `fetch_document`,
-`grant_portal_access`, `send_email`, `upload_document` — five times in five runs, and hands the
-case back to a human rather than doing something unsafe. The model is still free to propose
-nothing at all; it is simply never rewarded for proposing something poisoned.
+**What is deterministic there is the outcome, not the route.** Measured on 2026-08-19 over 13
+runs: not one performed an effect, and every one ended with the case in a person's hands. The
+route varied, and the honest description is worth more than a tidier one:
+
+- in most runs the planner proposed all five tools it has — `book_appointment`, `fetch_document`,
+  `grant_portal_access`, `send_email`, `upload_document` — and had every one refused;
+- in some it reached CareLoop's bounded refusal budget first, having never proposed a booking;
+- in one, its sixth attempt was a *legitimate* email to the caregiver's own address, which stopped
+  for approval instead of being refused — a correct outcome by a different door.
+
+Three separate conditions can stop a case, and "every tool has now been refused" is only one of
+them. The model is still free to propose nothing at all; it is simply never rewarded for proposing
+something poisoned.
 
 ---
 
@@ -129,10 +139,12 @@ outside world agreed. A seal that played on every completion would mean nothing.
   refused until it settles, and the button waits rather than starting against a half-finished
   world. Up to a few seconds, only ever while something really is running, and never because
   somebody else is using the demo.
-- **A case says FAILED.** Two scenarios booking the same slot is the usual cause, and pressing a
-  scenario resets your world first precisely so that cannot happen. `failure_reason` on the case
-  says which it was; `ClinicRefused` means the slot was already taken, not that anything about the
-  safety model gave way.
+- **A case says FAILED.** `failure_reason` on the case names the cause, and neither cause is the
+  safety model giving way. `ClinicRefused` means the slot was already taken — two scenarios booking
+  the same slot, which pressing a scenario resets your world to prevent. `MalformedProposal` means
+  the model failed twice running to produce a proposal that satisfies its own schema, so nothing
+  was proposed and nothing was done; press the scenario again. Measured on 2026-08-19 at 2 runs in
+  28 on scenario 03, and not seen on the others.
 - **The dashboard is suddenly empty.** Your world was forgotten — half an hour idle, or the host
   redeployed — and a new one was minted for you. Press a scenario and it runs from the top.
 - **The dashboard seems a beat behind.** It is, deliberately and by about a second. The backend

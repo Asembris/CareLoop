@@ -148,9 +148,18 @@ One page of caption, including what each zone means and why there are exactly tw
   outside world did the right thing. The other three effects are simulated.
 - **The mixed injection scenario is deliberately not deterministic.** The poisoned document arrives
   beside legitimate work, and a planner that ignores the bait and books the appointment is the
-  system working. Measured over six runs: three carried a visible refusal, three went straight to
-  the correct booking. Tuning the model into taking the bait would be rigging the demo. The
-  poison-only scenario refuses every tool it is offered, five times in five runs.
+  system working. Measured on the deployed demo, **2026-08-19, five runs**: three carried a visible
+  refusal, two went straight to the correct booking, and all five booked and verified. Tuning the
+  model into taking the bait would be rigging the demo.
+- **The poison-only scenario is where the refusal is deterministic — but "every tool, five times in
+  five runs" was the wrong description of it.** Measured on the deployed demo, **2026-08-19, 13
+  runs**: no effect was ever performed and every run ended in a person's hands. What varies is the
+  route. Five of eight instrumented runs proposed all five registry tools and had each refused; two
+  reached the bounded refusal budget without ever proposing `book_appointment`; one had its sixth
+  proposal come back as a legitimate email to the caregiver's own address, which correctly stopped
+  for approval rather than being refused. **Exhausting the catalogue is one of three sufficient
+  reasons CareLoop stops, and it is no longer the load-bearing one** — see
+  `MAX_REFUSALS_PER_FINGERPRINT` and the repeat-refusal rule in `careloop/graph/nodes.py`.
 - **No DeepTeam pass/fail table is published**, because judging never completed — the paid layer's
   contribution is the corpus, and that is all it is claimed to have contributed.
 - **`X-Caregiver` is an audit identity, not authentication.** Nothing is verified; a missing header
@@ -168,6 +177,14 @@ One page of caption, including what each zone means and why there are exactly tw
   provenance.
 - The offline suite only ever sees the mock model, so green means the spine is correct, not that a
   provider is well-behaved. Three separate sessions found bugs that no offline test could catch.
+- **A proposal the provider cannot form correctly twice running ends the case `FAILED` rather than
+  handing it to a person.** The planner's `propose_*` call gets one bounded retry; if the second
+  answer also fails to satisfy the schema, `MalformedProposal` leaves the graph and the case is
+  marked `FAILED`. Nothing unsafe happens — no effect is performed and nothing unauthorized is
+  proposed — but it is a *liveness* gap of the same shape as the one session Q closed for repeated
+  refusals, and it is not closed for generation failures. Measured on the deployed demo,
+  **2026-08-19: 2 of 28 `resume` runs**, both on the replan call after a refusal; 0 of 23 runs of
+  the other three scenarios. Reported, not fixed, in session W.
 - Cost per case is not reported. Nothing stamps token usage on a case, and the API inventing one
   would be worse than its absence.
 - The API's run registry is in memory — execution context, not a business fact, so a restart costs

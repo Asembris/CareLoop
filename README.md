@@ -204,7 +204,8 @@ One page of caption, including what each zone means and why there are exactly tw
 | [ADR 0001](docs/adr/0001-strands-agent-for-the-proposal-agents.md) | why the proposal agents are not `strands.Agent` |
 | [ADR 0002](docs/adr/0002-graph-execution-stays-on-the-host.md) | why the graph did not move onto AgentCore Runtime |
 | [ADR 0003](docs/adr/0003-no-runtime-guardrail-layer.md) | why there is no probabilistic guardrail layer |
-| [docs/model-benchmark.md](docs/model-benchmark.md) | which model backs which role, decided by measurement |
+| [docs/model-benchmark.md](docs/model-benchmark.md) | which model backs which role, decided by measurement (pre-B2) |
+| [docs/model-benchmark-post-b2.md](docs/model-benchmark-post-b2.md) | the shipped planner on the seam it actually uses |
 | [docs/live-loop-findings.md](docs/live-loop-findings.md) | what a real planner does after a refusal |
 | [docs/spike-findings.md](docs/spike-findings.md) | SDK behaviour verified by execution, not by reading |
 | [docs/session-log.md](docs/session-log.md) | every session, what was measured, and what was cut |

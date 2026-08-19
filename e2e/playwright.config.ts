@@ -1,7 +1,7 @@
 /* The local project: a real backend on loopback, driven by scripted agents.
  *
  * **Unmocked by default.** The whole value of this layer is that it talks to the real FastAPI
- * contract — the 119 Vitest tests replace the network with `vi.stubGlobal("fetch", …)` and assert
+ * contract — the Vitest suite replaces the network with `vi.stubGlobal("fetch", …)` and asserts
  * against fixtures the frontend authored, so a backend field rename leaves them green and the demo
  * broken. Two states use `page.route`, both named and justified in their own spec; everything else
  * reaches the real store, the real policy engine and a real clinic over HTTP.

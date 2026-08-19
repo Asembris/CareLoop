@@ -62,15 +62,29 @@ project refuses everywhere else — or opening the injection channel invariant 6
 
 **The honest counter-argument, stated rather than skipped.** A guardrail catches things a rule
 cannot express: a plausible-sounding request with no policy-relevant argument, PII in a free-text
-body, an unusual sequence. CareLoop's answer is structural rather than dismissive — it has no
-free-text output channel at all. The planner emits a typed `PlannerIntent`; every external effect
-is a typed tool call with declared argument classes; nothing the model writes reaches a person
-except through a gated action. **The surface a guardrail defends is one this architecture does not
-have.** Where it did have one — the denial text — the answer was the closed `ReasonCode` enum, not
-a filter.
+body, an unusual sequence. CareLoop's answer is structural rather than dismissive — the planner
+emits a typed proposal and every external effect is a typed tool call with declared argument
+classes, so there is no channel by which model prose becomes an *action*. **The surface a guardrail
+defends is mostly one this architecture does not have.** Where it did have one — the denial text —
+the answer was the closed `ReasonCode` enum, not a filter.
 
-If CareLoop ever grows a channel where the model's prose reaches a human directly, this decision
-should be revisited, and that is recorded below rather than left implicit.
+**"Mostly" is doing real work in that sentence, and it did not used to.** This ADR read *"nothing
+the model writes reaches a person except through a gated action"*, and by session W that was no
+longer true in two places. `TriageResult.summary` is one sentence a model writes from event text
+that may be attacker-authored; the API projects it as `Case.summary`, and the dashboard renders it
+as the case title for any case outside its three-entry fixed-title table. And a pending decision
+card shows a caregiver the exact arguments of the call they are being asked to approve — for
+`send_email` that is a model-authored subject and body, read by a person before they press approve.
+
+**The decision does not change, and the reason is worth stating rather than assuming.** Neither
+channel confers authority: the summary is re-framed as untrusted evidence when it reaches the
+planner, and the decision card exists precisely so that a human sees the exact call before it is
+released. What a guardrail would add here is *content* screening of prose a person reads — a
+different job from deciding whether an action may happen, which is the job this ADR is about. The
+argument below was that no such channel exists; the accurate argument is that these channels carry
+no authority and that screening them is a separate question nobody has yet asked. If prose the
+model writes ever reaches a person *without* a human decision attached — a generated letter sent
+on, a notification — that is the trigger recorded below, and it is closer than this page implied.
 
 ## garak — not adopted
 
@@ -128,9 +142,11 @@ and produces:
 
 ## What would change the answer
 
-- **CareLoop grows a free-text channel to a human.** A summary a caregiver reads, a chat surface, a
-  generated letter. The argument above rests on there being no such channel; the day there is one,
-  a guardrail defends something real and this should be reopened.
+- **CareLoop grows a free-text channel to a human that carries no human decision.** A generated
+  letter that is sent, a notification, a chat surface. Two channels already exist and are named
+  above — the triage summary rendered as a case title, and the arguments on a decision card — and
+  both are attached to a person's own reading rather than to an autonomous send. The trigger to
+  reopen is prose reaching somebody with nothing asked of them.
 - **A rule turns out to be inexpressible.** If a genuine threat cannot be written in `rules.yaml`
   without encoding it in Python — which invariant 2 forbids — that is evidence the deterministic
   layer is insufficient rather than evidence the rule file needs an exception.

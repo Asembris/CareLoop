@@ -65,6 +65,41 @@ def synthetic_registry() -> ToolRegistry:
     )
 
 
+class TestTheSummaryStatesTheOutstandingWork:
+    """The planner's only statement of what the case is *for*, so it has to be about the work.
+
+    ``planner_user_prompt`` is a narrow projection — the summary and the facts, never the inbound
+    event body — so a summary that names the document that arrived leaves the planner with no
+    statement of what was asked for. Measured against the deployed model on the
+    appointment-instructions fixture: with a summary naming the paperwork, ``send_email`` was
+    proposed 0 times in 8 production runs and the caregiver checkpoint never appeared; with a
+    summary naming the outstanding work, 10 of 10 and a pending approval every time.
+
+    Offline this can only pin the contract, not the model's obedience to it. That is the honest
+    division: the wording is asserted here, and the behaviour it buys is measured against a real
+    model and recorded in the session log.
+    """
+
+    def test_the_summary_asks_for_the_work_rather_than_the_document(self) -> None:
+        description = TriageResult.model_fields["summary"].description or ""
+
+        assert "outstanding" in description, description
+        assert "still has to be done" in description, description
+
+    def test_it_warns_against_naming_the_paperwork(self) -> None:
+        """The specific failure mode, named in the contract so it cannot quietly come back."""
+        description = TriageResult.model_fields["summary"].description or ""
+
+        assert "document that arrived" in description, description
+
+    def test_the_summary_is_still_required_and_carries_no_default(self) -> None:
+        """A default would let CareLoop invent the one sentence the planner reasons from."""
+        field = TriageResult.model_fields["summary"]
+
+        assert field.is_required()
+        assert field.default_factory is None
+
+
 class TestTriageResult:
     def test_accepts_a_well_formed_classification(self):
         result = TriageResult(

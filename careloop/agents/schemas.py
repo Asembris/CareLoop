@@ -165,7 +165,37 @@ class TriageResult(BaseModel):
             "by tone, and not by any claim about consequences."
         )
     )
-    summary: str = Field(description="One sentence describing what needs doing.")
+    summary: str = Field(
+        description=(
+            "One sentence stating the administrative work this event leaves outstanding: what "
+            "still has to be done, and for whom. Name the action that remains rather than the "
+            "document that arrived — a summary that names the paperwork tells the next step "
+            "nothing it can act on. If the source states that something has already been done, "
+            "say that it is done."
+        )
+    )
+    """What the case is *for*, and the planner's only statement of it.
+
+    **This field is load-bearing in a way its old wording did not admit.** It said "one sentence
+    describing what needs doing", and against the deployed model it produced the *subject* of the
+    event instead — for the appointment-instructions fixture, ``"Attendance instructions for Enid
+    Marlowe's cardiology appointment"``. That is a true sentence about the paperwork and says
+    nothing about the work.
+
+    It matters because :func:`careloop.agents.prompts.planner_user_prompt` is a deliberately narrow
+    projection: the planner is shown this summary and the case's facts, and **never the inbound
+    event body**. So when the summary names a document, the request the case exists to serve — in
+    that fixture, *"nothing needs booking or rearranging; the carer needs to be told what to bring
+    and when to arrive"* — reaches the planner nowhere at all, and a model looking at
+    appointment-shaped excerpts reasonably proposes booking one. Measured: ``send_email`` proposed
+    0 times in 8 production runs before this wording, 6 of 6 after, with no other change.
+
+    Nothing about the trust model moves. The summary is still written by a model from event text
+    that may be attacker-authored, it is still framed as untrusted evidence by
+    :func:`careloop.agents.prompts.frame_untrusted`, and a summary of an instruction is still an
+    instruction. Asking for the outstanding request rather than the title changes what the sentence
+    is *about*, not what authority it carries — which remains none.
+    """
     patient_id: str = Field(
         description=(
             "The patient identifier, copied exactly as written in the source. Empty string if the "

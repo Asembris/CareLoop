@@ -718,15 +718,22 @@ def reset_world(deps: ApiDeps) -> dict[str, object]:
         )
 
     removed = deps.store.clear()
-    if deps.clinic is not None:
-        # `put_back`, not `reset`: a session-scoped clinic has its world *ended*, which is the same
-        # observable outcome — the next booking gets a freshly seeded world — and is also what keeps
-        # this registry and Demo World's agreeing about who is still here. Which of the two happens
-        # is settled by how the client was built, so there is nothing for this route to decide.
-        deps.clinic.put_back()
+    # `put_back`, not `reset`: a session-scoped clinic has its world *ended*, which is the same
+    # observable outcome — the next booking gets a freshly seeded world — and is also what keeps
+    # this registry and Demo World's agreeing about who is still here. Which of the two happens is
+    # settled by how the client was built, so there is nothing for this route to decide.
+    #
+    # What comes back is reported rather than dropped: it is the one place the coupling between the
+    # two registries is observable from outside the process, and `scripts/verify_deploy.py` is what
+    # has to observe it. A Demo World deployed without the lifecycle verb, or a CareLoop that
+    # stopped calling it, is a silent return to two owners — and saying what happened here is
+    # cheaper and narrower than a route for asking about it.
+    ended = deps.clinic.put_back() if deps.clinic is not None else None
     return {
         "cases_cleared": removed,
         "clinic_reset": deps.clinic is not None,
+        # `null` on a single-world CareLoop, whose clinic is the default world and has no lifetime.
+        "clinic_world_ended": ended,
         "scenarios": sorted(DEMO_SCENARIOS),
     }
 

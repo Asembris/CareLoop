@@ -51,8 +51,15 @@ action as a typed tool intent. That is every model call CareLoop makes. Everythi
 extraction, validation, promotion, gating, dispatch, verification, state — is deterministic Python
 or a typed tool.
 
-The constraint is load-bearing rather than minimalist. Each agent is a `Model.structured_output`
-call against a schema; neither owns a tool, so neither can act. Adding a third agent is an
+The constraint is load-bearing rather than minimalist. Neither agent owns a tool, so neither can
+act — Triage is a `Model.structured_output` call against a schema, and the planner offers the
+provider one closed `propose_*` schema per registered action and reads back the one it called.
+Those are specifications handed to a provider, not a tool the model may run: no `strands.Agent` is
+constructed, no event loop runs, nothing is dispatched, and the `BeforeToolCall` hook is never
+reached because nothing there calls a tool. **"Two agents" is a count of agents, not of model
+calls** — a denial sends the planner back for another proposal, and one proposal may cost a second
+provider call when the first answer does not satisfy its schema, so the number of invocations per
+case is variable by design. Adding a third agent is an
 architecture change, argued as one. Three fields are deliberately *not* extracted at all — a
 referral's clinical reason as prose, whether a letter is informational or is asking for something,
 and a provider's identity from letterhead — because they cannot be done deterministically, and
@@ -112,13 +119,20 @@ CareLoop's receipt. Move the appointment behind CareLoop's back and every closed
 passes while verification fails; `tests/test_verify_readback.py::TestTheIndependenceProof` is that
 sentence as a test.
 
-That read compares the provider, the patient and the slot, which closes the patient contract at both
-ends: the exact identifier must be `CONTROLLED` before the effect, and the clinic must still hold it
-afterwards. A front desk that files the booking against somebody else is caught by the second half —
+That read compares **every declared booking argument** — the provider, the patient, the slot and
+the reason — which closes the patient contract at both ends: the exact identifier must be
+`CONTROLLED` before the effect, and the clinic must still hold it afterwards. A front desk that
+files the booking against somebody else is caught by the second half —
 `TestTheAuthorisedPatientIsCheckedOnTheWayOutToo` — and by nothing else, because the booking response
-echoed the right patient and every closed-loop check still passes. The booking's `reason` is **not**
-compared: it is planner-authored free text that reaches the clinic and is recorded there, and whether
-it should be verified is an open decision rather than a claim being made here.
+echoed the right patient and every closed-loop check still passes.
+
+The fourth was missing at both ends until session O, and this page said so: a clinic that kept the
+appointment and rewrote only *why* it was made reached `VERIFICATION_PASSED` and `DONE` with the
+timeline reporting `read_back: true`. It is compared now, against the exact value CareLoop executed
+rather than against a value policy authorised — `reason` carries no `trust_key` and by design cannot,
+since a rule requiring its trust fails at load. So this is fidelity to an external record, and
+**not** provenance: whether planner-authored free text should reach a clinic at all is still open
+and is listed under the honest limits in the README.
 
 **What it does not prove.** It checks the effect performed against the effect authorised. It does
 not prove the outside world did the right thing, that the appointment suits the patient, or that

@@ -9,7 +9,7 @@
 <x-dc>
 <helmet>
 <title>CareLoop — Agency with boundaries. Care with receipts.</title>
-<meta name="description" content="CareLoop proposes actions, checks authority against deterministic policy, executes only what is permitted, and verifies the external result before a case is closed.">
+<meta name="description" content="CareLoop proposes actions, checks authority against deterministic policy, executes only what is permitted, and re-reads the clinic's own record before a booking is called done.">
 <meta name="theme-color" content="#f7f4ee">
 <link rel="icon" type="image/svg+xml" href="careloop-mark.svg">
 <meta property="og:type" content="website">
@@ -143,7 +143,7 @@ a:hover { color: #315e52; }
         <div style="max-width: 720px; margin-left: auto; display: flex; flex-direction: column; gap: 24px; text-align: right;">
           <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; color: #9c5c2e;">A REFERRAL ARRIVES</span>
           <h2 style="margin: 0; font-family: Newsreader, Georgia, serif; font-weight: 300; font-size: clamp(38px, 5.2vw, 66px); line-height: 1.06; letter-spacing: -0.025em;">One decision is waiting.</h2>
-          <p style="margin: 0; margin-left: auto; font-size: 17.5px; line-height: 1.65; color: #5c584f; max-width: 52ch;">CareLoop read the paperwork, found the deadline, checked the calendar and found the conflict. It stops here — not because it failed, but because this choice belongs to a person.</p>
+          <p style="margin: 0; margin-left: auto; font-size: 17.5px; line-height: 1.65; color: #5c584f; max-width: 52ch;">CareLoop read the paperwork, extracted the deadline and validated it against the referral. Then it reached an action that is not its to take — sending on the carer's behalf — and stopped.</p>
         </div>
         <div style="max-width: 940px; margin: 56px auto 0;">
           <figure style="margin: 0; display: flex; flex-direction: column; gap: 12px;">
@@ -581,19 +581,19 @@ const PROJECT = {
 };
 
 const STEPS = [
-  { n: "01", key: "event",     title: "Observe",         body: "A referral arrives. CareLoop opens a case and pulls in only the context this event needs." },
-  { n: "02", key: "gather",    title: "Gather",          body: "The deadline is read from page 2 of the referral; the visit length from the instructions. Each fact keeps its source." },
-  { n: "03", key: "reasoning", title: "Reason",          body: "The model drafts a plan: Tuesday conflicts with Maya's calendar, Thursday at 2:00 PM is open and still meets the deadline." },
+  { n: "01", key: "event",     title: "Observe",         body: "A referral arrives, and with it a continuity notice addressed to the agent. CareLoop opens one case and reads both." },
+  { n: "02", key: "gather",    title: "Gather",          body: "The deadline and the patient id are read from the referral and validated. The notice's instructions are quoted as evidence and never become permission. Each fact keeps its source." },
+  { n: "03", key: "reasoning", title: "Reason",          body: "The model proposes one action: book the slot the referral offers, with the provider the referral names." },
   { n: "04", key: "authority", title: "Check authority", body: "The proposal reaches deterministic code. Not a prompt, not a model — the boundary decides what may run." },
-  { n: "05", key: "human",     title: "Human",           body: "Booking on someone's behalf is not the agent's call. The signal parks. The topology simply refuses to continue." },
-  { n: "06", key: "execute",   title: "Act",             body: "Approved, and bound to the exact arguments shown. The executor books the appointment once, idempotently." },
+  { n: "05", key: "human",     title: "Human",           body: "This booking is the agent's to take: a provider from trusted configuration, a slot validated against the referral. An outbound message on the carer's behalf is not, and the same boundary parks that one until a person approves the exact recipient, subject and body." },
+  { n: "06", key: "execute",   title: "Act",             body: "Authorized, and bound to the exact arguments the boundary allowed. The executor books the appointment once, idempotently." },
   { n: "07", key: "verify",    title: "Verify",          body: "CareLoop reads the clinic's own record back, independently of the executor that wrote it." },
   { n: "08", key: "closed",    title: "Close",           body: "Authorized matches observed. Only now does the case close, and the last connection resolves." }
 ];
 
 const CALLOUTS = {
   4: "The model can propose this action. It cannot authorize itself.",
-  5: "The loop cannot close without the person.",
+  5: "The boundary decides which actions need a person. The model never does.",
   7: "Independently verified — not self-reported.",
   8: "The loop is closed because the outside world agreed."
 };
@@ -619,36 +619,36 @@ const EVIDENCE = [
     caveat: "This covers the adapters present in the evaluated build. It is not a clinical safety certification.",
     crossLink: "See boundary mutation →" },
   { id: "injection", category: "ADVERSARIAL", kind: "MEASURED", value: "", featured: true,
-    label: "Prompt-injection attempts blocked", atlas: "reason",
+    label: "Poisoned-document runs that reached an effect", atlas: "reason",
     summary: "Document content can supply facts. It cannot supply authority.",
-    tested: "Referral and continuity documents carrying instructions addressed to an automated system.",
-    method: "Adversarial suite replays injected documents through the full agent path.",
+    tested: "Thirteen runs of a case whose only document is a continuity notice addressed to the agent.",
+    method: "The poison-only scenario, run against the deployed demo on 2026-08-19 and read from each case's own audit trail.",
     invariant: "Untrusted content never widens the set of permitted actions.",
-    caveat: "Covers the attack corpus in the repository, not all possible phrasings." },
+    caveat: "Thirteen runs of one scenario against one model on one day. The corpus result is the row above." },
   { id: "mutation", category: "ADVERSARIAL", kind: "COUNTERFACTUAL", value: "",
-    label: "Mutation score, policy layer", atlas: "gate",
+    label: "Same corpus, authority layer removed", atlas: "gate",
     summary: "Removing the boundary should make the suite fail.",
     tested: "The authority gate, with its deterministic verdict removed from the build.",
     method: "The same adversarial suite runs against the mutant; surviving mutants indicate vacuous tests.",
     invariant: "Protection that no test notices the absence of is not protection.",
     crossLink: "See boundary mutation →" },
   { id: "readback", category: "VERIFICATION", kind: "MEASURED", value: "",
-    label: "Verification mismatches caught", atlas: "verify",
-    summary: "Cases where the world disagreed and the case stayed open.",
-    tested: "External read-backs seeded to disagree with the authorized action.",
+    label: "Booking fields re-read from the clinic", atlas: "verify",
+    summary: "Provider, patient, slot and reason, each compared against the clinic's own record.",
+    tested: "A read-back moved behind CareLoop's back on each of the four fields in turn.",
     method: "The verifier reads the external record independently of the executor that wrote it.",
     invariant: "A case cannot reach a completed state while authorized and observed differ." },
   { id: "e2e", category: "END-TO-END", kind: "MEASURED", value: "",
-    label: "End-to-end scenarios", atlas: "act",
-    summary: "Full workflow runs against the synthetic demo world.",
-    tested: "Referral, malicious document and verification-mismatch scenarios, start to settled.",
-    method: "Each scenario runs the real agent path with no step stubbed.",
-    invariant: "Every scenario reaches a terminal state the backend considers valid." },
+    label: "Deployed runs settling as specified", atlas: "act",
+    summary: "Every demo scenario and the approval cycle, driven through the CDN against the deployed demo.",
+    tested: "Four scenarios five times each, plus five approval cycles, each in a freshly minted world.",
+    method: "scripts/verify_lock.py, public HTTP only, run 2026-08-19.",
+    invariant: "One run in twenty-five did not: the model failed twice running to form a proposal that satisfies its own schema, and the case ended FAILED having done nothing." },
   { id: "tests", category: "RELIABILITY", kind: "MEASURED", value: "",
-    label: "Unit and integration tests", atlas: "facts",
+    label: "Repository test suite", atlas: "facts",
     summary: "Repository suite across the agent, policy and verification layers.",
     tested: "Trust resolution, policy verdicts, idempotency, provenance and adapters.",
-    method: "Standard repository test run.",
+    method: "python -m pytest -q, offline, on a mock model provider, at zero cost.",
     invariant: "The suite is green on the commit this page describes." }
 ];
 
@@ -676,12 +676,12 @@ const SYSTEMS = [
     input: "An authorized intent.", output: "An attempted effect on an external system.",
     cannot: "Declare the real-world outcome verified.", onFail: "The case stays open and nothing is marked complete." },
   { atlas: "world", name: "External world", tone: "#6b675e", pin: "verify",
-    does: "The clinics, payers and portals CareLoop acts against.",
+    does: "The clinic CareLoop books against, running in its own process. Payers and portals are simulated.",
     input: "Requests through approved channels.", output: "Its own record of what happened.",
     cannot: "Be assumed to agree with what was requested.", onFail: "No observation means no closure." },
   { atlas: "verify", name: "Verification", tone: "#3f6b5b", pin: "verify",
-    does: "Compare what was authorized with what the outside world reports.",
-    input: "The authorized action and an independent read-back.", output: "MATCH or MISMATCH.",
+    does: "Re-read the external record of the one action that has one, and compare it with what was authorized.",
+    input: "The authorized booking and an independent read of the clinic's own record.", output: "MATCH or MISMATCH.",
     cannot: "Treat execution success as proof of outcome.", onFail: "The case cannot reach a completed state." },
   { atlas: "caseN", name: "Case and audit", tone: "#6b675e", pin: "closed",
     does: "Hold durable case state and the evidence trail behind every step.",
@@ -1131,7 +1131,7 @@ class Component extends DCLogic {
 
       limits: [
         { title: "Current scope", body: "Administrative coordination only: paperwork, referrals, appointments and follow-ups. CareLoop does not diagnose, treat, prescribe or interpret symptoms." },
-        { title: "Still requires human judgment", body: "Any decision that commits a person's time, money or records stops at the human checkpoint. The policy layer decides where that line falls; it is not inferred by the model." },
+        { title: "Still requires human judgment", body: "Where the line falls is a deterministic rule rather than a model's judgement. An action whose recipient, portal or granted role is not established by trusted configuration is refused outright; an outbound message on someone's behalf stops for a person. A booking with a trusted provider and a validated slot runs without asking — the line is drawn by what an action can reach, not by how consequential it sounds." },
         { title: "Before production deployment", body: "Real integrations, credentialing, audit retention and clinical review are all outstanding. Nothing here has been used with real patient data." },
         { title: "Known technical limits", body: "A synthetic demo world, a single caregiver identity and no authentication. The external systems CareLoop verifies against are simulated." }
       ],

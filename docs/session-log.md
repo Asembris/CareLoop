@@ -5905,6 +5905,198 @@ cold process turns a two-second scenario into ten to fifteen.
 
 33, 29, 30, 31, 22, 25, 26, 28. **Unchanged.**
 
+## Session V — 2026-08-18/19
+
+### Position
+
+**One entry covering eight chapters, because the repository already calls all of them V.**
+`careloop/api/sessions.py`, `careloop/tools/clinic.py` and
+`frontend/reference/DESIGN_REFERENCE.md` each name "session V", and between them they point at the
+first chapter and the last. Splitting the letter now would leave three files citing a session that
+does not exist under that name. Forty commits, `9d773b7..e0c6bb1`, over two days.
+
+**This entry was written in session W, from the commits and the code, not on the day.** Everything
+below is either in the tree or was measured during V and recorded in a file V wrote; nothing has
+been reconstructed from memory. Where V's own measurements have since been re-run, the later
+number is in session W's entry rather than edited into this one.
+
+---
+
+### V1 — The orchestration field (2026-08-18)
+
+A WebGL field painted behind the whole interface, vendored from the `careloop-motion` package with
+three.js r160 self-hosted. `frontend/docs/MOTION.md` is its record.
+
+**The claim it had to earn is that it is decoration.** With `?motion=off`, all eight reference
+states — four routes × two themes, 909×540, cropped to the fold — render **byte-identical** to the
+build before the integration. Measured against the pre-integration commit served on its own port,
+not asserted.
+
+Two decisions worth carrying. The canvas is **static markup in `index.html`, outside the React
+tree**, because the module re-boots itself whenever its canvas leaves the document and a
+React-owned canvas would hand that guard every StrictMode double-mount to interpret. And three.js
+is self-hosted under a **version-bearing filename**, because `careloop/api/static.py` serves
+`assets/` as `immutable` and that is only honest for bytes that cannot change under a name — an
+upgrade is a new filename, never an edit in place.
+
+`e2e/tests/field.spec.ts` gates it on inertness, text exclusion, contrast and honest zones. The
+zone check is the interesting one: a scene zone runs **only where the scenario truthfully matches**,
+so the field cannot narrate something the application is not doing.
+
+### V2 — The boot choreography (2026-08-18)
+
+An SVG loader painting the field's origin state, once per tab, for about a second and a half, then
+handing its mark to the header's real one. `frontend/docs/BOOT.md` is its record, and the same
+byte-identical proof holds one layer out: `?boot=off&motion=off` reproduces the pre-integration
+build exactly.
+
+**Readiness is a fact about the application and is emitted in one place.** `careloop:ready` fires
+from `useApplicationReady()` in `App`, two frames after the last effect of the initial mount —
+median **89 ms** over seven cold loads. It deliberately does not wait on the backend, because a
+loader that waited for `GET /api/cases` would sit over an unreachable backend for nine seconds and
+would hide `connecting` and the connection banner, which are designed application states rather
+than loading states.
+
+**Cosmetic startup code got two independent removers**, for the reason the policy layer has two
+enforcement points: the loader's own idempotent `finalize()`, and a reaper in `index.html` sharing
+no reference with it. The mutants that survived the first pass are recorded in `BOOT.md` because
+each exposed a real weakness rather than a weak test.
+
+Two fixes on top: the overlay becomes `pointer-events: none` **in the same statement that starts
+its fade** — upstream left it invisible and still taking clicks for 740 ms, which looks exactly
+like a broken application and does not appear in a screenshot — and the loader says one true thing
+("Preparing CareLoop") instead of narrating three pieces of work that do not happen at startup.
+
+### V3 — The suites that pay for the first two (2026-08-18)
+
+`e2e/tests/base.ts` seeds the loader off for every spec that is not about it, so no assertion races
+a decoration. CI grew a `timeout-minutes` on every job after the `e2e` job spent all six hours on a
+blocked `playwright install --with-deps`, and dropped `--with-deps` for the same reason it was
+costing minutes on every run. `scripts/e2e_serve.py` gained world headroom for a suite that runs
+longer than the idle window.
+
+### V4 — B2: the planner's proposal seam (2026-08-19)
+
+**Measured against the deployed model, `Model.structured_output` hands the provider a single
+wrapper tool whose description describes an *object* rather than an instruction to call it — and
+Nova 2 Lite answers by inventing a tool named after an entry in the prompt catalogue. 25 of 25
+responses carried a `toolUse` for `book_appointment` when the only tool offered was
+`PlannerIntent`.** The SDK then raises a bare `ValueError` saying no valid tool use was found,
+which is true and says nothing about why.
+
+So the planner now offers the actions themselves as closed `propose_*` schemas and reads back the
+one the model called. Everything provider-shaped lives behind `proposal_tool_call`, which is
+deterministic about all four ways the answer can be wrong — no call, several calls, a tool not
+offered, arguments that do not satisfy the schema — and manufactures nothing: no JSON is repaired,
+no field is defaulted, no proposal is invented. One bounded retry, for a failure to *generate*
+only; a throttle or a credential error propagates untouched.
+
+**This is not an agent loop**, and the distinction is load-bearing: no `strands.Agent` is
+constructed, no event loop runs, nothing is dispatched, and the `BeforeToolCall` hook is never
+reached because nothing there calls a tool. The proposal schemas are specifications handed to a
+provider.
+
+### V5 — The liveness repair, and withholding what it added (2026-08-19)
+
+The old rule for "there is nothing safe left to do" was `_every_tool_has_been_refused`, which
+silently assumed the planner would enumerate the whole registry. **It does not: in ten real-graph
+runs the deployed model proposed four distinct tools and never `book_appointment`, so the condition
+was unsatisfiable, the case burned all 24 node executions and ended `FAILED` — a defence reported
+as a fault.** A second measurement found the other half: an injection-only case had the planner
+repeat one refused tool seven times.
+
+Three sufficient conditions now, in order of strength: a **repeated** refusal under identical policy
+inputs, which is *provably* futile because `evaluate` is pure; `MAX_REFUSALS_PER_FINGERPRINT = 6`,
+a bound rather than a deduction, sized so it is always reached before the node budget; and the old
+catalogue-exhaustion condition, kept because it is still true and no longer relied upon.
+
+A refusal's identity is four parts — tool, `args_digest`, `reason_code`, and a `policy_fingerprint`
+over exactly what a verdict can depend on. The fingerprint is what makes the rule *conditional*:
+a refusal stops matching the moment the case materially changes, so a case that keeps making
+progress never runs the budget down. It is deliberately minimal, because a component that churns
+without affecting a verdict would make every fingerprint unique and the rule would stop working
+while still looking present.
+
+**Then the projection had to be closed behind it.** `args_digest` and `policy_fingerprint` are
+internal liveness metadata on `POLICY_DENY` payloads, and the API projects payloads through an
+allowlist — so a new payload key is invisible until somebody decides about it. Somebody did.
+
+### V6 — The triage summary (2026-08-19)
+
+`TriageResult.summary` said "one sentence describing what needs doing" and against the deployed
+model produced the *subject* of the event instead. It matters because `planner_user_prompt` is a
+deliberately narrow projection — the planner sees this summary and the case's facts and **never the
+inbound event body** — so a summary naming the paperwork left the actual request reaching the
+planner nowhere at all, and a model looking at appointment-shaped excerpts reasonably proposed
+booking one. **Measured: `send_email` proposed 0 times in 8 production runs before the wording
+change, 6 of 6 after, with no other change.**
+
+Nothing about the trust model moved: the summary is still model-written from event text that may
+be attacker-authored, still framed as untrusted evidence, and a summary of an instruction is still
+an instruction.
+
+### V7 — `site/`: the judge-facing dossier (2026-08-19)
+
+A Claude Design export imported whole, with an `adapt.py` that substitutes destinations and results
+into a copy and **refuses to write if the embedded rendering manifest moved by a byte**. The
+alternative — rebuilding the page from `src/` into loose assets — was rejected because every
+problem it would have solved turned out to be reachable without it, and it would have put the
+page's type, layout and pinned scrub at risk to buy a smaller download.
+
+Gated statically and through Playwright under the GitHub *project path* `/CareLoop/`, on purpose: a
+root-absolute asset is invisible at an origin root and 404s under a project path, which is the
+failure GitHub project pages actually produce.
+
+### V8 — One owner for a visitor's world (2026-08-19)
+
+The audit finding of the session, and the one with a live consequence. A session is a CareLoop
+store *and* a Demo World clinic, and **each registry decided on its own when that world ended** —
+CareLoop by idle time refreshed on every API request, Demo World by evicting the least recently
+used *clinic*. A judge polling the dashboard was alive on one side and the eviction victim on the
+other: the appointment CareLoop had booked and verified vanished from the external system, and a
+later read-back that should have been `MATCHED` came back `ABSENT` against a world recreated empty,
+with nothing raised anywhere.
+
+The guard in place was `DEFAULT_SESSION_LIMIT <= DEFAULT_WORLD_LIMIT`, **a number standing in for a
+lifecycle**: equal capacities do not synchronise eviction *order*, and order was the whole
+disagreement.
+
+So Demo World no longer removes a world on its own, and at capacity it **refuses** rather than
+taking an existing one — a world CareLoop failed to end costs a capacity slot, never a live
+visitor's appointment. That forces a second change: reads create nothing, or an anonymous
+`GET /clinic/slots?session=…` in a loop would fill a registry that no longer evicts. A failed end
+is queued and retried rather than swallowed, and CareLoop lets its own world go regardless.
+
+Found by **running the e2e suite, not by reading**: two concurrent `POST /api/sessions` against a
+registry holding anything idle raised `KeyError` out of `_forget_idle` and answered 500. Starlette
+runs sync endpoints in a worker pool, so two visitors arriving together are two threads on one
+`OrderedDict`. `SessionWorlds` now carries the same `@serialised` decorator `SqliteCaseStore` does,
+with `drain` excluded by name because holding a blocking lock across its `await` would stop the
+loop making the progress it waits for.
+
+### The lock
+
+Re-earned against the deployed demo at the end of the session: the four-scenario fresh-world
+matrix five times each, five approval cycles asserting that what executed is the exact call the
+caregiver was shown, and the coupling reproducer through the distribution. **25 of 25, coupling
+ok.** The script that did it lived in a scratchpad; session W committed it as
+`scripts/verify_lock.py`.
+
+### Evidence
+
+`2696 passed, 37 skipped`, ruff clean, `0 of 320` / `320 of 320` unchanged. Frontend **157** vitest,
+e2e **108**, site Playwright **23**, typecheck and build clean.
+
+### Still open, deliberately
+
+**A killed CareLoop process orphans every clinic world it held**, permanently rather than
+self-healing, because Demo World no longer evicts. The lifespan ends them on `SIGINT`, which covers
+an ordinary redeploy and nothing else. Closing it wants a bulk `DELETE /demo/sessions` swept at
+startup, which hands any anonymous caller the ability to wipe every visitor's clinic and deserves
+its own decision.
+
+**The session log was not updated.** Recorded here in session W, which is why this entry exists.
+
 ## Standing risks
 
 - **The resume is a `CaseStore` reconstruction across a process boundary, not a Strands session

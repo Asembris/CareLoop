@@ -38,7 +38,7 @@ from typing import Final
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from adapt import _receipt_url, adapt, manifest_digest
+from adapt import COPY_CORRECTIONS, EM_DASH, _receipt_url, adapt, manifest_digest
 
 SITE: Final = Path(__file__).resolve().parents[1]
 VENDOR: Final = SITE / "vendor" / "dossier.bundle.html"
@@ -228,11 +228,88 @@ def main() -> int:
         check(f"PROJECT.{prop} is still empty", f'{prop}: ""' in template)
     check("no invented video URL", "videoUrl" in template and 'videoUrl: ""' in template)
 
-    print("\nno result is published yet")
-    check("all six evidence results are still empty", template.count('value: ""') == 6)
-    check("both counterfactual rows still read as pending", template.count('value: "—"') == 2)
-    for phrase in ("0 of 320", "320 of 320", "2661 passed", "103 passed", "25 of 25"):
-        check(f"no unpublished result {phrase!r} leaked in", phrase not in generated)
+    print("\nthe page describes the product this repository actually contains")
+    # Session W. Every pair in `COPY_CORRECTIONS` replaces a claim a judge could falsify by reading
+    # the README two clicks away — there is no calendar integration, a trusted booking is authorised
+    # autonomously, only `book_appointment` has an external read-back, and two ledger rows were
+    # labelled for measurements nobody had made.
+    #
+    # Asserted in both directions, because each catches a different way of going wrong. The old
+    # string absent from the page is the correction having *happened*; the new string present in
+    # `src/` is the editable source and the generated page still agreeing, which is what stops a
+    # future re-export from silently reinstating the old copy.
+    for old, new in COPY_CORRECTIONS:
+        check(f"the page no longer says {old[:44]!r}", old not in generated)
+        check(f"src/ carries {new[:44]!r}", new in source_page)
+        check(f"the page carries {new[:36]!r}", template.count(new) + head.count(new) >= 1)
+
+    # Non-vacuity, three ways. Without these the loop above would pass against a bundle in which
+    # the corrections were never applied and the old copy simply never existed.
+    untransformed = _template(vendor) + _stub_head(vendor)
+    check(
+        "every old claim really is in the untransformed bundle",
+        all(old in untransformed for old, _ in COPY_CORRECTIONS),
+    )
+    check(
+        "and none of the replacements is",
+        not any(new in untransformed for _, new in COPY_CORRECTIONS),
+    )
+    check("the corrections table is not empty", len(COPY_CORRECTIONS) >= 20)
+
+    # The two encodings. The bundle carries this copy as HTML markup and again inside a
+    # JSON-escaped template, so a pair needing escaping would reach only one of them. `adapt.py`
+    # refuses such a pair; this asserts the table has none, so that refusal is never the thing a
+    # reader discovers at build time.
+    for old, new in COPY_CORRECTIONS:
+        check(
+            f"{old[:36]!r} needs no escaping in either encoding",
+            not any(c in s for s in (old, new) for c in ('"', "\n")),
+        )
+
+    # The three specific claims the audit named, asserted by content rather than by table position
+    # so that deleting a row from `COPY_CORRECTIONS` cannot quietly retire one of them.
+    check("no calendar is claimed anywhere", "calendar" not in generated.lower())
+    check(
+        "booking is not described as always stopping for a human",
+        "Booking on someone's behalf is not the agent's call" not in generated,
+    )
+    check(
+        "the external world is scoped to the clinic",
+        "The clinics, payers and portals CareLoop acts against" not in generated,
+    )
+
+    print("\nevery published result is what site.toml says, and nothing else is published")
+    # **Inverted in session W, and the old shape is why.** This used to assert that all six results
+    # were empty and that a fixed list of phrases had not "leaked in" — a leak detector over
+    # literals frozen at the moment it was written. It kept passing after the suite grew from 2661
+    # to 2696 and again to 2720, because the phrase it forbade had stopped being a phrase the
+    # repository produces. A guard whose subject drifts out from under it guards nothing.
+    #
+    # So it is now two-directional and reads its expectations from the config: every configured
+    # value appears in the page, and no *unconfigured* result-shaped string does. The second half is
+    # what stops a number reaching a reader through the bundle rather than through `site.toml`.
+    evidence = config["evidence"]
+    counterfactual = config["counterfactual"]
+    check("all six ledger results are configured", len(evidence) == 6 and all(evidence.values()))
+    for eid, value in sorted(evidence.items()):
+        check(f"evidence[{eid}] renders {value!r}", f'value: "{value}"' in template)
+    for key, value in sorted(counterfactual.items()):
+        check(f"counterfactual[{key}] renders {value!r}", f'value: "{value}"' in template)
+    check("no ledger row is left pending", 'value: ""' not in template)
+    check("no counterfactual row is left pending", f'value: "{EM_DASH}"' not in template)
+    # Result-shaped strings the page must not carry unless `site.toml` put them there. These are
+    # the ones this repository has actually published and then outgrown: two stale suite counts,
+    # and a lock result that is now 24 of 25.
+    published = set(evidence.values()) | set(counterfactual.values())
+    for phrase in ("2661 passed", "2696 passed", "103 passed", "25 of 25", "0 of 25"):
+        if phrase not in published:
+            check(f"no unconfigured result {phrase!r} is in the page", phrase not in generated)
+
+    # Non-vacuity for the pair above: an unpublished result must be detectable by the same test.
+    # Without this, "no unconfigured result is in the page" would pass just as happily against a
+    # page the checker never actually searched.
+    check("the search would find one if it were there", "0 of 320" in generated)
+
     before_evidence = template.split("EVIDENCE")[0]
     check("evidence source links are still pending", "sourceUrl" not in before_evidence)
 

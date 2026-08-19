@@ -158,6 +158,44 @@ exactly. It is left alone deliberately, and it is the one piece of this defect s
 Note that `docs/BUILD.md`'s pre-ship checklist claimed no horizontal overflow at mobile. That claim
 was untrue when the handoff was written; it is true now below 721px.
 
+### 7. Source receipts, prepared and switched off
+
+Every architecture row and every proof-ledger row can name the repository file that backs it. The
+mapping is written, and validated against the working tree on every run — but
+`source_receipts.enabled` is `false`, so **`adapt.py` emits nothing**.
+
+That is not caution for its own sake. The repository is private, so a receipt rendered today would
+be a permalink a judge cannot open, and a 404 sitting under a claim is worse than the page's own
+honest "Source pending". While the switch is off the generated page is byte-identical to one built
+with the entire `[source_receipts]` section deleted, which `tests/check_site.py` asserts directly
+rather than inferring.
+
+Turning it on is two values — `enabled = true` and `sha` — and touches no markup.
+
+**`sha` must be a pinned commit, and arming without one raises.** `blob/main` moves; a receipt that
+drifts off the line it was citing is a false citation carrying a working link, which is worse than
+either failure alone. Directories pin as `tree/<sha>/…` and files as `blob/<sha>/…`, because GitHub
+does not serve a directory under `blob` and emitting one form for both would put a 404 behind a
+receipt.
+
+The two kinds of receipt render differently, because the design gives them different markup:
+
+| Receipt | Renders as | Why |
+|---|---|---|
+| Proof-ledger rows | a clickable pinned permalink | `EVIDENCE.sourceUrl` is already drawn as a link |
+| Architecture rows | a repository path, as text | the inspector's `SOURCE` row is drawn as text |
+
+Making the architecture receipts clickable would mean changing that row's markup, which this layer
+does not do. The paths resolve under the pinned commit either way.
+
+Two ledger rows are deliberately left unmapped. `injection` and `e2e` carry labels that do not yet
+describe what the repository measures, and a receipt under a wrong label lends the label
+credibility it has not earned. They stay pending until the label is fixed.
+
+The unauthorized-action evidence is split across two rows — `docs/security-evaluation.md` for the
+method and its limits, `evals/replay.py` for the harness that produces it — because each ledger row
+carries exactly one link, and the document and the harness are different artifacts.
+
 ## Re-exporting from Claude Design
 
 1. Edit `src/dossier.dc.html` (or `careloop-story.js`).

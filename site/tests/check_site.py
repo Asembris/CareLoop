@@ -29,6 +29,7 @@ import hashlib
 import html
 import json
 import re
+import subprocess
 import sys
 import tempfile
 import tomllib
@@ -37,7 +38,7 @@ from typing import Final
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from adapt import adapt, manifest_digest
+from adapt import _receipt_url, adapt, manifest_digest
 
 SITE: Final = Path(__file__).resolve().parents[1]
 VENDOR: Final = SITE / "vendor" / "dossier.bundle.html"
@@ -234,6 +235,103 @@ def main() -> int:
         check(f"no unpublished result {phrase!r} leaked in", phrase not in generated)
     before_evidence = template.split("EVIDENCE")[0]
     check("evidence source links are still pending", "sourceUrl" not in before_evidence)
+
+    print("\nsource receipts are prepared but switched off")
+    receipts = config.get("source_receipts", {})
+    repo_root = SITE.parent
+    enabled = receipts.get("enabled")
+    check("the switch exists and is off", enabled is False, str(enabled))
+    check("no commit is pinned yet", receipts.get("sha", "") == "")
+    check(
+        "the receipt repo is the real one",
+        receipts.get("repo") == "https://github.com/Asembris/CareLoop",
+    )
+
+    # Every configured path must exist *and* be tracked: a file git does not carry cannot be at
+    # the other end of a GitHub permalink, however present it is on this machine.
+    configured: list[str] = []
+    for paths in receipts.get("subsystems", {}).values():
+        configured.extend(paths)
+    for entry in receipts.get("evidence", {}).values():
+        configured.append(entry["path"])
+    for path in configured:
+        target = repo_root / path
+        check(f"{path} exists", target.exists())
+        if target.exists():
+            tracked = subprocess.run(
+                ["git", "ls-files", "--error-unmatch", "--", path],
+                cwd=repo_root,
+                capture_output=True,
+            )
+            check(f"{path} is tracked by git", tracked.returncode == 0)
+
+    # Nothing a judge could click while the repository is private.
+    check("no receipt URL is in the page", "sourceUrl:" not in template)
+    check("no subsystem receipt is in the page", "sourceReceipt" not in template)
+    check(
+        "no GitHub permalink is in the page",
+        not re.search(r"github\.com/\S+/(?:blob|tree)/", template),
+    )
+    check("the architecture SOURCE row still reads as pending", '"Source pending"' in template)
+    # Disabled must be indistinguishable from the section not existing at all, so that switching it
+    # on is the only thing that can ever make a receipt appear.
+    without = {k: v for k, v in config.items() if k != "source_receipts"}
+    check(
+        "with receipts off the page is byte-identical to having no receipt config",
+        adapt(vendor, without, source_page) == generated,
+    )
+
+    print("\nand they would resolve if the switch were flipped")
+    armed = tomllib.loads(_read(CONFIG))
+    armed["source_receipts"]["enabled"] = True
+    armed["source_receipts"]["sha"] = "0" * 40
+    lit = _template(adapt(vendor, armed, source_page))
+    check(
+        "every ledger receipt becomes a link",
+        lit.count("sourceUrl:") == len(receipts["evidence"]),
+    )
+    check(
+        "every subsystem receipt becomes a path",
+        lit.count("sourceReceipt:") == len(receipts["subsystems"]),
+    )
+    wired_row = 'v: y.sourceReceipt || "Source pending"'
+    check("the SOURCE row reads the selected subsystem", wired_row in lit)
+    # Ledger receipts are the clickable ones, so those carry the pinned URL. Subsystem receipts
+    # land in a row the design draws as text, so those resolve to repository paths — asserted here
+    # as the two different renderings they are, rather than pretending they are one.
+    pinned = f"https://github.com/Asembris/CareLoop/blob/{'0' * 40}/docs/security-evaluation.md"
+    check("a ledger receipt is a pinned permalink", f'sourceUrl: "{pinned}"' in lit)
+    rules_receipt = 'sourceReceipt: "careloop/policy/rules.yaml"'
+    check("a subsystem receipt is a repository path", rules_receipt in lit)
+    check(
+        "a paired subsystem receipt names both halves",
+        'sourceReceipt: "careloop/graph/verify.py · tests/test_verify_readback.py"' in lit,
+    )
+    # The blob/tree distinction is a property of the URL builder, and no evidence receipt is a
+    # directory today, so it is exercised directly rather than through the page.
+    check(
+        "a file pins as a blob",
+        _receipt_url("https://x/r", "abc", "careloop/policy/rules.yaml")
+        == "https://x/r/blob/abc/careloop/policy/rules.yaml",
+    )
+    check(
+        "a directory pins as a tree",
+        _receipt_url("https://x/r", "abc", "careloop/agents/")
+        == "https://x/r/tree/abc/careloop/agents",
+    )
+    no_branch = "/blob/main/" not in lit and "/tree/main/" not in lit
+    check("no receipt points at a moving branch", no_branch)
+    armed_digest = manifest_digest(adapt(vendor, armed, source_page))
+    check("the armed build leaves the manifest alone", armed_digest == manifest_digest(vendor))
+    # Arming without pinning must fail loudly rather than emit a branch link.
+    unpinned = tomllib.loads(_read(CONFIG))
+    unpinned["source_receipts"]["enabled"] = True
+    try:
+        adapt(vendor, unpinned, source_page)
+        check("enabling without a sha is refused", False, "it was accepted")
+    except Exception as refusal:
+        why = str(refusal)
+        check("enabling without a sha is refused", "sha is empty" in why, why[:70])
 
     print("\nthe substitution machinery is not vacuous")
     probe = tomllib.loads(_read(CONFIG))

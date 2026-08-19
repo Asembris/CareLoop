@@ -320,6 +320,27 @@ test.describe("the dossier under the GitHub project path", () => {
     expect(unsafe).toEqual([]);
   });
 
+  test("no source receipt is clickable while the repository is private", async ({ page }) => {
+    await open(page);
+
+    // The receipts are configured and validated, but the switch is off: nothing in the page may
+    // offer a judge a GitHub permalink they cannot open. Asserted on rendered links rather than on
+    // config, so a receipt that leaked through the transform would fail here too.
+    const permalinks = await page.evaluate(() =>
+      [...document.querySelectorAll("a")]
+        .map((a) => a.getAttribute("href") ?? "")
+        .filter((href) => /github\.com\/[^/]+\/[^/]+\/(?:blob|tree)\//.test(href)),
+    );
+    expect(permalinks).toEqual([]);
+
+    // The architecture inspector still says so in its own words.
+    const chip = page.locator("button.cl-chip[data-atlas]").first();
+    await chip.scrollIntoViewIfNeeded();
+    await chip.click();
+    await expect(page.getByText("Source pending").first()).toBeVisible();
+    await page.keyboard.press("Escape");
+  });
+
   test("no horizontal overflow on desktop", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await open(page);

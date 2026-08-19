@@ -31,6 +31,7 @@ from demoworld.clinic import (
     Clinic,
     Clinics,
     Slot,
+    WorldsAtCapacity,
 )
 
 __all__ = [
@@ -45,5 +46,6 @@ __all__ = [
     "Clinic",
     "Clinics",
     "Slot",
+    "WorldsAtCapacity",
     "create_clinic_app",
 ]

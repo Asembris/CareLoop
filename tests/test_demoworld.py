@@ -32,7 +32,7 @@ from demoworld.app import (
     create_clinic_app,
     demo_session,
 )
-from demoworld.clinic import SEEDED_SLOTS, Clinic, Clinics
+from demoworld.clinic import SEEDED_SLOTS, Clinic, Clinics, WorldsAtCapacity
 
 KEY = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
 OTHER_KEY = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
@@ -258,39 +258,184 @@ class TestOneWorldPerSession:
         assert demo_session(x_demo_session="   ") is None
 
 
-class TestWorldsAreForgottenLeastRecentlyUsedFirst:
-    """Bounded, and bounded without a clock — Demo World reads no time and no random source."""
+class TestWorldsAreEndedOnlyWhenTheOwnerSaysSo:
+    """Nothing here decides that a visitor has gone. Bounded by refusing, not by taking.
+
+    This registry used to evict least-recently-used, where "used" meant the *clinic* was touched,
+    while CareLoop expired a world by idle time refreshed on every API request. Two owners with
+    incompatible orders, and the victim was a visitor who was still there — see
+    ``tests/test_session_lifecycle.py`` for the reproduction and :class:`demoworld.clinic.Clinics`
+    for the reasoning. With nothing evicting there is no eviction order left to disagree about.
+    """
 
     def test_a_world_survives_being_used(self) -> None:
         worlds = Clinics(limit=2)
         first = worlds.world("a")
         assert worlds.world("a") is first
 
-    def test_the_oldest_is_dropped_when_the_limit_is_passed(self) -> None:
+    def test_nothing_is_taken_when_the_limit_is_reached(self) -> None:
+        """The arriving visitor is refused; the two already here keep everything."""
         worlds = Clinics(limit=2)
         original = worlds.world("a")
         worlds.world("b")
-        worlds.world("c")
 
-        assert worlds.sessions() == ("b", "c")
-        assert len(worlds) == 2
-        # Not an error, and not the same clinic: a forgotten world is a world that reseeds.
+        with pytest.raises(WorldsAtCapacity):
+            worlds.world("c")
+
+        assert worlds.sessions() == ("a", "b")
+        assert worlds.world("a") is original
+
+    def test_a_session_already_holding_a_world_is_never_refused(self) -> None:
+        """The cap bounds how many worlds exist, not how often somebody may use theirs."""
+        worlds = Clinics(limit=1)
+        held = worlds.world("a")
+        assert worlds.world("a") is held
+
+    def test_ending_a_world_frees_its_place(self) -> None:
+        worlds = Clinics(limit=1)
+        worlds.world("a")
+
+        assert worlds.end("a") is True
+        assert worlds.sessions() == ()
+        assert worlds.world("b") is not None
+
+    def test_ending_is_idempotent_and_says_whether_there_was_one(self) -> None:
+        """A retry after a partial success has to look like success, or repair looks like
+        failure."""
+        worlds = Clinics(limit=2)
+        worlds.world("a")
+
+        assert worlds.end("a") is True
+        assert worlds.end("a") is False
+        assert worlds.end("never-created") is False
+
+    def test_an_ended_world_reseeds_rather_than_returning(self) -> None:
+        worlds = Clinics(limit=2)
+        original = worlds.world("a")
+        worlds.end("a")
         assert worlds.world("a") is not original
 
-    def test_using_a_world_moves_it_to_the_back_of_the_queue(self) -> None:
+    def test_reading_creates_nothing(self) -> None:
+        """Without this, and without eviction, a URL and a loop would fill the registry forever."""
         worlds = Clinics(limit=2)
+
+        for name in ("a", "b", "c", "d"):
+            assert worlds.view(name).available() == SEEDED_SLOTS
+
+        assert worlds.sessions() == ()
+        assert len(worlds) == 0
+
+    def test_a_read_of_a_world_that_exists_is_that_world(self) -> None:
+        worlds = Clinics(limit=2)
+        held = worlds.world("a")
+        assert worlds.view("a") is held
+
+    def test_there_is_no_order_of_use_to_disagree_about(self) -> None:
+        """Using a world does not reorder anything, because nothing consults an order."""
+        worlds = Clinics(limit=3)
         worlds.world("a")
         worlds.world("b")
         worlds.world("a")
         worlds.world("c")
 
-        assert worlds.sessions() == ("a", "c")
+        assert worlds.sessions() == ("a", "b", "c")
 
     def test_the_default_world_is_not_one_of_them(self) -> None:
         worlds = Clinics(limit=1)
         worlds.world("a")
         assert len(worlds) == 1
         assert worlds.default is worlds.world(None)
+        assert worlds.default is worlds.view(None)
+
+
+class TestEndingAWorldOverHttp:
+    """``DELETE /demo/session`` — the lifecycle verb, and the only way a world is removed."""
+
+    def test_it_ends_the_world_the_caller_names(self, client: TestClient) -> None:
+        book(client, headers={SESSION_HEADER: "session-a"})
+        confirmation = book(client, headers={SESSION_HEADER: "session-a"}).json()["confirmation_id"]
+
+        ended = client.delete("/demo/session", headers={SESSION_HEADER: "session-a"})
+        assert ended.status_code == 200
+        assert ended.json() == {"session": "session-a", "existed": True}
+
+        gone = client.get(
+            f"/clinic/appointments/{confirmation}", headers={SESSION_HEADER: "session-a"}
+        )
+        assert gone.status_code == 404
+
+    def test_it_leaves_every_other_world_alone(self, client: TestClient) -> None:
+        mine = book(client, headers={SESSION_HEADER: "session-a"}).json()["confirmation_id"]
+        book(client, headers={SESSION_HEADER: "session-b"})
+
+        client.delete("/demo/session", headers={SESSION_HEADER: "session-b"})
+
+        kept = client.get(f"/clinic/appointments/{mine}", headers={SESSION_HEADER: "session-a"})
+        assert kept.status_code == 200
+
+    def test_ending_a_world_that_is_not_here_is_still_a_200(self, client: TestClient) -> None:
+        """Idempotent: a caller repairing a divergence must not be told it failed to."""
+        ended = client.delete("/demo/session", headers={SESSION_HEADER: "never-booked"})
+        assert ended.status_code == 200
+        assert ended.json() == {"session": "never-booked", "existed": False}
+
+    def test_a_browser_can_name_the_world_in_the_query_string(self, client: TestClient) -> None:
+        book(client, headers={SESSION_HEADER: "session-a"})
+        ended = client.delete(f"/demo/session?{SESSION_PARAM}=session-a")
+        assert ended.json() == {"session": "session-a", "existed": True}
+
+    def test_naming_no_session_is_a_400_and_the_default_world_is_untouched(
+        self, client: TestClient, world: Clinic
+    ) -> None:
+        """The default world has no lifetime to end, and this must end nothing else quietly."""
+        book(client)
+        refused = client.delete("/demo/session")
+
+        assert refused.status_code == 400
+        assert SESSION_HEADER in refused.json()["detail"]
+        assert len(world.appointments()) == 1
+
+
+class TestAFullClinicRefusesTheArrivingVisitor:
+    """At the cap, somebody arriving is refused — never somebody already here.
+
+    The whole trade, stated where it is observable: the alternative is deleting the world of a
+    visitor who is still looking at the demo, which is what this replaced.
+    """
+
+    def test_a_new_world_is_refused_with_503(self) -> None:
+        client = TestClient(create_clinic_app(Clinic(), limit=1))
+        assert book(client, headers={SESSION_HEADER: "session-a"}).status_code == 201
+
+        refused = book(client, headers={SESSION_HEADER: "session-b"})
+        assert refused.status_code == 503
+
+    def test_the_visitor_who_is_already_here_is_untouched(self) -> None:
+        client = TestClient(create_clinic_app(Clinic(), limit=1))
+        confirmation = book(client, headers={SESSION_HEADER: "session-a"}).json()["confirmation_id"]
+
+        book(client, headers={SESSION_HEADER: "session-b"})
+
+        kept = client.get(
+            f"/clinic/appointments/{confirmation}", headers={SESSION_HEADER: "session-a"}
+        )
+        assert kept.status_code == 200
+
+    def test_a_read_is_never_refused_by_the_cap(self) -> None:
+        """Reads create nothing, so a full registry has nothing to refuse them for."""
+        client = TestClient(create_clinic_app(Clinic(), limit=1))
+        book(client, headers={SESSION_HEADER: "session-a"})
+
+        read = client.get("/clinic/slots", headers={SESSION_HEADER: "session-b"})
+        assert read.status_code == 200
+        assert read.json()["slots"] == [slot.model_dump() for slot in SEEDED_SLOTS]
+
+    def test_ending_a_world_makes_room_for_the_next_visitor(self) -> None:
+        client = TestClient(create_clinic_app(Clinic(), limit=1))
+        book(client, headers={SESSION_HEADER: "session-a"})
+        client.delete("/demo/session", headers={SESSION_HEADER: "session-a"})
+
+        assert book(client, headers={SESSION_HEADER: "session-b"}).status_code == 201
 
 
 class TestNothingHereIsCacheable:

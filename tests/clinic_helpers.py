@@ -25,7 +25,7 @@ from contextlib import contextmanager
 import uvicorn
 
 from demoworld.app import create_clinic_app
-from demoworld.clinic import Clinic
+from demoworld.clinic import DEFAULT_WORLD_LIMIT, Clinic
 
 #: How long the server has to bind before the fixture gives up. Generous, because the cost of being
 #: wrong is a confusing hang rather than a slow suite: nothing waits this long in practice.
@@ -35,15 +35,22 @@ SHUTDOWN_TIMEOUT = 10.0
 
 
 @contextmanager
-def clinic_server(clinic: Clinic | None = None) -> Iterator[tuple[str, Clinic]]:
+def clinic_server(
+    clinic: Clinic | None = None, *, limit: int = DEFAULT_WORLD_LIMIT
+) -> Iterator[tuple[str, Clinic]]:
     """Run Demo World on a loopback port, yielding its base URL and its state.
 
     The :class:`~demoworld.clinic.Clinic` is yielded alongside the URL because a test that wants to
     prove the read-back is independent has to be able to move an appointment out from under the
     caller — and it can only do that by holding the same object the routes hold.
+
+    ``limit`` is passed through so a test can stand a *full* Demo World up on a socket without
+    minting sixty-four worlds to get there.
     """
     world = clinic if clinic is not None else Clinic()
-    config = uvicorn.Config(create_clinic_app(world), host="127.0.0.1", port=0, log_level="warning")
+    config = uvicorn.Config(
+        create_clinic_app(world, limit=limit), host="127.0.0.1", port=0, log_level="warning"
+    )
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, name="demoworld", daemon=True)
     thread.start()

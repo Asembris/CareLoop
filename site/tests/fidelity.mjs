@@ -3,19 +3,34 @@
  *
  *   node fidelity.mjs --pristine http://127.0.0.1:8802/CareLoop/ --adapted http://127.0.0.1:8803/CareLoop/
  *
- * The adaptation is supposed to change what a crawler reads and where three lightbox backgrounds
- * point, and nothing else. This proves that, in the only two ways that are actually decidable:
+ * **What the adaptation is expected to change has grown twice, and this comment used to deny it.**
+ * It read "what a crawler reads and where three lightbox backgrounds point, and nothing else",
+ * which stopped being true the moment the mobile stylesheet was carried in and again when the copy
+ * was corrected. A clean run is therefore no longer achievable and was not achievable when this
+ * sentence was last written. Three expected classes, measured 2026-08-19 at 1440x900 and 375x812:
+ *
+ *   crawler head + lightbox paths   session V   the original purpose; no geometry effect
+ *   the mobile stylesheet           session V   mobile scrollWidth 778 -> 375, the overflow fixed
+ *   the copy corrections            session W   desktop docHeight 19094 -> 19275, text reflow
+ *
+ * The first four section boxes are byte-identical across both builds, so the desktop delta is text
+ * wrapping in later sections rather than a layout change. **This is a reporting instrument, not a
+ * gate** — it exits non-zero on any difference, which is useful for reading a diff and wrong as a
+ * pass/fail bar, and it is deliberately not one of the three commands in `site/README.md`.
+ *
+ * What it still decides, and what those decisions are worth:
  *
  * **Geometry, compared exactly.** Section boxes, document height, the pinned chapter's reserved
- * scroll length, and the horizontal overflow figure. These are deterministic across loads, so any
- * difference is a real layout regression rather than a timing artifact. Exact equality is the bar.
+ * scroll length, and the horizontal overflow figure. These are deterministic across loads, so a
+ * difference is a real change rather than a timing artifact — which is what makes the three
+ * expected classes above readable as themselves instead of as noise.
  *
  * **Pixels, with the animated layer removed.** The topology is a live field — signals travel,
  * ripples decay, ambient intervals are irregular on purpose — so two loads of the *same* build
  * never produce identical frames, and a strict pixel diff over it would measure the clock rather
  * than the change. `__careLoopStory.destroy()` removes exactly that layer and leaves the static
- * page: type, rules, cards, captures. Those must be pixel-identical, and the field's separate
- * presence is asserted before it is torn down.
+ * page: type, rules, cards, captures. Outside the corrected copy those are pixel-identical, and
+ * the field's separate presence is asserted before it is torn down.
  *
  * The lightbox is expected to differ and is reported separately: in the pristine bundle its
  * background is a 404 and the panel opens empty, which is the defect the adaptation repairs.

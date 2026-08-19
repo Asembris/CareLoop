@@ -174,8 +174,14 @@ test.describe("the dossier under the GitHub project path", () => {
     await expect(metric).toHaveAttribute("aria-expanded", "false");
     await metric.click();
     await expect(metric).toHaveAttribute("aria-expanded", "true");
-    // Phase 1 publishes no results, so the pending state is what must be on screen.
-    await expect(page.getByText("Verified result pending").first()).toBeVisible();
+    // Session W published the ledger, so the pending state must be *gone* — the inverse of what
+    // this asserted through phase 1. Deliberately config-independent: `check_site.py` already ties
+    // every rendered value to `site.toml`, and repeating those literals here would give the pair
+    // two sources to drift between. What this adds is that the value reaches a screen at all.
+    await expect(page.getByText("Verified result pending")).toHaveCount(0);
+    const result = page.locator("text=RESULT").first();
+    await expect(result).toBeVisible();
+    await expect(page.getByText("0 of 320").first()).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(metric).toHaveAttribute("aria-expanded", "false");
     expectClean(faults);

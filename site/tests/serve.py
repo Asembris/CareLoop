@@ -26,6 +26,13 @@ PROJECT_PATH: Final = "/CareLoop/"
 class ProjectPathHandler(http.server.SimpleHTTPRequestHandler):
     """Serve ``site/`` beneath ``/CareLoop/`` and 404 everything outside it."""
 
+    # HTTP/1.1, so the browser keeps one connection rather than reopening a socket per asset.
+    # The page is a 1.9 MB document followed by several captures, and on a loaded machine the
+    # HTTP/1.0 default's connection churn was enough to push the first navigation past its
+    # budget. SimpleHTTPRequestHandler already sends Content-Length, which is what makes
+    # keep-alive safe here.
+    protocol_version = "HTTP/1.1"
+
     def translate_path(self, path: str) -> str:
         clean = posixpath.normpath(path.split("?", 1)[0].split("#", 1)[0])
         if clean == PROJECT_PATH.rstrip("/"):

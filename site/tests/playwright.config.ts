@@ -16,10 +16,15 @@ export default defineConfig({
   retries: 0,
   workers: 1,
   reporter: process.env.CI ? [["github"], ["html", { open: "never" }]] : [["list"]],
-  timeout: 60_000,
+  timeout: 90_000,
   expect: { timeout: 10_000 },
   use: {
     baseURL: `http://127.0.0.1:${PORT}/CareLoop/`,
+    // The dossier is a 1.9 MB self-extracting document that unpacks 24 assets into blob URLs
+    // before it paints. On a machine that has just run another suite, the first navigation is
+    // genuinely slow rather than broken, so the budget is sized for the artifact instead of
+    // being left at a default that turns contention into a red gate.
+    navigationTimeout: 45_000,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },

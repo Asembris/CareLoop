@@ -36,7 +36,6 @@ the same clinic says it does not have.
 from __future__ import annotations
 
 import threading
-from collections import OrderedDict
 from collections.abc import Callable
 from functools import wraps
 from typing import Final, cast
@@ -279,13 +278,24 @@ class Clinic:
         )
 
 
-#: How many session worlds one process keeps before the least recently used is forgotten.
+#: How many session worlds one process holds before it refuses to make another.
 #:
 #: A clinic is three small dictionaries and a lock — a booked one is a few hundred bytes — so the
 #: bound is about not growing without limit rather than about memory pressure. It is well above the
-#: number of people who can be looking at a demo at once, and a forgotten world is a world that
-#: reseeds, which is what the reset button does anyway.
+#: number of people who can be looking at a demo at once.
+#:
+#: **A refusal and not an eviction**, which is the whole of session V's repair. See
+#: :class:`Clinics`.
 DEFAULT_WORLD_LIMIT: Final[int] = 64
+
+
+class WorldsAtCapacity(Exception):
+    """Raised when this clinic holds all the worlds it will hold and is asked for another.
+
+    The mirror of :class:`careloop.api.sessions.SessionsAtCapacity`, and refused for the same
+    reason: taking a world from somebody who is mid-demo to give it to somebody arriving is the
+    trade nobody would choose. Here it is stronger than a preference — see :class:`Clinics`.
+    """
 
 
 class Clinics:
@@ -302,10 +312,34 @@ class Clinics:
     the default world for a caller who names nothing. Anyone who can reach the port can name any
     world, which is the same statement CareLoop's own ``X-Caregiver`` makes about identity.
 
-    **Least-recently-used, and no clock.** Demo World reads no time and no random source — a
-    ``booked_at`` or a minted id would break the byte-identical replay CareLoop asserts through the
-    real HTTP path — so worlds are evicted by *order of use* rather than by age. An
-    :class:`~collections.OrderedDict` is the whole mechanism.
+    **Nothing here decides that a visitor has gone.** This registry used to evict least-recently-
+    used, where "used" meant *the clinic* was touched — while CareLoop's own registry expired a
+    world by idle time, refreshed on every API request. Two owners with incompatible orders: a
+    visitor polling the dashboard stayed alive on CareLoop's side while their clinic, untouched
+    since their last booking, was the eviction victim here. Their appointment vanished from the
+    external system, and a read-back that should have been ``MATCHED`` came back ``ABSENT`` against
+    a world recreated empty, with nothing raised anywhere. **Equal capacities do not fix that**,
+    which is what made the old ``DEFAULT_SESSION_LIMIT <= DEFAULT_WORLD_LIMIT`` guard a number
+    standing in for a lifecycle: the two registries disagreed about *order*, not about size.
+
+    So a world is removed **only** by :meth:`end`, and only CareLoop calls it — when it expires a
+    session, when it resets one, and when it shuts down. With nothing evicting there is no eviction
+    order, and there is nothing left for the two registries to disagree about. There is deliberately
+    no age, no clock and no last-used ordering here to tempt the next reader into re-deriving one:
+    Demo World does not know who is still looking at the demo and must not guess.
+
+    **At the cap it refuses rather than takes.** :class:`WorldsAtCapacity` is the trade
+    ``SessionsAtCapacity`` already documents one process over, and here it is what makes the
+    property structural rather than dependent on a network call succeeding: a world CareLoop failed
+    to tell us about costs a *capacity slot*, never a live visitor's appointment. The worst a full
+    registry can do is refuse somebody arriving, loudly, which is a great deal better than deleting
+    the world of somebody already here, silently.
+
+    **A world is created by the act that puts something in it**, which is booking. Reads resolve
+    through :meth:`view` and create nothing — without that, and without eviction, an anonymous
+    ``GET /clinic/slots?session=<anything>`` sixty-four times would fill this registry permanently.
+    A read for a world nobody has booked in still answers, out of an unregistered seeded clinic: the
+    reply is identical, and nothing is kept.
     """
 
     def __init__(
@@ -319,7 +353,7 @@ class Clinics:
         self._limit = limit
         self._slots = slots
         self._default: Final[Clinic] = default if default is not None else Clinic(slots)
-        self._worlds: OrderedDict[str, Clinic] = OrderedDict()
+        self._worlds: dict[str, Clinic] = {}
 
     @property
     def default(self) -> Clinic:
@@ -332,6 +366,9 @@ class Clinics:
         ``None`` is the default world rather than a new one: a developer running Demo World by hand
         and a judge reading ``GET /clinic/slots`` in a browser both arrive without a session, and
         minting them a fresh world each time would show them an empty clinic forever.
+
+        Raises:
+            WorldsAtCapacity: if this registry is full and ``session`` has no world here yet.
         """
         if session is None:
             return self._default
@@ -339,17 +376,57 @@ class Clinics:
         with self._lock:
             existing = self._worlds.get(session)
             if existing is not None:
-                self._worlds.move_to_end(session)
                 return existing
+            if len(self._worlds) >= self._limit:
+                raise WorldsAtCapacity(
+                    f"this clinic holds {self._limit} session worlds and every one of them belongs "
+                    f"to somebody; try again in a few minutes"
+                )
 
             created = Clinic(self._slots)
             self._worlds[session] = created
-            while len(self._worlds) > self._limit:
-                self._worlds.popitem(last=False)
             return created
 
+    def view(self, session: str | None) -> Clinic:
+        """The clinic ``session`` reads, without creating one it does not have.
+
+        A read has to answer for a world nobody has booked in — a judge pasting a session id into a
+        browser, or CareLoop resetting a visitor who never got as far as an appointment — and it
+        answers identically either way, because a world with no bookings *is* the seeded world. What
+        it must not do is leave one behind: creating on read is how a registry that never evicts
+        gets filled by somebody with a URL and a loop.
+
+        The clinic returned for a session with no world is a throwaway. Writing to it is not an
+        error and not persistence; it is simply forgotten, which is exactly right for resetting a
+        world that does not exist.
+        """
+        if session is None:
+            return self._default
+
+        with self._lock:
+            existing = self._worlds.get(session)
+        return existing if existing is not None else Clinic(self._slots)
+
+    def end(self, session: str) -> bool:
+        """Forget ``session``'s world. Returns whether there was one.
+
+        **The only way a world is removed**, and CareLoop is the only caller: see the class
+        docstring. Idempotent on purpose — ending a world twice, or ending one that was never
+        created, is the same successful outcome as ending one that existed, and a caller retrying
+        after a partial success must not be told that it failed.
+
+        The default world has no lifetime and cannot be ended: it is not in this mapping, so naming
+        it is not something this method declines to do — it has no way to express it.
+        """
+        with self._lock:
+            return self._worlds.pop(session, None) is not None
+
     def sessions(self) -> tuple[str, ...]:
-        """Every session with a world here, least recently used first. For tests and diagnostics."""
+        """Every session with a world here, in creation order. For tests and diagnostics.
+
+        Creation order rather than order of use, and the distinction is the repair: there is no
+        order of use here any more, because nothing consults one.
+        """
         with self._lock:
             return tuple(self._worlds)
 
@@ -371,5 +448,6 @@ __all__ = [
     "SlotAlreadyTaken",
     "UnknownAppointment",
     "UnknownSlot",
+    "WorldsAtCapacity",
     "serialised",
 ]

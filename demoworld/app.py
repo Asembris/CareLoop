@@ -18,6 +18,13 @@ both are given, and a caller who names neither reaches the default world — whi
 running this by hand has always reached. The id is a namespace and not a credential: Demo World
 mints none, verifies none, and will keep a world under whatever string it is handed.
 
+**A world is created by booking and removed only by being told to.** ``DELETE /demo/session`` is
+the lifecycle verb, and CareLoop is its only caller: it ends a visitor's clinic when it expires
+their session, resets it, or shuts down. Nothing here decides that a visitor has gone — see
+:class:`demoworld.clinic.Clinics` for what that cost when two components both believed they owned
+the lifetime. The read routes resolve through ``view`` and leave nothing behind, so a registry that
+never evicts cannot be filled by somebody with a URL and a loop.
+
 **Nothing here is cacheable, and that is load-bearing rather than tidy.** CareLoop's verification
 performs a *separate* ``GET /clinic/appointments/{id}`` and compares it against what it executed,
 which is the only thing in the system that observes an external effect independently. Behind a CDN
@@ -37,6 +44,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Res
 from pydantic import BaseModel
 
 from demoworld.clinic import (
+    DEFAULT_WORLD_LIMIT,
     Appointment,
     BookingRequest,
     Clinic,
@@ -46,6 +54,7 @@ from demoworld.clinic import (
     SlotAlreadyTaken,
     UnknownAppointment,
     UnknownSlot,
+    WorldsAtCapacity,
 )
 
 CLINIC_PREFIX = "/clinic"
@@ -70,6 +79,13 @@ class ResetResult(BaseModel):
     """What ``POST /demo/reset`` answers with: the world it restored."""
 
     slots: list[Slot]
+
+
+class EndedSession(BaseModel):
+    """What ``DELETE /demo/session`` answers with: which world, and whether there was one."""
+
+    session: str
+    existed: bool
 
 
 def idempotency_key(idempotency_key: Annotated[str | None, Header()] = None) -> str:
@@ -105,21 +121,49 @@ def demo_session(
 
 
 def world_for(request: Request, session: Annotated[str | None, Depends(demo_session)]) -> Clinic:
-    """The clinic this request is about.
+    """The clinic this request is about, created if this session has none yet.
 
     Reached through the app's registry rather than through a closure, so the dependency can live at
     module scope where FastAPI can resolve its annotation — and so there is one function, named, in
     which "which world" is decided.
+
+    **Asked for by the booking route and by nothing else.** A world is created by the act that puts
+    something in it; see :func:`view_for` for why the reads must not.
     """
     worlds: Clinics = request.app.state.clinics
-    return worlds.world(session)
+    try:
+        return worlds.world(session)
+    except WorldsAtCapacity as full:
+        # 503 rather than 429, for CareLoop's own reason one process over: nothing about this caller
+        # is being rate limited, and the answer is "come back in a minute". Refusing an arriving
+        # visitor is the whole trade — the alternative is deleting the world of somebody already
+        # here, which is the defect this replaced.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(full)
+        ) from None
 
 
-#: What every route asks for instead of a clinic.
+def view_for(request: Request, session: Annotated[str | None, Depends(demo_session)]) -> Clinic:
+    """The clinic this request reads, without creating one this session does not have.
+
+    Every route but the booking one takes this. Nothing about the answer changes — a world with no
+    bookings is the seeded world — and what it buys is that reading cannot fill a registry that
+    never evicts. Without it, ``GET /clinic/slots?session=<anything>`` in a loop would hold every
+    world this process will ever hold, permanently, and the only thing that used to clean that up
+    was the eviction that had to go.
+    """
+    worlds: Clinics = request.app.state.clinics
+    return worlds.view(session)
+
+
+#: What the route that creates something asks for.
 World = Annotated[Clinic, Depends(world_for)]
 
+#: What every route that only reads or clears asks for.
+WorldView = Annotated[Clinic, Depends(view_for)]
 
-def create_clinic_app(clinic: Clinic | None = None) -> FastAPI:
+
+def create_clinic_app(clinic: Clinic | None = None, *, limit: int = DEFAULT_WORLD_LIMIT) -> FastAPI:
     """Build the service over a clinic.
 
     The clinic is injected for the same reason CareLoop's store is: a service that constructs its
@@ -127,8 +171,12 @@ def create_clinic_app(clinic: Clinic | None = None) -> FastAPI:
     appointment out from under a caller needs to be holding the same object the routes are. What is
     passed here becomes the **default** world — the one a caller who names no session reaches — and
     session worlds are created beside it on first use.
+
+    ``limit`` is injected for the same reason, and it is the *only* knob on the registry: reaching
+    the cap is a state a test has to be able to construct, and constructing it by minting sixty-four
+    worlds would make every such test a benchmark.
     """
-    worlds = Clinics(default=clinic)
+    worlds = Clinics(default=clinic, limit=limit)
 
     app = FastAPI(
         title="Demo World — Northgate Cardiology",
@@ -139,7 +187,7 @@ def create_clinic_app(clinic: Clinic | None = None) -> FastAPI:
     app.state.clinic = worlds.default
 
     @app.get(f"{CLINIC_PREFIX}/slots", response_model=SlotList)
-    def list_slots(world: World) -> SlotList:
+    def list_slots(world: WorldView) -> SlotList:
         """Every slot nobody has booked."""
         return SlotList(slots=list(world.available()))
 
@@ -147,7 +195,7 @@ def create_clinic_app(clinic: Clinic | None = None) -> FastAPI:
         f"{CLINIC_PREFIX}/appointments",
         response_model=Appointment,
         status_code=status.HTTP_201_CREATED,
-    )
+    )  # 503 when this process holds every world it will hold; see `world_for`.
     def book_appointment(
         request: BookingRequest,
         response: Response,
@@ -176,7 +224,7 @@ def create_clinic_app(clinic: Clinic | None = None) -> FastAPI:
         return appointment
 
     @app.get(f"{CLINIC_PREFIX}/appointments/{{confirmation_id}}", response_model=Appointment)
-    def read_appointment(confirmation_id: str, world: World) -> Appointment:
+    def read_appointment(confirmation_id: str, world: WorldView) -> Appointment:
         """One booking as the clinic holds it *now*.
 
         Deliberately a separate route from the booking one, and deliberately not a cached echo of
@@ -191,7 +239,7 @@ def create_clinic_app(clinic: Clinic | None = None) -> FastAPI:
             ) from None
 
     @app.post("/demo/reset", response_model=ResetResult)
-    def reset(world: World) -> ResetResult:
+    def reset(world: WorldView) -> ResetResult:
         """Put this caller's world back the way it started.
 
         Scoped like every other route, and that scoping is the whole reason one visitor's reset
@@ -201,6 +249,36 @@ def create_clinic_app(clinic: Clinic | None = None) -> FastAPI:
         """
         world.reset()
         return ResetResult(slots=list(world.available()))
+
+    @app.delete("/demo/session", response_model=EndedSession)
+    def end_session(
+        request: Request, session: Annotated[str | None, Depends(demo_session)]
+    ) -> EndedSession:
+        """Forget this session's world. The one way a world is removed.
+
+        CareLoop is the only caller: it ends a visitor's clinic when it expires their session, when
+        it resets one, and when it shuts down. Demo World itself never decides that a visitor has
+        gone — see :class:`demoworld.clinic.Clinics`.
+
+        **Idempotent, and a 200 either way.** ``existed`` reports whether there was a world, because
+        that is worth knowing; it is not an error condition. A retry after a partial success has to
+        look like success, or the caller repairing a divergence would be told it had failed to.
+
+        **A request naming no session is a 400.** The default world has no lifetime to end, and
+        answering anything else would either destroy the world a developer running this by hand is
+        looking at or claim to have done something it did not.
+        """
+        if session is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"the {SESSION_HEADER} header or ?{SESSION_PARAM}= is required: this ends one "
+                    f"visitor's world, and the world a caller who names none reaches has no "
+                    f"lifetime to end"
+                ),
+            )
+        worlds: Clinics = request.app.state.clinics
+        return EndedSession(session=session, existed=worlds.end(session))
 
     @app.middleware("http")
     async def never_cache_the_clinic(request: Request, call_next: Callable) -> Response:
@@ -222,9 +300,12 @@ __all__ = [
     "IDEMPOTENCY_HEADER",
     "SESSION_HEADER",
     "SESSION_PARAM",
+    "EndedSession",
     "ResetResult",
     "SlotList",
     "create_clinic_app",
     "demo_session",
     "idempotency_key",
+    "view_for",
+    "world_for",
 ]

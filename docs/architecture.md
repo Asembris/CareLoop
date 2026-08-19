@@ -144,7 +144,9 @@ weaker claim can never be read as the stronger one.
 ## Deployed
 
 One `t4g.small` behind CloudFront, serving `/` and `/api/*` from uvicorn on `:8000` and `/clinic/*`
-from `demoworld` on `:8100`. **One origin, so no `CORSMiddleware` exists anywhere in `careloop/`.**
+from `demoworld` on `:8100` — **one distribution over two backend origins**, which is what lets one
+hostname reach two ports. **The browser sees a single origin, so no `CORSMiddleware` exists anywhere
+in `careloop/`.**
 Two processes, because Demo World is a system CareLoop does not own and `demoworld/` may never
 import `careloop` — routing both through one CDN does not couple them. Bedrock is reached through
 an instance profile; there are no keys on the box.

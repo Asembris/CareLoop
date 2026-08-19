@@ -6225,9 +6225,13 @@ The regenerated `architecture.png` (3720 × 2850) and `architecture.pdf` were op
 five corrections legible at export size, the PDF one page at 12.92 × 9.90 in with the corrected
 strings present as selectable text.
 
-**One intermittent failure, not introduced here.** Two runs of `test_api_schema.py` failed under one
-random-order seed and passed in isolation, in deterministic order, and on a re-run. Nothing in this
-session touched `careloop/api/` or that test. Recorded rather than chased.
+**One intermittent failure, not introduced here, and characterised rather than waved at.** Two
+parametrised cases in `test_api_schema.py` — the schemathesis pass over the demo surface — failed
+on three of the first fifteen full-suite runs and on **none of the next eight consecutive** ones.
+They pass in isolation (four runs), under `-p no:randomly`, and alongside their neighbouring API
+suites. The three failures all landed while a Playwright run or two loopback servers were live, so
+the correlation is with machine load rather than with ordering. Nothing in this session touched
+`careloop/api/` or that test. Recorded, not chased, and worth a look if it ever fails on CI.
 
 ### The lock, re-earned and honestly reported
 

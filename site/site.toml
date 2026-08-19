@@ -35,11 +35,26 @@ og_description = "An autonomous back office for family caregiving. The loop is o
 og_image = "assets/product/authority.png"
 favicon = "assets/careloop-mark.svg"
 
-# Where the dossier's calls to action point. All four are read by the page's own PROJECT object.
-# Phase 1 ships every one of them empty; Phase 2 fills only the ones the repository can defend.
+# Where the dossier's calls to action point. All four are read by the page's own PROJECT object,
+# and only the ones the repository can defend are filled.
+#
+# `live_url` is the deployed application, recorded in README.md, docs/judges.md and the hourly
+# probe in .github/workflows/demo-health.yml. It is filled because `scripts/verify_deploy.py`
+# passes against it end to end — the referral scenario reaches DONE and the booking is read back
+# from the clinic and matched — rather than because the host merely answers 200.
+#
+# `github_url` is this repository's own remote. **It resolves publicly only once the repository is
+# public**, which it is not yet; until then the CTA is a link a judge cannot follow. That is a
+# visibility decision rather than a wrong value, and it is the reason the evidence SOURCE rows are
+# still left pending.
+#
+# The other two stay empty on purpose. No submission video and no Devpost entry exist in the
+# repository, and the page's fallbacks are designed for exactly that: an empty `video_url` turns
+# the demo panel into a same-page jump to the demo chapter and hides "Play film", and
+# `devpost_url` is read by no markup at all.
 [destinations]
-live_url = ""
-github_url = ""
+live_url = "https://d2heuwvhvrdyig.cloudfront.net"
+github_url = "https://github.com/Asembris/CareLoop"
 devpost_url = ""
 video_url = ""
 

@@ -243,17 +243,75 @@ test.describe("the dossier under the GitHub project path", () => {
     expectClean(faults);
   });
 
-  test("empty destinations stay pending rather than becoming dead links", async ({ page }) => {
+  const LIVE_URL = "https://d2heuwvhvrdyig.cloudfront.net";
+  const REPO_URL = "https://github.com/Asembris/CareLoop";
+
+  test("the live and repository CTAs resolve to the real destinations", async ({ page }) => {
     await open(page);
-    // Phase 1 configures no URLs, so the dossier's own fallback copy is what must appear.
-    await expect(page.getByText("Deployment pending").first()).toBeVisible();
-    await expect(page.getByText("Repository pending").first()).toBeVisible();
-    // A pending CTA falls back to an in-page anchor; nothing may open a new tab to nowhere.
+
+    // Both URLs are configured once and the page derives every CTA from them, so this asserts the
+    // rendered anchors rather than the config — the config being right is check_site.py's job.
+    const anchors = await page.evaluate(() =>
+      [...document.querySelectorAll("a")].map((a) => ({
+        href: a.getAttribute("href") ?? "",
+        target: a.getAttribute("target") ?? "",
+        rel: a.getAttribute("rel") ?? "",
+        text: (a.textContent ?? "").trim(),
+      })),
+    );
+
+    const live = anchors.filter((a) => a.href === LIVE_URL);
+    const repo = anchors.filter((a) => a.href === REPO_URL);
+    // Header, hero, the "three ways in" panel and the closing block for the live app; hero, panel
+    // and closing block for the repository.
+    expect(live.length).toBe(4);
+    expect(repo.length).toBe(3);
+
+    // A real destination opens in a new tab, and every one of them is safe to do so.
+    for (const anchor of [...live, ...repo]) {
+      expect(anchor.target).toBe("_blank");
+      expect(anchor.rel).toContain("noopener");
+    }
+    // The pending copy is gone precisely where a destination now exists.
+    expect(live.some((a) => a.text.includes("Open CareLoop"))).toBe(true);
+    expect(repo.some((a) => a.text.includes("View source"))).toBe(true);
+    await expect(page.getByText("Deployment pending")).toHaveCount(0);
+    await expect(page.getByText("Repository pending")).toHaveCount(0);
+  });
+
+  test("the absent video and Devpost destinations stay pending, not broken", async ({ page }) => {
+    await open(page);
+
+    // No film exists, so the demo panel stays a same-page jump and "Play film" is never offered.
+    await expect(page.getByRole("link", { name: /Play film/ })).toHaveCount(0);
+    const demoPanel = await page.evaluate(() =>
+      [...document.querySelectorAll("a")]
+        .filter((a) => (a.textContent ?? "").includes("Watch demo"))
+        .map((a) => ({ href: a.getAttribute("href") ?? "", target: a.getAttribute("target") ?? "" })),
+    );
+    expect(demoPanel.length).toBeGreaterThan(0);
+    for (const panel of demoPanel) {
+      // A same-page jump to the demo chapter. Some carry an explicit `_self` and some carry no
+      // target at all, which are the same behaviour; what matters is that none opens a new tab.
+      expect(panel.href).toBe("#demo");
+      expect(panel.target).not.toBe("_blank");
+    }
+    // Devpost is read by no markup at all, so it must render nowhere rather than render empty.
+    // Asserted on rendered text and on link destinations, not on innerHTML: the prop is declared
+    // in the runtime's `data-props` attribute, so its *name* is in the DOM whether or not
+    // anything uses it, and matching that would be testing the declaration rather than the page.
+    const devpost = await page.evaluate(() => ({
+      visible: /devpost/i.test(document.body.innerText),
+      linked: [...document.querySelectorAll("a")].some((a) => /devpost/i.test(a.getAttribute("href") ?? "")),
+    }));
+    expect(devpost.visible).toBe(false);
+    expect(devpost.linked).toBe(false);
+
+    // Nothing anywhere is a dead link or an empty new tab.
     const hrefs = await page.evaluate(() =>
       [...document.querySelectorAll("a")].map((a) => a.getAttribute("href") ?? ""),
     );
     expect(hrefs.filter((h) => h === "" || h === "#")).toEqual([]);
-    // Every external link that does exist is safe.
     const unsafe = await page.evaluate(() =>
       [...document.querySelectorAll('a[target="_blank"]')]
         .filter((a) => !(a.getAttribute("rel") ?? "").includes("noopener"))

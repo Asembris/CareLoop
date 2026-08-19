@@ -26,6 +26,7 @@ so they would still fail if someone hand-edited ``index.html`` and skipped ``ada
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import re
 import sys
@@ -158,12 +159,37 @@ def main() -> int:
 
     print("\nnothing reaches an origin the site does not serve")
     template = _template(generated)
-    hosts = {
-        m.group(0)
-        for m in re.finditer(r'https?://[^"\'\s)\\]+', head + template)
-        if not m.group(0).startswith(ALLOWED_TEXT_HOSTS)
+    markup = head + template
+    # A *fetched* reference, which is the thing that would make the page depend on a third party:
+    # a script, a stylesheet or preload, an image, a CSS url() or an @import. A hyperlink is not
+    # one of these, which is the distinction this check exists to make — the dossier deliberately
+    # links out to the live application and the repository, and neither is a dependency.
+    fetched = [
+        m.group(1)
+        for m in re.finditer(
+            r'(?:<script[^>]+src|<link[^>]+href|<img[^>]+src)="(https?://[^"]+)"'
+            r"|url\((https?://[^)]+)\)"
+            r'|@import\s+"(https?://[^"]+)"',
+            markup,
+        )
+        for m in [m]
+        if (m.group(1) or m.group(2) or m.group(3))
+    ]
+    check("no off-origin resource is fetched", not fetched, ", ".join(fetched[:6]))
+    # Everything else that merely *mentions* an origin must be a destination we chose on purpose.
+    allowed = set(ALLOWED_TEXT_HOSTS) | {v for v in config["destinations"].values() if v}
+    # `rstrip` takes a character set rather than a suffix, so the entity is split off explicitly:
+    # stripping "&quot;," as characters would eat the trailing "t" of ".net".
+    mentioned = {
+        m.group(0).split("&quot;")[0].rstrip(",.")
+        for m in re.finditer(r'https?://[^"\'\s)\\]+', markup)
     }
-    check("no off-origin resource reference remains", not hosts, ", ".join(sorted(hosts)[:6]))
+    unexpected = {u for u in mentioned if not any(u.startswith(a) for a in allowed)}
+    check(
+        "every off-origin mention is a configured destination",
+        not unexpected,
+        ", ".join(sorted(unexpected)[:6]),
+    )
     check("the googleapis preconnect is gone", "fonts.googleapis.com" not in generated)
     check("the gstatic preconnect is gone", "fonts.gstatic.com" not in generated)
 
@@ -171,13 +197,43 @@ def main() -> int:
     absolute = re.findall(r'(?:src|href|content)="(/[^/"][^"]*)"', head + template)
     check("no root-absolute src/href/content", not absolute, ", ".join(absolute[:6]))
 
-    print("\nPhase 1 publishes no claims")
-    for prop in ("liveUrl", "githubUrl", "devpostUrl", "videoUrl"):
+    print("\nonly what the repository can defend is published")
+    # The two destinations that exist, asserted as exact strings rather than by substring: a
+    # truncated or trailing-slash variant would still "contain" the host and would still be wrong.
+    destinations = config["destinations"]
+    for prop, key in (("liveUrl", "live_url"), ("githubUrl", "github_url")):
+        expected = destinations[key]
+        check(f"PROJECT.{prop} is exactly the configured URL", f'{prop}: "{expected}"' in template)
+        # The prop default is the one the runtime actually reads: the page resolves
+        # `P.liveUrl ?? PROJECT.liveUrl`, and `??` does not fall back on an empty string, so a
+        # URL present only in PROJECT renders as "Deployment pending". Both must carry it.
+        check(
+            f"the {prop} prop default carries it too",
+            f'"{prop}": {{"editor": "text", "default": "{expected}"' in html.unescape(template),
+        )
+    check(
+        "the live URL is the one the repository records",
+        destinations["live_url"] == "https://d2heuwvhvrdyig.cloudfront.net",
+        destinations["live_url"],
+    )
+    check(
+        "the repository URL matches the git remote",
+        destinations["github_url"] == "https://github.com/Asembris/CareLoop",
+        destinations["github_url"],
+    )
+    # The two that do not exist. No video and no Devpost entry are recorded anywhere in the
+    # repository, so these stay empty and the page's own fallbacks stay in charge.
+    for prop in ("devpostUrl", "videoUrl"):
         check(f"PROJECT.{prop} is still empty", f'{prop}: ""' in template)
+    check("no invented video URL", "videoUrl" in template and 'videoUrl: ""' in template)
+
+    print("\nno result is published yet")
     check("all six evidence results are still empty", template.count('value: ""') == 6)
     check("both counterfactual rows still read as pending", template.count('value: "—"') == 2)
-    for phrase in ("0 of 320", "320 of 320", "2661", "d2heuwvhvrdyig", "github.com/Asembris"):
-        check(f"no unpublished claim {phrase!r} leaked in", phrase not in generated)
+    for phrase in ("0 of 320", "320 of 320", "2661 passed", "103 passed", "25 of 25"):
+        check(f"no unpublished result {phrase!r} leaked in", phrase not in generated)
+    before_evidence = template.split("EVIDENCE")[0]
+    check("evidence source links are still pending", "sourceUrl" not in before_evidence)
 
     print("\nthe substitution machinery is not vacuous")
     probe = tomllib.loads(_read(CONFIG))

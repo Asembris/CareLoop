@@ -14,6 +14,7 @@ import {
   buildRun,
   documentsFor,
   evidenceFor,
+  forgetSession,
   latestProposal,
   refusalsFor,
   latestVerification,
@@ -1202,6 +1203,76 @@ describe("one world per visitor", () => {
     expect(reads).toHaveLength(2);
     expect(reads[0].session).toBeUndefined();
     expect(reads[1].session).toBe("world-two");
+  });
+
+  it("reports a demo with no worlds left as at_capacity rather than unreachable", async () => {
+    // 503 from the mint is the backend in full health saying every world is in use — see
+    // `SessionsAtCapacity`, which refuses rather than taking one from somebody still using it.
+    // A page that showed that as a dead backend would be making a false statement about a service
+    // that is answering, and would send the reader to refresh instead of to wait.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/api/sessions")) return new Response("", { status: 503 });
+        return new Response("", { status: 400 });
+      })
+    );
+
+    const dashboard = await new RealCareLoopApi().getDashboard();
+    expect(dashboard.connection).toBe("at_capacity");
+  });
+
+  it("does not mistake a backend that cannot be reached for one that is full", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    }));
+
+    const dashboard = await new RealCareLoopApi().getDashboard();
+    expect(dashboard.connection).toBe("unreachable");
+  });
+
+  it("does not mistake a restarting backend for one that is full", async () => {
+    // Measured against the deployed stack: the mint answers 504 for about seven seconds while
+    // systemd restarts the API. That is nobody answering yet, not a busy demo.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/api/sessions")) return new Response("", { status: 504 });
+        return new Response("", { status: 400 });
+      })
+    );
+
+    const dashboard = await new RealCareLoopApi().getDashboard();
+    expect(dashboard.connection).toBe("unreachable");
+  });
+
+  it("stops calling itself full as soon as a world is given out", async () => {
+    // Refusing for a whole read rather than for one call: a request that names no world is
+    // refused 400 and mints again immediately, so a demo that frees a world between those two
+    // attempts recovers inside a single read — which is the behaviour, not a wrinkle in the test.
+    const refusing = { now: true };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const session = ((init?.headers ?? {}) as Record<string, string>)["X-CareLoop-Session"];
+        if (url.endsWith("/api/sessions")) {
+          if (refusing.now) return new Response("", { status: 503 });
+          return new Response(JSON.stringify({ session: "world-one" }), { status: 201 });
+        }
+        if (!session) return new Response("", { status: 400 });
+        return new Response(
+          JSON.stringify({ needs_you: [], working: [], completed: [] }),
+          { status: 200 }
+        );
+      })
+    );
+
+    const adapter = new RealCareLoopApi();
+    expect((await adapter.getDashboard()).connection).toBe("at_capacity");
+
+    refusing.now = false;
+    forgetSession();
+    expect((await adapter.getDashboard()).connection).toBe("live");
   });
 
   it("keeps its world across a reload", async () => {

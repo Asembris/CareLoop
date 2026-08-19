@@ -407,6 +407,54 @@ describe("connection truth on screen", () => {
     expect(screen.getByText("Cardiology referral")).toBeInTheDocument();
     expect(screen.queryByText("Nothing needs you right now.")).not.toBeInTheDocument();
   });
+
+  it("says the demo is full rather than that CareLoop is down", async () => {
+    // The deployed demo gives every visitor their own world and holds sixty-four. When all of them
+    // are in use, `POST /api/sessions` answers 503: the service is up, it is answering, and it has
+    // nothing to give. The page used to show that as the same dead-backend state, which is a false
+    // statement about a healthy service and sends whoever reads it to refresh — the one remedy that
+    // does not work.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/api/sessions")) return new Response("", { status: 503 });
+        return new Response("", { status: 400 });
+      })
+    );
+    show();
+
+    await screen.findByText("The demo is full right now.");
+    expect(screen.queryByText("CareLoop can't be reached.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Nothing needs you right now.")).not.toBeInTheDocument();
+  });
+
+  it("announces being full in its own words to a screen reader", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/api/sessions")) return new Response("", { status: 503 });
+        return new Response("", { status: 400 });
+      })
+    );
+    show();
+
+    const announced = await screen.findByText(
+      "The demo is full right now. Every world is in use; trying again shortly."
+    );
+    expect(announced).toHaveAttribute("role", "status");
+  });
+
+  it("still says CareLoop cannot be reached when nothing answers at all", async () => {
+    // The other direction, so the new state cannot quietly swallow the old one: a backend that is
+    // genuinely down never answered 503, so nothing said the demo was busy.
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    }));
+    show();
+
+    await screen.findByText("CareLoop can't be reached.");
+    expect(screen.queryByText("The demo is full right now.")).not.toBeInTheDocument();
+  });
 });
 
 describe("pressing a scenario", () => {

@@ -130,6 +130,20 @@ let sessionResolved = false;
 /** The mint in flight, so concurrent first requests produce one world rather than several. */
 let minting: Promise<string | null> | null = null;
 
+/** Whether the last mint was refused because every world this demo holds is in use.
+ *
+ *  A **503** from `POST /api/sessions` is the backend answering, in full health, that it has no
+ *  world to give — see `SessionsAtCapacity`, which refuses rather than taking a world from somebody
+ *  who is still using it. Recorded because the page cannot otherwise tell that apart from a backend
+ *  that is down: both leave it with no session, both make every read fail, and they call for
+ *  completely different things to be said to whoever is looking. */
+let full = false;
+
+/** Whether this demo is currently out of worlds. Read by the adapter when a read comes back empty. */
+export function demoIsFull(): boolean {
+  return full;
+}
+
 function storedSession(): string | null {
   try {
     return window.sessionStorage.getItem(SESSION_STORAGE_KEY);
@@ -178,9 +192,13 @@ async function mint(): Promise<string | null> {
     if (response.status === 404) {
       // The one status that answers the question: this backend serves one world to everybody, so
       // stop asking and carry no session. Local development and the offline suite live here.
+      full = false;
       rememberSession(null);
       return null;
     }
+    // 503 is the demo being out of worlds, which is not the backend being down. Set on every
+    // attempt rather than only when true, so it clears itself the moment a mint succeeds.
+    full = response.status === 503;
     if (!response.ok) {
       // A backend that could not answer is not a backend without sessions, and the difference is
       // not academic: measured against the deployed stack, this route answers **504 for about
@@ -196,7 +214,8 @@ async function mint(): Promise<string | null> {
   } catch {
     // Offline. Not remembered, for the same reason: this is not an answer about the backend's
     // shape, and a blip must not leave the page permanently session-less against a backend that
-    // requires one.
+    // requires one. And not "full": nothing answered, so nothing said the demo was busy.
+    full = false;
     return null;
   }
 }
@@ -1133,7 +1152,10 @@ export class RealCareLoopApi implements CareLoopApi {
   /** Fold one read's answer into what the adapter knows, and return what the screen should show. */
   private absorb(read: CareCase[] | null): CareCase[] {
     if (read === null) {
-      this.connection = "unreachable";
+      // A read fails identically whether the backend is down or the demo is out of worlds, so what
+      // separates them is what the *mint* was told. `at_capacity` is a service in full health with
+      // nothing to give; `unreachable` is nobody answering. Different facts, different copy.
+      this.connection = demoIsFull() ? "at_capacity" : "unreachable";
       return this.lastCases;
     }
     this.connection = "live";

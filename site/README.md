@@ -58,16 +58,26 @@ the failure GitHub project pages actually produce.
 
 ## Nothing is published that the repository cannot defend
 
-Every destination and every result in `site.toml` currently ships **empty**, and that is a designed
-state rather than an oversight. An empty result renders `—` with "Verified result pending"; an
-empty destination renders "Deployment pending" / "Repository pending" and falls back to an in-page
-anchor, so nothing is ever a dead link.
-
 A number goes in only when the repository can produce it on demand, under a label that describes
 what was actually measured. The page types every claim `MEASURED`, `ASSERTED INVARIANT` or
 `COUNTERFACTUAL`, and those distinctions are load-bearing: a test count is not a safety result, and
-a design intention is not a measurement. `tests/check_site.py` fails if an unpublished claim
-appears in the generated page.
+a design intention is not a measurement.
+
+**Phase 1 shipped every result empty**, rendering `—` with "Verified result pending" — a designed
+state rather than an oversight, and the right one while nothing had been measured under a label
+that described it. Session W filled all six and both counterfactual rows, each against a command
+in `site.toml`'s own comment, and fixed the two labels that described measurements nobody had made.
+`tests/check_site.py` now asserts the ledger in **both** directions: every configured value reaches
+the page, and no unconfigured result-shaped string does.
+
+**One row is not a round number, deliberately.** The deployed lock reads `24 of 25`: one run ended
+`FAILED` because the model twice failed to form a proposal satisfying its own schema. Nothing
+unsafe happened and nothing was performed, and publishing `25 of 25` would be exactly the
+dishonesty this ledger exists to refuse.
+
+The two empty *destinations* — the submission video and the Devpost entry — stay empty, because
+neither exists. An empty destination renders "Deployment pending" / "Repository pending" and falls
+back to an in-page anchor, so nothing is ever a dead link.
 
 ## Provenance
 

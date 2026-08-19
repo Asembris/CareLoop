@@ -23,9 +23,16 @@ list of textual adaptations — crawler-visible metadata, project-path asset pat
 and the values in `site.toml` — and refuses to write if the manifest moved by a
 byte. It is not tracked. **Never edit it**; run `python adapt.py` instead.
 
-`src/` is the editable Claude Design source. Changing the page's design or copy
+`src/` is the editable Claude Design source. Changing the page's **design**
 means editing it there, re-exporting from Claude Design, and replacing the
 vendored bundle — see `docs/ADAPTATION.md` and `docs/BUILD.md`.
+
+Changing its **copy** no longer requires that, and session W is why: a sentence
+that is untrue has to be fixable without putting the page's rendering at risk.
+Edit `src/`, then add the pair to `COPY_CORRECTIONS` in `adapt.py`, which applies
+it to a copy of the bundle. `tests/check_site.py` asserts both halves — the new
+string present in `src/`, the old one absent from the page — so the two inputs
+cannot drift, and a re-export folds the corrections in and empties the table.
 
 ## Source layout
 
@@ -83,7 +90,10 @@ Each of these was built to solve a specific problem and is easy to regress:
 
 - **No invented numbers.** Unmeasured results render `—` with "Verified result
   pending". This is load-bearing for the page's credibility; an estimate here
-  undoes the whole argument.
+  undoes the whole argument. Session W filled all six ledger rows and both
+  counterfactual rows from measurements the repository can reproduce, and
+  `tests/check_site.py` now asserts both directions — every configured value
+  reaches the page, and no unconfigured result does.
 - **Claims are typed.** Every proof-ledger entry is labelled `MEASURED`,
   `ASSERTED INVARIANT` or `COUNTERFACTUAL`, so a design intention never reads
   as a measurement.
@@ -100,7 +110,7 @@ Each of these was built to solve a specific problem and is easy to regress:
 | Repository URL | `githubUrl` prop | The public repo |
 | Demo film URL | `videoUrl` prop | The submission video |
 | Devpost URL | `devpostUrl` prop | The submission page |
-| Six metric results | `METRICS` in the logic class | Real measured values only |
+| ~~Six metric results~~ | `[evidence]` in `site.toml` | **Filled, session W** |
 | Source links | Architecture detail, `SOURCE` rows | Repository file paths |
 
 Empty URLs are handled: the CTA falls back to a relevant in-page anchor and
@@ -129,4 +139,8 @@ Verified and worth keeping:
 - Replace the serif, or set body copy in the display face.
 - Reset the field between sections, or add a second scene.
 - Turn the failure section back into a table.
-- Fill any metric with a number nobody measured.
+- Fill any metric with a number nobody measured, or round one that was.
+- Describe a capability the repository does not have. Session W removed a calendar
+  integration, a claim that every booking stops for a human, and a claim that every
+  effect is externally verified. A judge can falsify a sentence like those by reading
+  the README two clicks away, and one that survives costs more than it buys.

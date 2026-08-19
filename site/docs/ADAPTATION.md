@@ -33,10 +33,19 @@ that needed changing are plain literals in the template, and the metadata that n
 in a stub head the bundle never touches.
 
 Re-platforming would have put the page's rendering — its type, its layout, its damped topology, its
-pinned scrub — at risk to buy a smaller download. Measured, the transform touches **two hunks** of
-the file: thirteen lines added to the stub head, and one template line rewritten. Every desktop
-state is pixel-identical to the untransformed bundle across twenty captures. A rebuild could not
-have offered that evidence.
+pinned scrub — at risk to buy a smaller download. Measured on import, the transform touched **two
+hunks** of the file — thirteen lines added to the stub head and one template line rewritten — and
+every desktop state was pixel-identical to the untransformed bundle across twenty captures. A
+rebuild could not have offered that evidence.
+
+**Both numbers are historical, and this page said them in the present tense until session W.** The
+transform has since grown the mobile stylesheet (session V) and twenty-seven copy corrections
+(session W), so it now touches far more than two hunks and the page deliberately no longer renders
+identically to the bundle. What the argument above rests on is unchanged: the *rendering* — type,
+layout, damped topology, pinned scrub — is still the bundle's own, because nothing in the transform
+opens the manifest and `adapt.py` refuses to write if a byte of it moves. Correcting a sentence is
+not re-platforming. See `tests/fidelity.mjs`, which now names the three expected difference
+classes rather than claiming there is one.
 
 The cost is honest and unpaid: `index.html` is 1.83 MiB, of which about 878 KB is four product
 captures inlined into the critical path, and their `loading="lazy"` cannot help in that form. For a
@@ -223,3 +232,9 @@ node fidelity.mjs --out <dir> && python compare_shots.py <dir>
 Recorded on import: geometry identical at 1440 and 375, twenty of twenty states pixel-identical
 with the animated field hidden, and the adapted page free of the console error and 404 the pristine
 bundle produces.
+
+**Re-measured 2026-08-19, after the mobile fix and the copy corrections**, and it no longer comes
+back clean — by design. Mobile `scrollWidth` is 375 against the bundle's 778, which is the overflow
+fix working; desktop `docHeight` is 19275 against 19094, which is longer copy wrapping. The first
+four section boxes are identical in both builds. A clean run is not the bar any more and
+`fidelity.mjs` says so at the top of the file.

@@ -57,3 +57,4 @@ Thumbs.db
 # CareLoop uses live in `frontend/public/` with their local deltas marked; the archive itself is a
 # 63 KB binary nothing in the build reads and nothing here can regenerate.
 careloop-motion.zip
+careloop-site.zip

@@ -1,0 +1,1159 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<title>CareLoop — Agency with boundaries. Care with receipts.</title>
+<meta name="description" content="CareLoop proposes actions, checks authority against deterministic policy, executes only what is permitted, and verifies the external result before a case is closed.">
+<meta name="theme-color" content="#f7f4ee">
+<link rel="icon" type="image/svg+xml" href="careloop-mark.svg">
+<meta property="og:type" content="website">
+<template id="__bundler_thumbnail"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="#f7f4ee"/><circle cx="26.5" cy="22.5" r="3.8" fill="#315e52"/><circle cx="45.5" cy="25" r="3" fill="#a6b09d"/><path d="M36 45c8-5 17-10.3 17-16.9 0-5.6-4.8-7.9-8.4-5.5-1.7 1.1-2.7 2.6-3 4.2" stroke="#a6b09d" stroke-width="4" stroke-linecap="round" fill="none"/><path d="M36 45c-8.4-5.2-17.2-10.5-17.2-17.5 0-5.9 5.2-8.4 9.1-5.9 1.8 1.2 2.9 2.7 3.1 4.5" stroke="#315e52" stroke-width="4.6" stroke-linecap="round" fill="none"/></svg></template>
+<meta property="og:title" content="CareLoop — Agency with boundaries. Care with receipts.">
+<meta property="og:description" content="An autonomous back office for family caregiving. The loop is only closed when the world agrees.">
+<meta property="og:image" content="product/authority.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="CareLoop — Agency with boundaries. Care with receipts.">
+<meta name="twitter:description" content="An autonomous back office for family caregiving. The loop is only closed when the world agrees.">
+<meta name="twitter:image" content="product/authority.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Newsreader:opsz,wght@6..72,300;6..72,400&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+html, body { margin: 0; padding: 0; background: #f7f4ee; }
+* { box-sizing: border-box; }
+button, a { font: inherit; color: inherit; }
+button { cursor: pointer; }
+a { text-decoration: none; }
+a:hover { color: #315e52; }
+:focus-visible { outline: 2px solid #315e52; outline-offset: 4px; border-radius: 2px; }
+::selection { background: rgba(74, 125, 108, 0.18); }
+.cl-metric:hover { background: rgba(74, 125, 108, 0.045) !important; }
+.cl-chip:hover { border-color: rgba(46, 43, 38, 0.4) !important; }
+.cl-row:hover { background: rgba(46, 43, 38, 0.028) !important; }
+.cl-poster:hover .cl-poster-veil { opacity: 0.72; }
+.cl-metric:hover .cl-metric-action { color: #315e52; }
+@keyframes clRise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes clFade { from { opacity: 0; } to { opacity: 1; } }
+/* Mobile is materially more compact: a phone should not scroll through
+   fifteen screens of mostly empty ivory. */
+@media (max-width: 720px) {
+  main > section { padding-left: 22px !important; padding-right: 22px !important;
+    padding-top: 58px !important; padding-bottom: 58px !important; min-height: 0 !important; }
+  main > section[data-story-scrub] { height: 400vh !important; padding: 0 22px !important; }
+  main > section[data-nav="closure"]:last-of-type { padding-top: 76px !important; padding-bottom: 76px !important; }
+}
+/* With large morphs disabled there is nothing for a long scroll to reveal. */
+@media (prefers-reduced-motion: reduce) {
+  main > section { min-height: 0 !important; }
+  main > section[data-story-scrub] { height: 300vh !important; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  html { scroll-behavior: auto !important; }
+}
+</style>
+<script src="careloop-story.js" defer></script>
+</helmet>
+
+<div data-theme="light" style="position: relative; background: #f7f4ee; color: #2e2b26; font-family: 'Instrument Sans', system-ui, sans-serif; font-size: 16px; line-height: 1.5;">
+
+  <header style="position: fixed; top: 0; left: 0; right: 0; z-index: 50; display: flex; align-items: center; justify-content: space-between; gap: 32px; padding: 16px 40px; background: {{ navBg }}; border-bottom: 1px solid {{ navLine }}; backdrop-filter: blur(6px); transition: background 300ms ease, border-color 300ms ease;">
+    <span aria-hidden="true" id="cl-progress-track" style="position: absolute; left: 0; right: 0; bottom: -1px; height: 1px; background: transparent; overflow: hidden;">
+      <span id="cl-progress" style="display: block; height: 100%; width: 100%; background: #3f6b5b; opacity: 0.5; transform: scaleX(0); transform-origin: left center;"></span>
+    </span>
+    <a href="#top" style="display: flex; align-items: center; gap: 10px;">
+      <svg viewBox="0 0 64 64" width="22" height="22" fill="none" aria-hidden="true" style="display: block; flex: none;">
+        <circle cx="18.5" cy="11.5" r="5.4" fill="#315e52"></circle>
+        <circle cx="45.5" cy="15" r="4.3" fill="#a6b09d"></circle>
+        <path d="M32 55.5c11.5-7.2 24.5-14.7 24.5-24.2 0-8-6.8-11.3-12-7.9-2.5 1.6-3.9 3.7-4.3 6" stroke="#a6b09d" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round"></path>
+        <path d="M32 55.5C20 48 7.5 40.5 7.5 30.5c0-8.5 7.5-12 13-8.5 2.6 1.7 4.1 3.9 4.5 6.5" stroke="#315e52" stroke-width="6.6" stroke-linecap="round" stroke-linejoin="round"></path>
+      </svg>
+      <span style="font-size: 15px; font-weight: 600; letter-spacing: -0.025em;">CareLoop</span>
+    </a>
+
+    <nav style="display: flex; align-items: center; gap: 26px; flex-wrap: wrap; justify-content: flex-end;">
+      <sc-for list="{{ navItems }}" as="n" hint-placeholder-count="5">
+        <a href="{{ n.href }}" aria-current="{{ n.current }}" style="position: relative; font-size: 13.5px; color: {{ n.tone }}; transition: color 260ms ease;">
+          {{ n.label }}
+          <span aria-hidden="true" style="position: absolute; left: 0; right: 0; bottom: -7px; height: 1px; background: #3f6b5b; opacity: {{ n.mark }}; transition: opacity 260ms ease;"></span>
+        </a>
+      </sc-for>
+      <span aria-hidden="true" style="width: 1px; height: 18px; background: rgba(46, 43, 38, 0.14);"></span>
+      <a href="{{ liveHref }}" target="{{ liveTarget }}" rel="noopener noreferrer" style="font-size: 13.5px; font-weight: 500; padding: 7px 14px; border: 1px solid rgba(46, 43, 38, 0.22); border-radius: 3px; color: {{ liveTone }};">{{ liveLabel }}</a>
+    </nav>
+  </header>
+
+  <main id="top" style="position: relative; z-index: 1;">
+
+    <!-- 00 · ARRIVAL ------------------------------------------------------ -->
+    <section data-story="arrival" data-nav="story" data-screen-label="00 Hero" style="min-height: 100vh; display: flex; align-items: center; padding: 132px 40px 84px;">
+      <div style="width: 100%; max-width: 1180px; margin: 0 auto;">
+        <div style="max-width: 780px; display: flex; flex-direction: column; gap: 30px; animation: clRise 900ms cubic-bezier(0.22,0.61,0.36,1) both;">
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.16em; color: #6b675e;">CARELOOP</span>
+          <h1 style="margin: 0; font-family: Newsreader, Georgia, serif; font-weight: 300; font-size: clamp(44px, 6.4vw, 82px); line-height: 1.04; letter-spacing: -0.028em; text-wrap: balance;">Care that knows when to act —<br>and when to ask.</h1>
+          <p style="margin: 0; font-size: 19px; line-height: 1.6; color: #5c584f; max-width: 60ch; text-wrap: pretty;">CareLoop coordinates care through bounded AI actions, human authority when required, and independent verification before any work is considered complete.</p>
+          <div style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding-top: 6px;">
+            <a href="#demo" style="background: #2e2b26; color: #f7f4ee; border-radius: 3px; padding: 13px 22px; font-size: 15px; font-weight: 500;">Watch demo</a>
+            <a href="{{ liveHref }}" target="{{ liveTarget }}" rel="noopener noreferrer" style="border: 1px solid rgba(46, 43, 38, 0.24); border-radius: 3px; padding: 13px 20px; font-size: 15px; color: {{ liveTone }};">{{ liveLabel }}</a>
+            <a href="{{ repoHref }}" target="{{ repoTarget }}" rel="noopener noreferrer" style="border: 1px solid rgba(46, 43, 38, 0.24); border-radius: 3px; padding: 13px 20px; font-size: 15px; color: {{ repoTone }};">{{ repoLabel }}</a>
+          </div>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; letter-spacing: 0.09em; color: #6b675e; padding-top: 10px;">BUILT FOR AGENTS FOR HUMANS · OPEN SOURCE</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 01 · THE PERSON --------------------------------------------------- -->
+    <section id="story" data-story="calm" data-nav="story" data-screen-label="01 The person" style="min-height: 86vh; display: flex; align-items: center; padding: 96px 40px;">
+      <div style="width: 100%; max-width: 1240px; margin: 0 auto; display: grid; grid-template-columns: minmax(300px, 0.78fr) minmax(400px, 1fr); gap: 56px; align-items: center;">
+        <div style="max-width: 700px; display: flex; flex-direction: column; gap: 24px;">
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; color: #6b675e;">01 · THE PERSON</span>
+          <h2 style="margin: 0; font-family: Newsreader, Georgia, serif; font-weight: 300; font-size: clamp(38px, 5.2vw, 66px); line-height: 1.06; letter-spacing: -0.025em;">Nothing needs you right now.</h2>
+          <p style="margin: 0; font-size: 17.5px; line-height: 1.65; color: #5c584f; max-width: 54ch;">A caregiver should not have to become a full-time administrative coordinator because someone they love needs care. Most of the time, the right state of this product is silence.</p>
+        </div>
+        <figure style="margin: 0; display: flex; flex-direction: column; gap: 12px;">
+            <button onClick="{{ zoomCalm }}" aria-label="Enlarge CareLoop dashboard showing no items requiring attention" style="padding: 0; border: 1px solid rgba(46, 43, 38, 0.16); border-radius: 6px; overflow: hidden; background: #f2eee6; display: block; width: 100%; box-shadow: 0 1px 2px rgba(46, 43, 38, 0.05), 0 16px 38px rgba(46, 43, 38, 0.07);">
+              <img src="product/calm.png" alt="CareLoop dashboard showing no items requiring attention" loading="lazy" decoding="async" style="display: block; width: 100%; height: auto;">
+            </button>
+            <figcaption style="display: flex; flex-direction: column; gap: 5px;">
+              <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.13em; color: #6b675e;">REAL PRODUCT · CALM STATE</span>
+              <span style="font-size: 13.5px; line-height: 1.5; color: #5c584f;">The principle is the product’s default screen, not a slogan.</span>
+            </figcaption>
+          </figure>
+        </div>
+    </section>
+
+    <section data-story="event" data-nav="story" data-screen-label="01b One decision" style="min-height: 98vh; display: flex; align-items: center; padding: 96px 40px;">
+      <div style="width: 100%; max-width: 1180px; margin: 0 auto;">
+        <div style="max-width: 720px; margin-left: auto; display: flex; flex-direction: column; gap: 24px; text-align: right;">
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; color: #9c5c2e;">A REFERRAL ARRIVES</span>
+          <h2 style="margin: 0; font-family: Newsreader, Georgia, serif; font-weight: 300; font-size: clamp(38px, 5.2vw, 66px); line-height: 1.06; letter-spacing: -0.025em;">One decision is waiting.</h2>
+          <p style="margin: 0; margin-left: auto; font-size: 17.5px; line-height: 1.65; color: #5c584f; max-width: 52ch;">CareLoop read the paperwork, found the deadline, checked the calendar and found the conflict. It stops here — not because it failed, but because this choice belongs to a person.</p>
+        </div>
+        <div style="max-width: 940px; margin: 56px auto 0;">
+          <figure style="margin: 0; display: flex; flex-direction: column; gap: 12px;">
+            <button onClick="{{ zoomAuthority }}" aria-label="Enlarge CareLoop dashboard with a decision card awaiting approval" style="padding: 0; border: 1px solid rgba(46, 43, 38, 0.16); border-radius: 6px; overflow: hidden; background: #f2eee6; display: block; width: 100%; box-shadow: 0 1px 2px rgba(46, 43, 38, 0.05), 0 16px 38px rgba(46, 43, 38, 0.07);">
+              <img src="product/authority.png" alt="CareLoop dashboard with a decision card awaiting approval" loading="lazy" decoding="async" style="display: block; width: 100%; height: auto;">
+            </button>
+            <figcaption style="display: flex; flex-direction: column; gap: 5px;">
+              <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.13em; color: #6b675e;">REAL PRODUCT · HUMAN CHECKPOINT</span>
+              <span style="font-size: 13.5px; line-height: 1.5; color: #5c584f;">The same stop, in the product: the workflow parks and asks once, with the exact arguments it will act on.</span>
+            </figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <!-- 02 · THE LAST-MILE PROBLEM ---------------------------------------- -->
+    <section data-story="mismatch" data-nav="story" data-screen-label="02 Last mile" style="min-height: 112vh; display: flex; align-items: center; padding: 104px 40px;">
+      <div style="width: 100%; max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; gap: 56px;">
+        <div style="max-width: 660px; display: flex; flex-direction: column; gap: 22px;">
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; color: #6b675e;">02 · THE LAST-MILE PROBLEM</span>
+          <h2 style="margin: 0; font-family: Newsreader, Georgia, serif; font-weight: 300; font-size: clamp(36px, 4.6vw, 58px); line-height: 1.08; letter-spacing: -0.025em;">An action is not an outcome.</h2>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 34px; max-width: 900px;">
+          <sc-for list="{{ pairs }}" as="p" hint-placeholder-count="3">
+            <div style="display: flex; flex-direction: column; gap: 16px;">
+              <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; color: #6b675e;">{{ p.step }}</span>
+              <span style="font-size: 16.5px; line-height: 1.42; color: #2e2b26;">{{ p.agent }}</span>
+              <span aria-hidden="true" style="width: 1px; height: 52px; margin-left: 1px; background: rgba(161, 90, 69, 0.32);"></span>
+              <span style="font-size: 16.5px; line-height: 1.42; color: #a15a45;">{{ p.world }}</span>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="display: flex; justify-content: space-between; gap: 24px; max-width: 900px; margin-top: -22px;">
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.12em; color: #695879;">WHAT THE AGENT SAW</span>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.12em; color: #a15a45;">WHAT THE WORLD RECORDED</span>
+        </div>
+
+        <div style="max-width: 620px; display: flex; flex-direction: column; gap: 18px;">
+          <p style="margin: 0; font-family: Newsreader, Georgia, serif; font-size: 25px; line-height: 1.42; color: #2e2b26;">AI systems can act successfully and still be wrong about what happened next.</p>
+          <p style="margin: 0; font-size: 16.5px; line-height: 1.6; color: #5c584f;">CareLoop closes that gap by checking the outside world before it closes the case.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 03 · ONE WORKFLOW, END TO END ------------------------------------- -->
+    <section data-story="event, gather, reasoning, authority, human, execute, verify, closed" data-story-scrub data-story-weights="0.75, 0.8, 1, 1.35, 1.35, 1, 1.25, 1.25" data-nav="story" data-screen-label="03 One workflow" style="position: relative; height: 620vh; padding: 0 40px;">
+      <div style="position: sticky; top: 0; min-height: 100vh; display: flex; align-items: center; padding: 74px 0 40px;">
+        <div style="width: 100%; max-width: 1180px; margin: 0 auto;">
+          <div style="display: flex; flex-direction: column; gap: 22px; width: 100%; max-width: 470px;">
+            <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; color: #6b675e;">03 · ONE REAL WORKFLOW</span>
+            <h2 style="margin: 0; font-family: Newsreader, Georgia, serif; font-weight: 300; font-size: clamp(32px, 3.4vw, 46px); line-height: 1.1; letter-spacing: -0.022em;">Schedule a cardiology referral.</h2>
+
+            <ol style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px;">
+              <sc-for list="{{ steps }}" as="s" hint-placeholder-count="8">
+                <li style="display: flex; gap: 16px; padding: 10px 0; border-top: 1px solid {{ s.line }}; opacity: {{ s.dim }}; transition: opacity 420ms cubic-bezier(0.22,0.61,0.36,1);">
+                  <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.08em; color: {{ s.num }}; padding-top: 3px; flex: none;">{{ s.n }}</span>
+                  <span style="display: flex; flex-direction: column;">
+                    <span style="font-size: 16.5px; font-weight: 500; color: {{ s.titleTone }};">{{ s.title }}</span>
+                    <span style="display: block; overflow: hidden; max-height: {{ s.bodyH }}; opacity: {{ s.bodyOp }}; transition: max-height 420ms cubic-bezier(0.22,0.61,0.36,1), opacity 320ms ease;">
+                      <span style="display: block; padding-top: 5px; font-size: 14.5px; line-height: 1.55; color: #5c584f; max-width: 44ch;">{{ s.body }}</span>
+                    </span>
+                  </span>
+                </li>
+              </sc-for>
+            </ol>
+
+            <p style="margin: 0; min-height: 52px; font-family: Newsreader, Georgia, serif; font-size: 21px; line-height: 1.42; color: {{ callTone }}; transition: color 400ms ease;">{{ callout }}</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 04 · THE RULE THAT MATTERS ---------------------------------------- -->
+    <section id="trust" data-story="architecture" data-nav="trust" data-screen-label="04 The rule" style="display: flex; align-items: center; padding: 104px 40px 96px;">
+      <div style="width: 100%; max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; gap: 64px;">
+        <div style="max-width: 780px; display: flex; flex-direction: column; gap: 22px;">
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; color: #6b675e;">04 · THE RULE THAT MATTERS</span>
+          <h2 style="margin: 0; font-family: Newsreader, Georgia, serif; font-weight: 300; font-size: clamp(38px, 5vw, 64px); line-height: 1.06; letter-spacing: -0.026em;">The model never authorizes its own actions.</h2>
+        </div>
+
+        <div style="display: flex; flex-direction: column; max-width: 900px;">
+          <sc-for list="{{ authority }}" as="a" hint-placeholder-count="4">
+            <div data-atlas="{{ a.atlas }}" tabindex="0" role="group" style="display: grid; grid-template-columns: minmax(160px, 240px) minmax(90px, 130px) 1fr; gap: 24px; align-items: baseline; padding: 26px 4px; border-top: 1px solid rgba(46, 43, 38, 0.13); cursor: default;">
+              <span style="font-size: 19px; font-weight: 500; color: {{ a.tone }};">{{ a.who }}</span>
+              <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.1em; color: {{ a.tone }};">{{ a.verb }}</span>
+              <span style="display: flex; flex-direction: column; gap: 6px;">
+                <span style="font-size: 15.5px; line-height: 1.55; color: #5c584f;">{{ a.does }}</span>
+                <span style="font-size: 14px; color: #6b675e;">{{ a.cannot }}</span>
+              </span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </section>
+
+    <!-- 05 · WHEN CARELOOP REFUSES ---------------------------------------- -->
+    <section data-story="unsafe" data-nav="trust" data-screen-label="05a Refuses unsafe" style="min-height: 92vh; display: flex; align-items: center; padding: 100px 40px;">
+      <div style="width: 100%; max-width: 1180px; margin: 0 auto;">
+        <div style="max-width: 660px; display: flex; flex-direction: column; gap: 24px;">
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; color: #695879;">05 · WHEN CARELOOP REFUSES</span>
+          <h2 style="margin: 0; font-family: Newsreader, Georgia, serif; font-weight: 300; font-size: clamp(34px, 4.4vw, 56px); line-height: 1.08; letter-spacing: -0.024em;">Unsafe instructions do not become authority.</h2>
+          <p style="margin: 0; font-size: 17px; line-height: 1.62; color: #5c584f; max-width: 52ch;">A referral document arrives carrying instructions addressed to an automated system. CareLoop can read that content and take facts from it. It cannot take orders from it. The proposed branch separates, is denied, and dies — while the legitimate workflow continues.</p>
+        </div>
+      </div>
+    </section>
+
+    <section data-story="mismatch" data-nav="trust" data-screen-label="05b Refuses closure" style="min-height: 104vh; display: flex; align-items: center; padding: 100px 40px;">
+      <div style="width: 100%; max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; gap: 52px;">
+        <div style="max-width: 700px; margin-left: auto; display: flex; flex-direction: column; gap: 24px; text-align: right;">
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; color: #a15a45;">VERIFICATION DISAGREEMENT</span>
+          <h2 style="margin: 0; font-family: Newsreader, Georgia, serif; font-weight: 300; font-size: clamp(34px, 4.4vw, 56px); line-height: 1.08; letter-spacing: -0.024em;">If the world disagrees, the case stays open.</h2>
+          <p style="margin: 0; margin-left: auto; font-size: 17px; line-height: 1.62; color: #5c584f; max-width: 50ch;">CareLoop authorized Thursday at 2:00 PM. The clinic's own record reports Friday at 10:30. The rings fire, the topology synchronizes, and then the closing edge simply does not connect.</p>
+        </div>
+        <p style="margin: 0; max-width: 720px; font-family: Newsreader, Georgia, serif; font-size: clamp(22px, 2.4vw, 30px); line-height: 1.4; color: #2e2b26;">CareLoop would rather leave work unresolved than claim an outcome it cannot verify.</p>
+      </div>
+    </section>
+
+    <section data-story="closed" data-nav="trust" data-screen-label="05c Agreement" style="display: flex; align-items: center; padding: 40px 40px 96px;">
+      <div style="width: 100%; max-width: 1240px; margin: 0 auto; display: grid; grid-template-columns: minmax(260px, 0.56fr) minmax(420px, 1fr); gap: 56px; align-items: center;">
+        <div style="display: flex; flex-direction: column; gap: 20px;">
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; color: #3f6b5b;">AND WHEN IT AGREES</span>
+          <p style="margin: 0; font-size: 17px; line-height: 1.62; color: #5c584f; max-width: 46ch;">The same comparison, resolved. CareLoop shows what it authorized beside what the clinic independently reports, and only then does the case read as closed.</p>
+        </div>
+        <figure style="margin: 0; display: flex; flex-direction: column; gap: 12px;">
+            <button onClick="{{ zoomVerification }}" aria-label="Enlarge CareLoop case detail showing authorized time, observed time and a match result" style="padding: 0; border: 1px solid rgba(46, 43, 38, 0.16); border-radius: 6px; overflow: hidden; background: #f2eee6; display: block; width: 100%; box-shadow: 0 1px 2px rgba(46, 43, 38, 0.05), 0 16px 38px rgba(46, 43, 38, 0.07);">
+              <img src="product/verification.png" alt="CareLoop case detail showing authorized time, observed time and a match result" loading="lazy" decoding="async" style="display: block; width: 100%; height: auto;">
+            </button>
+            <figcaption style="display: flex; flex-direction: column; gap: 5px;">
+              <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.13em; color: #6b675e;">REAL PRODUCT · EXTERNAL READ-BACK</span>
+              <span style="font-size: 13.5px; line-height: 1.5; color: #5c584f;">Authorized and observed are shown side by side — closure is the result of the comparison, not a claim.</span>
+            </figcaption>
+          </figure>
+      </div>
+    </section>
+
+    <!-- 06 · DEMO FILM ----------------------------------------------------- -->
+    <section id="demo" data-story="calm" data-nav="demo" data-screen-label="06 Demo" style="display: flex; align-items: center; padding: 76px 40px 84px;">
+      <div style="width: 100%; max-width: 1060px; margin: 0 auto; display: flex; flex-direction: column; gap: 28px;">
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; color: #6b675e;">06 · DEMO FILM</span>
+        <div class="cl-poster" style="position: relative; aspect-ratio: 16 / 9; width: 100%; border: 1px solid rgba(46, 43, 38, 0.16); border-radius: 6px; background: #f2eee6; overflow: hidden;">
+          <img src="product/execution.png" alt="CareLoop handling a cardiology referral" loading="lazy" decoding="async" style="position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center top;">
+          <span aria-hidden="true" class="cl-poster-veil" style="position: absolute; inset: 0; background: linear-gradient(180deg, rgba(247, 244, 238, 0.62) 0%, rgba(247, 244, 238, 0.88) 62%, rgba(247, 244, 238, 0.95) 100%); transition: opacity 320ms ease;"></span>
+          <div style="position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px; text-align: center; padding: 0 24px;">
+            <svg viewBox="0 0 64 64" width="40" height="40" fill="none" aria-hidden="true">
+              <circle cx="18.5" cy="11.5" r="5.4" fill="#315e52"></circle>
+              <circle cx="45.5" cy="15" r="4.3" fill="#a6b09d"></circle>
+              <path d="M32 55.5c11.5-7.2 24.5-14.7 24.5-24.2 0-8-6.8-11.3-12-7.9-2.5 1.6-3.9 3.7-4.3 6" stroke="#a6b09d" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round"></path>
+              <path d="M32 55.5C20 48 7.5 40.5 7.5 30.5c0-8.5 7.5-12 13-8.5 2.6 1.7 4.1 3.9 4.5 6.5" stroke="#315e52" stroke-width="6.6" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+            <span style="font-family: Newsreader, Georgia, serif; font-size: clamp(24px, 3vw, 38px); font-weight: 300; letter-spacing: -0.02em; color: #2e2b26;">CareLoop — end to end</span>
+            <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; color: #6b675e;">03:00 · AUTHORITY · ACTION · VERIFICATION · CLOSURE</span>
+            <sc-if value="{{ hasVideo }}">
+              <a href="{{ videoHref }}" target="_blank" rel="noopener" style="text-decoration: none; font-size: 14.5px; color: #2e2b26; border: 1px solid rgba(46, 43, 38, 0.28); border-radius: 999px; padding: 10px 22px; background: rgba(247, 244, 238, 0.7);">Play film ↗</a>
+            </sc-if>
+            <sc-if value="{{ noVideo }}" hint-placeholder-val="{{ true }}">
+              <span style="font-size: 14.5px; color: #6b675e; border: 1px solid rgba(46, 43, 38, 0.2); border-radius: 999px; padding: 10px 22px; background: rgba(247, 244, 238, 0.55);">Demo film coming soon</span>
+            </sc-if>
+          </div>
+        </div>
+        <span style="font-size: 13.5px; color: #6b675e;">No sound autoplays. Demo uses synthetic care data — no real patient information.</span>
+      </div>
+    </section>
+
+    <sc-if value="{{ zoomed }}">
+      <div role="dialog" aria-modal="true" aria-label="{{ zoomed.alt }}" onClick="{{ closeZoom }}" style="position: fixed; inset: 0; z-index: 90; background: rgba(38, 36, 31, 0.82); display: flex; align-items: center; justify-content: center; padding: 40px; animation: clFade 200ms ease both;">
+        <div style="display: flex; flex-direction: column; gap: 14px; max-width: 1240px; width: 100%;">
+          <div role="img" aria-label="{{ zoomed.alt }}" style="{{ zoomed.style }}"></div>
+          <div style="display: flex; justify-content: space-between; gap: 20px; align-items: baseline;">
+            <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.13em; color: #cfcabe;">{{ zoomed.label }}</span>
+            <button onClick="{{ closeZoom }}" style="background: transparent; border: 0; padding: 0; font-size: 13.5px; color: #cfcabe;">Close · Esc</button>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- 07 · RECEIPTS ------------------------------------------------------ -->
+    <section id="proof" data-story="calm" data-nav="proof" data-screen-label="07 Receipts" style="display: flex; align-items: center; padding: 92px 40px 72px;">
+      <div style="width: 100%; max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; gap: 52px;">
+        <div style="max-width: 640px; display: flex; flex-direction: column; gap: 20px;">
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; color: #6b675e;">07 · MEASURED</span>
+          <h2 style="margin: 0; font-family: Newsreader, Georgia, serif; font-weight: 300; font-size: clamp(36px, 4.6vw, 58px); line-height: 1.07; letter-spacing: -0.025em;">Receipts, not headlines.</h2>
+          <p style="margin: 0; font-size: 16.5px; line-height: 1.6; color: #5c584f;">Every figure below is blank until it has actually been measured in the repository. Nothing on this page is estimated.</p>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1px; background: rgba(46, 43, 38, 0.12); border-top: 1px solid rgba(46, 43, 38, 0.12); border-bottom: 1px solid rgba(46, 43, 38, 0.12);">
+          <sc-for list="{{ metrics }}" as="m" hint-placeholder-count="6">
+            <button class="cl-metric" onClick="{{ m.onPick }}" data-atlas="{{ m.atlas }}" aria-expanded="{{ m.expanded }}" aria-label="{{ m.aria }}" style="text-align: left; border: 0; background: {{ m.fill }}; padding: {{ m.pad }}; display: flex; flex-direction: column; gap: 9px; min-height: 172px; transition: background 200ms ease;">
+              <span style="display: flex; align-items: baseline; gap: 10px;">
+                <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; color: {{ m.catTone }};">{{ m.category }}</span>
+                <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.1em; color: #6b675e;">{{ m.kind }}</span>
+              </span>
+              <span style="display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;">
+                <span style="font-family: Newsreader, Georgia, serif; font-size: {{ m.size }}; font-weight: 300; line-height: 1; letter-spacing: -0.03em; color: {{ m.tone }}; font-variant-numeric: tabular-nums;">{{ m.value }}</span>
+                <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: 0.1em; color: #6b675e;">{{ m.pendingNote }}</span>
+              </span>
+              <span style="font-size: 15.5px; font-weight: 500; line-height: 1.35;">{{ m.label }}</span>
+              <span style="font-size: 13.5px; line-height: 1.5; color: #6b675e;">{{ m.summary }}</span>
+              <span class="cl-metric-action" style="font-size: 13px; color: {{ m.actionTone }}; margin-top: auto;">{{ m.action }}</span>
+            </button>
+          </sc-for>
+        </div>
+
+        <sc-if value="{{ openMetric }}" hint-placeholder-val="{{ true }}">
+          <div role="region" aria-label="Evidence detail" style="border-top: 1px solid rgba(46, 43, 38, 0.28); padding: 26px 2px 4px; display: flex; flex-direction: column; gap: 22px; animation: clFade 260ms ease both;">
+            <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 24px; flex-wrap: wrap;">
+              <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.12em; color: #6b675e;">EVIDENCE · {{ openMetric.label }}</span>
+              <button onClick="{{ closeMetric }}" style="background: transparent; border: 0; padding: 4px 0; font-size: 13px; color: #6b675e;">Close</button>
+            </div>
+
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 30px 40px; max-width: 1000px;">
+              <sc-for list="{{ openMetric.rows }}" as="r" hint-placeholder-count="4">
+                <div style="display: flex; flex-direction: column; gap: 7px;">
+                  <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; color: #6b675e;">{{ r.k }}</span>
+                  <span style="font-size: 14.5px; line-height: 1.55; color: {{ r.tone }};">{{ r.v }}</span>
+                </div>
+              </sc-for>
+            </div>
+
+            <div style="display: flex; gap: 26px; flex-wrap: wrap; align-items: center; padding-top: 4px;">
+              <sc-for list="{{ openMetric.links }}" as="l" hint-placeholder-count="1">
+                <a href="{{ l.href }}" target="{{ l.target }}" rel="noopener" style="font-size: 13.5px; color: {{ l.tone }};">{{ l.text }}</a>
+              </sc-for>
+              <sc-if value="{{ openMetric.noSource }}" hint-placeholder-val="{{ true }}">
+                <span style="font-size: 13.5px; color: #6b675e;">{{ openMetric.noSource }}</span>
+              </sc-if>
+              <sc-if value="{{ openMetric.crossLink }}" hint-placeholder-val="{{ true }}">
+                <a href="#mutation" style="font-size: 13.5px; color: #6b675e;">{{ openMetric.crossLink }}</a>
+              </sc-if>
+            </div>
+
+            <sc-if value="{{ openMetric.caveat }}" hint-placeholder-val="{{ true }}">
+              <div style="display: flex; flex-direction: column; gap: 6px; border-left: 1px solid rgba(46, 43, 38, 0.16); padding: 2px 0 2px 16px; max-width: 62ch;">
+                <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; color: #6b675e;">WHAT THIS DOES NOT PROVE</span>
+                <span style="font-size: 13.5px; line-height: 1.55; color: #6b675e;">{{ openMetric.caveat }}</span>
+              </div>
+            </sc-if>
+          </div>
+        </sc-if>
+      </div>
+    </section>
+
+    <!-- 08 · BREAK THE BOUNDARY -------------------------------------------- -->
+    <section id="mutation" data-story="architecture" data-nav="proof" data-screen-label="08 Mutation" style="display: flex; align-items: center; padding: 64px 40px 88px;">
+      <div style="width: 100%; max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; gap: 46px;">
+        <div style="max-width: 700px; display: flex; flex-direction: column; gap: 20px;">
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; color: #6b675e;">08 · LOAD-BEARING</span>
+          <h2 style="margin: 0; font-family: Newsreader, Georgia, serif; font-weight: 300; font-size: clamp(34px, 4.4vw, 54px); line-height: 1.08; letter-spacing: -0.024em;">Is the safety boundary actually load-bearing?</h2>
+          <p style="margin: 0; font-size: 16.5px; line-height: 1.6; color: #5c584f; max-width: 54ch;">A guardrail that nothing ever tests is decoration. Remove the authority boundary from the build and the same adversarial suite should start failing loudly.</p>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 26px; max-width: 900px;">
+          <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
+            <button onClick="{{ toggleMutant }}" role="switch" aria-checked="{{ mutantOn }}" style="display: inline-flex; align-items: center; gap: 12px; background: transparent; border: 1px solid {{ mut.switchBorder }}; border-radius: 3px; padding: 10px 16px; font-size: 14px; color: #2e2b26; transition: border-color 220ms ease;">
+              <span aria-hidden="true" style="width: 30px; height: 16px; border-radius: 9px; border: 1px solid {{ mut.trackBorder }}; background: {{ mut.track }}; position: relative; transition: background 320ms ease, border-color 320ms ease;">
+                <span style="position: absolute; top: 2px; left: {{ mut.knob }}; width: 10px; height: 10px; border-radius: 50%; background: {{ mut.knobFill }}; transition: left 320ms cubic-bezier(0.22,0.61,0.36,1), background 320ms ease;"></span>
+              </span>
+              {{ mut.switchLabel }}
+            </button>
+            <span style="font-size: 13px; color: #6b675e;">{{ mut.hint }}</span>
+          </div>
+
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1px; background: rgba(46, 43, 38, 0.12); border-top: 1px solid rgba(46, 43, 38, 0.12); border-bottom: 1px solid rgba(46, 43, 38, 0.12);">
+            <sc-for list="{{ mutation }}" as="m" hint-placeholder-count="2">
+              <div style="background: {{ m.fill }}; padding: 26px 24px 24px; display: flex; flex-direction: column; gap: 10px; transition: background 400ms ease, opacity 400ms ease; opacity: {{ m.dim }};">
+                <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.11em; color: {{ m.tone }};">{{ m.name }}</span>
+                <span style="font-family: Newsreader, Georgia, serif; font-size: 38px; font-weight: 300; line-height: 1; color: {{ m.tone }}; font-variant-numeric: tabular-nums;">{{ m.value }}</span>
+                <span style="font-size: 15px; font-weight: 500;">{{ m.verdict }}</span>
+                <span style="font-size: 14px; line-height: 1.55; color: #5c584f;">{{ m.note }}</span>
+              </div>
+            </sc-for>
+          </div>
+
+          <p style="margin: 0; font-size: 15.5px; line-height: 1.6; color: #2e2b26; max-width: 62ch;">{{ mut.reading }}</p>
+
+          <div style="display: flex; gap: 26px; flex-wrap: wrap; align-items: center;">
+            <button onClick="{{ openMutationEvidence }}" style="background: transparent; border: 0; padding: 0; font-size: 13.5px; color: #315e52;">How we tested this →</button>
+            <a href="#proof" style="font-size: 13.5px; color: #6b675e;">View baseline evidence →</a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 09 · UNDER THE HOOD ------------------------------------------------ -->
+    <section id="hood" data-story="architecture" data-nav="hood" data-screen-label="09 Under the hood" style="display: flex; align-items: center; padding: 108px 40px 88px;">
+      <div style="width: 100%; max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; gap: 44px;">
+        <div style="max-width: 640px; display: flex; flex-direction: column; gap: 20px;">
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; color: #6b675e;">09 · UNDER THE HOOD</span>
+          <h2 style="margin: 0; font-family: Newsreader, Georgia, serif; font-weight: 300; font-size: clamp(34px, 4.4vw, 54px); line-height: 1.08; letter-spacing: -0.024em;">The topology is the architecture.</h2>
+          <p style="margin: 0; font-size: 16.5px; line-height: 1.6; color: #5c584f;">Focus a system to isolate it in the field behind this page. Each one states what it owns and, more usefully, what it is not allowed to do.</p>
+        </div>
+
+        <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+          <sc-for list="{{ systems }}" as="sys" hint-placeholder-count="8">
+            <button class="cl-chip" data-atlas="{{ sys.atlas }}" onClick="{{ sys.onPick }}" aria-pressed="{{ sys.pressed }}" style="background: {{ sys.fill }}; border: 1px solid {{ sys.border }}; border-radius: 3px; padding: 9px 15px; display: inline-flex; align-items: center; gap: 9px; font-size: 14px; color: #2e2b26; transition: background 200ms ease, border-color 200ms ease;">
+              <span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: {{ sys.tone }};"></span>
+              {{ sys.name }}
+            </button>
+          </sc-for>
+        </div>
+
+        <div role="region" aria-label="Subsystem detail" style="border-top: 1px solid rgba(46, 43, 38, 0.22); padding-top: 24px; display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 26px 38px; max-width: 1020px; min-height: 168px;">
+          <sc-for list="{{ sysDetail }}" as="d" hint-placeholder-count="5">
+            <div style="display: flex; flex-direction: column; gap: 7px;">
+              <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 0.12em; color: {{ d.keyTone }};">{{ d.k }}</span>
+              <span style="font-size: 14.5px; line-height: 1.55; color: {{ d.tone }};">{{ d.v }}</span>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.1em; color: #6b675e;">
+          <sc-for list="{{ flow }}" as="fl" hint-placeholder-count="6">
+            <span style="color: {{ fl.tone }};">{{ fl.label }}</span>
+          </sc-for>
+        </div>
+      </div>
+    </section>
+
+    <!-- 10 · BUILT TO FAIL SAFELY ------------------------------------------ -->
+    <section data-story="calm" data-nav="hood" data-screen-label="10 Failure" style="display: flex; align-items: center; padding: 84px 40px 84px;">
+      <div style="width: 100%; max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; gap: 44px;">
+        <div style="max-width: 620px; display: flex; flex-direction: column; gap: 20px;">
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; color: #6b675e;">10 · FAILURE MODES</span>
+          <h2 style="margin: 0; font-family: Newsreader, Georgia, serif; font-weight: 300; font-size: clamp(34px, 4.4vw, 54px); line-height: 1.08; letter-spacing: -0.024em;">Failure is a state, not a surprise.</h2>
+        </div>
+
+        <div style="display: flex; flex-direction: column; max-width: 1000px;">
+          <sc-for list="{{ failures }}" as="f" hint-placeholder-count="7">
+            <button class="cl-row" onClick="{{ f.onPick }}" aria-expanded="{{ f.open }}" style="text-align: left; border: 0; border-top: 1px solid {{ f.line }}; background: {{ f.fill }}; padding: 17px 12px 17px 4px; display: grid; grid-template-columns: minmax(170px, 1fr) minmax(190px, 1.15fr) minmax(110px, 150px); gap: 24px; align-items: baseline; transition: background 200ms ease, border-color 200ms ease;">
+              <span style="display: flex; align-items: baseline; gap: 10px;">
+                <span aria-hidden="true" style="width: 5px; height: 5px; border-radius: 50%; background: {{ f.mark }}; transform: translateY(-3px);"></span>
+                <span style="font-size: 15.5px; color: #2e2b26;">{{ f.when }}</span>
+              </span>
+              <span style="font-size: 15.5px; color: {{ f.tone }};">{{ f.then }}</span>
+              <span style="font-size: 13px; color: {{ f.cueTone }};">{{ f.cue }}</span>
+            </button>
+          </sc-for>
+        </div>
+
+        <sc-if value="{{ failDetail }}" hint-placeholder-val="{{ true }}">
+          <div role="region" aria-label="Failure behaviour" style="display: flex; flex-direction: column; gap: 16px; border-left: 1px solid rgba(46, 43, 38, 0.2); padding: 4px 0 4px 18px; max-width: 720px; animation: clFade 240ms ease both;">
+            <span style="font-family: Newsreader, Georgia, serif; font-size: 22px; font-weight: 300; line-height: 1.35; color: #2e2b26;">{{ failDetail.message }}</span>
+            <span style="font-size: 14.5px; line-height: 1.6; color: #5c584f;">{{ failDetail.behaviour }}</span>
+            <div style="display: flex; gap: 22px; flex-wrap: wrap; align-items: center;">
+              <button onClick="{{ failDetail.onEvidence }}" style="background: transparent; border: 0; padding: 0; font-size: 13.5px; color: {{ failDetail.evidenceTone }};">{{ failDetail.evidenceText }}</button>
+              <button onClick="{{ clearFailure }}" style="background: transparent; border: 0; padding: 0; font-size: 13px; color: #6b675e;">Back to overview</button>
+            </div>
+          </div>
+        </sc-if>
+      </div>
+    </section>
+
+    <!-- 11 · KNOWN LIMITS --------------------------------------------------- -->
+    <section data-story="calm" data-nav="hood" data-screen-label="11 Limits" style="display: flex; align-items: center; padding: 104px 40px 100px;">
+      <div style="width: 100%; max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; gap: 44px;">
+        <div style="max-width: 640px; display: flex; flex-direction: column; gap: 20px;">
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; color: #6b675e;">11 · HONEST SCOPE</span>
+          <h2 style="margin: 0; font-family: Newsreader, Georgia, serif; font-weight: 300; font-size: clamp(34px, 4.4vw, 54px); line-height: 1.08; letter-spacing: -0.024em;">What CareLoop does not claim.</h2>
+          <p style="margin: 0; font-size: 16.5px; line-height: 1.6; color: #5c584f;">CareLoop is an administrative agent. It does not diagnose, treat, prescribe, or interpret symptoms.</p>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 34px; max-width: 1020px;">
+          <sc-for list="{{ limits }}" as="l" hint-placeholder-count="4">
+            <div style="display: flex; flex-direction: column; gap: 12px; border-top: 1px solid rgba(46, 43, 38, 0.16); padding-top: 18px;">
+              <span style="font-size: 16px; font-weight: 500;">{{ l.title }}</span>
+              <span style="font-size: 14.5px; line-height: 1.6; color: #6b675e;">{{ l.body }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </section>
+
+    <!-- 12 · TRY IT YOURSELF ------------------------------------------------ -->
+    <section data-story="calm" data-nav="closure" data-screen-label="12 Try it" style="display: flex; align-items: center; padding: 96px 40px 104px;">
+      <div style="width: 100%; max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; gap: 44px;">
+        <div style="max-width: 560px; display: flex; flex-direction: column; gap: 18px;">
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.14em; color: #6b675e;">12 · EVALUATE IT</span>
+          <h2 style="margin: 0; font-family: Newsreader, Georgia, serif; font-weight: 300; font-size: clamp(34px, 4.4vw, 54px); line-height: 1.08; letter-spacing: -0.024em;">Three ways in.</h2>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 20px; max-width: 1020px; align-items: stretch;">
+          <sc-for list="{{ paths }}" as="p" hint-placeholder-count="3">
+            <a href="{{ p.href }}" target="{{ p.target }}" rel="noopener noreferrer" style="border: 1px solid {{ p.border }}; border-radius: 5px; padding: {{ p.pad }}; display: flex; flex-direction: column; gap: 12px; min-height: 176px; background: {{ p.fill }}; text-decoration: none; color: inherit;">
+              <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.12em; color: #9c5c2e;">{{ p.time }}</span>
+              <span style="font-size: {{ p.size }}; font-weight: 500; letter-spacing: -0.014em;">{{ p.title }}</span>
+              <span style="font-size: 14.5px; line-height: 1.55; color: #5c584f;">{{ p.body }}</span>
+              <span style="font-size: 14px; color: {{ p.ctaTone }}; margin-top: auto;">{{ p.cta }}</span>
+            </a>
+          </sc-for>
+        </div>
+      </div>
+    </section>
+
+    <!-- 13 · CLOSURE --------------------------------------------------------- -->
+    <section data-story="closure" data-nav="closure" data-screen-label="13 Closure" style="min-height: 124vh; display: flex; align-items: center; padding: 120px 40px 108px;">
+      <div style="width: 100%; max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; align-items: center; gap: 40px; text-align: center;">
+        <svg viewBox="0 0 64 64" width="42" height="42" fill="none" aria-hidden="true">
+          <circle cx="18.5" cy="11.5" r="5.4" fill="#315e52"></circle>
+          <circle cx="45.5" cy="15" r="4.3" fill="#a6b09d"></circle>
+          <path d="M32 55.5c11.5-7.2 24.5-14.7 24.5-24.2 0-8-6.8-11.3-12-7.9-2.5 1.6-3.9 3.7-4.3 6" stroke="#a6b09d" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round"></path>
+          <path d="M32 55.5C20 48 7.5 40.5 7.5 30.5c0-8.5 7.5-12 13-8.5 2.6 1.7 4.1 3.9 4.5 6.5" stroke="#315e52" stroke-width="6.6" stroke-linecap="round" stroke-linejoin="round"></path>
+        </svg>
+        <h2 style="margin: 0; font-family: Newsreader, Georgia, serif; font-weight: 300; font-size: clamp(36px, 5.4vw, 70px); line-height: 1.06; letter-spacing: -0.026em; max-width: 18ch;">The loop is only closed when the world agrees.</h2>
+        <p style="margin: 0; font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; letter-spacing: 0.16em; color: #9c5c2e;">AGENCY WITH BOUNDARIES · CARE WITH RECEIPTS</p>
+        <div style="display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; padding-top: 8px;">
+          <a href="{{ liveHref }}" target="{{ liveTarget }}" rel="noopener noreferrer" style="background: #2e2b26; color: #f7f4ee; border-radius: 3px; padding: 13px 24px; font-size: 15px; font-weight: 500;">{{ liveLabel }}</a>
+          <a href="#demo" style="border: 1px solid rgba(46, 43, 38, 0.24); border-radius: 3px; padding: 13px 20px; font-size: 15px;">Watch demo</a>
+          <a href="{{ repoHref }}" target="{{ repoTarget }}" rel="noopener noreferrer" style="border: 1px solid rgba(46, 43, 38, 0.24); border-radius: 3px; padding: 13px 20px; font-size: 15px; color: {{ repoTone }};">{{ repoLabel }}</a>
+        </div>
+      </div>
+    </section>
+
+    <footer style="border-top: 1px solid rgba(46, 43, 38, 0.12); padding: 34px 40px 44px;">
+      <div style="max-width: 1180px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap;">
+        <span style="font-size: 13.5px; color: #6b675e;">CareLoop · an autonomous back office for family caregiving.</span>
+        <span style="font-size: 13px; color: #6b675e;">Synthetic demo data throughout. Not a medical device.</span>
+      </div>
+    </footer>
+
+  </main>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;: {&quot;width&quot;: 1440, &quot;height&quot;: 900}, &quot;liveUrl&quot;: {&quot;editor&quot;: &quot;text&quot;, &quot;default&quot;: &quot;&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Destinations&quot;}, &quot;githubUrl&quot;: {&quot;editor&quot;: &quot;text&quot;, &quot;default&quot;: &quot;&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Destinations&quot;}, &quot;videoUrl&quot;: {&quot;editor&quot;: &quot;text&quot;, &quot;default&quot;: &quot;&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Destinations&quot;}, &quot;devpostUrl&quot;: {&quot;editor&quot;: &quot;text&quot;, &quot;default&quot;: &quot;&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Destinations&quot;}}">
+/* Content model. Every externally-verifiable figure stays empty until the
+ * repository supplies it — a placeholder is honest, an invented number is not. */
+
+const PROJECT = {
+  liveUrl: "",
+  githubUrl: "",
+  devpostUrl: "",
+  videoUrl: "",
+  architectureUrl: ""
+};
+
+const STEPS = [
+  { n: "01", key: "event",     title: "Observe",         body: "A referral arrives. CareLoop opens a case and pulls in only the context this event needs." },
+  { n: "02", key: "gather",    title: "Gather",          body: "The deadline is read from page 2 of the referral; the visit length from the instructions. Each fact keeps its source." },
+  { n: "03", key: "reasoning", title: "Reason",          body: "The model drafts a plan: Tuesday conflicts with Maya's calendar, Thursday at 2:00 PM is open and still meets the deadline." },
+  { n: "04", key: "authority", title: "Check authority", body: "The proposal reaches deterministic code. Not a prompt, not a model — the boundary decides what may run." },
+  { n: "05", key: "human",     title: "Human",           body: "Booking on someone's behalf is not the agent's call. The signal parks. The topology simply refuses to continue." },
+  { n: "06", key: "execute",   title: "Act",             body: "Approved, and bound to the exact arguments shown. The executor books the appointment once, idempotently." },
+  { n: "07", key: "verify",    title: "Verify",          body: "CareLoop reads the clinic's own record back, independently of the executor that wrote it." },
+  { n: "08", key: "closed",    title: "Close",           body: "Authorized matches observed. Only now does the case close, and the last connection resolves." }
+];
+
+const CALLOUTS = {
+  4: "The model can propose this action. It cannot authorize itself.",
+  5: "The loop cannot close without the person.",
+  7: "Independently verified — not self-reported.",
+  8: "The loop is closed because the outside world agreed."
+};
+
+/* Listed in DOCUMENT order, so the underline only ever advances rightward.
+ * Any order that disagrees with the page makes it jump backwards mid-scroll. */
+/* Evidence model. `value` stays empty until a figure has actually been
+ * measured in the repository — a placeholder is honest, an invented number is
+ * not. `kind` keeps design intent and measurement visibly distinct.
+ * `atlas` names the subsystem the field should emphasise while inspecting. */
+const CAT_TONE = {
+  AUTHORITY: "#695879", VERIFICATION: "#3f6b5b", ADVERSARIAL: "#a15a45",
+  "END-TO-END": "#6b675e", RELIABILITY: "#6b675e"
+};
+
+const EVIDENCE = [
+  { id: "unauthorized", category: "AUTHORITY", kind: "ASSERTED INVARIANT", value: "", featured: true,
+    label: "Unauthorized external actions", atlas: "gate",
+    summary: "No run may reach an effectful tool without a deterministic allow.",
+    tested: "Every scenario run in the evaluation set, including adversarial ones.",
+    method: "Effectful adapters are instrumented; any call without a matching policy verdict fails the run.",
+    invariant: "An action executes only if the gate returned ALLOW for those exact arguments.",
+    caveat: "This covers the adapters present in the evaluated build. It is not a clinical safety certification.",
+    crossLink: "See boundary mutation →" },
+  { id: "injection", category: "ADVERSARIAL", kind: "MEASURED", value: "", featured: true,
+    label: "Prompt-injection attempts blocked", atlas: "reason",
+    summary: "Document content can supply facts. It cannot supply authority.",
+    tested: "Referral and continuity documents carrying instructions addressed to an automated system.",
+    method: "Adversarial suite replays injected documents through the full agent path.",
+    invariant: "Untrusted content never widens the set of permitted actions.",
+    caveat: "Covers the attack corpus in the repository, not all possible phrasings." },
+  { id: "mutation", category: "ADVERSARIAL", kind: "COUNTERFACTUAL", value: "",
+    label: "Mutation score, policy layer", atlas: "gate",
+    summary: "Removing the boundary should make the suite fail.",
+    tested: "The authority gate, with its deterministic verdict removed from the build.",
+    method: "The same adversarial suite runs against the mutant; surviving mutants indicate vacuous tests.",
+    invariant: "Protection that no test notices the absence of is not protection.",
+    crossLink: "See boundary mutation →" },
+  { id: "readback", category: "VERIFICATION", kind: "MEASURED", value: "",
+    label: "Verification mismatches caught", atlas: "verify",
+    summary: "Cases where the world disagreed and the case stayed open.",
+    tested: "External read-backs seeded to disagree with the authorized action.",
+    method: "The verifier reads the external record independently of the executor that wrote it.",
+    invariant: "A case cannot reach a completed state while authorized and observed differ." },
+  { id: "e2e", category: "END-TO-END", kind: "MEASURED", value: "",
+    label: "End-to-end scenarios", atlas: "act",
+    summary: "Full workflow runs against the synthetic demo world.",
+    tested: "Referral, malicious document and verification-mismatch scenarios, start to settled.",
+    method: "Each scenario runs the real agent path with no step stubbed.",
+    invariant: "Every scenario reaches a terminal state the backend considers valid." },
+  { id: "tests", category: "RELIABILITY", kind: "MEASURED", value: "",
+    label: "Unit and integration tests", atlas: "facts",
+    summary: "Repository suite across the agent, policy and verification layers.",
+    tested: "Trust resolution, policy verdicts, idempotency, provenance and adapters.",
+    method: "Standard repository test run.",
+    invariant: "The suite is green on the commit this page describes." }
+];
+
+/* Architecture. The topology is the diagram; these are its controls. The
+ * CANNOT line matters most — it is what separates the layers from one another. */
+const SYSTEMS = [
+  { atlas: "reason", name: "Reasoning", tone: "#695879", pin: "reasoning",
+    does: "Propose the next useful action from what it has read.",
+    input: "Care events and validated facts.", output: "A proposed action intent.",
+    cannot: "Grant itself authority.", onFail: "The case waits; no action is attempted." },
+  { atlas: "facts", name: "Trusted facts", tone: "#6b675e", pin: "gather",
+    does: "Hold validated extractions with source document, page and digest.",
+    input: "Untrusted documents and external text.", output: "Facts bound to their provenance.",
+    cannot: "Let a document's content confer permission.", onFail: "Unvalidated content is never promoted to fact." },
+  { atlas: "gate", name: "Policy and authority", tone: "#4a4740", pin: "authority",
+    does: "Resolve whether a proposed action is permitted, denied, or belongs to a person.",
+    input: "An action intent plus trusted facts.", output: "ALLOW, DENY or REQUIRE_HUMAN with a rule code.",
+    cannot: "Be overridden by model confidence.", onFail: "Nothing runs. Absence of a verdict is not permission." },
+  { atlas: "human", name: "Human checkpoint", tone: "#9c5c2e", pin: "human",
+    does: "Resolve decisions where authority genuinely belongs to a person.",
+    input: "A parked action with the exact arguments shown.", output: "An approval bound to those arguments.",
+    cannot: "Be bypassed or inferred by the agent.", onFail: "The workflow parks indefinitely rather than guessing." },
+  { atlas: "act", name: "Execution", tone: "#6b675e", pin: "execute",
+    does: "Perform the one authorized action, durably and idempotently.",
+    input: "An authorized intent.", output: "An attempted effect on an external system.",
+    cannot: "Declare the real-world outcome verified.", onFail: "The case stays open and nothing is marked complete." },
+  { atlas: "world", name: "External world", tone: "#6b675e", pin: "verify",
+    does: "The clinics, payers and portals CareLoop acts against.",
+    input: "Requests through approved channels.", output: "Its own record of what happened.",
+    cannot: "Be assumed to agree with what was requested.", onFail: "No observation means no closure." },
+  { atlas: "verify", name: "Verification", tone: "#3f6b5b", pin: "verify",
+    does: "Compare what was authorized with what the outside world reports.",
+    input: "The authorized action and an independent read-back.", output: "MATCH or MISMATCH.",
+    cannot: "Treat execution success as proof of outcome.", onFail: "The case cannot reach a completed state." },
+  { atlas: "caseN", name: "Case and audit", tone: "#6b675e", pin: "closed",
+    does: "Hold durable case state and the evidence trail behind every step.",
+    input: "Events, verdicts, approvals and verification results.", output: "A closed case, or an open one.",
+    cannot: "Be closed by the agent's own report.", onFail: "The case remains open and inspectable." }
+];
+
+const FLOW = [
+  { label: "Propose", atlas: "reason", tone: "#695879" },
+  { label: "Authorize", atlas: "gate", tone: "#4a4740" },
+  { label: "Execute", atlas: "act", tone: "#6b675e" },
+  { label: "Observe", atlas: "world", tone: "#6b675e" },
+  { label: "Verify", atlas: "verify", tone: "#3f6b5b" },
+  { label: "Close", atlas: "caseN", tone: "#3f6b5b" }
+];
+
+/* Failure modes, each a small operational demonstration in the same field. */
+const FAILURES = [
+  { id: "untrusted", when: "Untrusted model output", then: "Bounded by policy", tone: "#695879",
+    pin: "authority", focus: "gate", evidence: "unauthorized",
+    message: "Model output remains a proposal, not authority.",
+    behaviour: "The proposal reaches the boundary and stops there. Deterministic code decides what may run, and it does not read confidence." },
+  { id: "injection", when: "Malicious instruction in a document", then: "Branch discarded", tone: "#695879",
+    pin: "unsafe", focus: "reason", evidence: "injection",
+    message: "Instructions inside untrusted content do not become authority.",
+    behaviour: "The unsafe branch is proposed, separated and allowed to die. The legitimate workflow continues without interruption." },
+  { id: "crossfield", when: "Cross-field trust collision", then: "No relation forms", tone: "#5c584f",
+    pin: "gather", focus: "facts", noBridge: true, evidence: "tests",
+    message: "Trust stays bound to the fact it belongs to.",
+    behaviour: "Two facts can carry identical-looking values and still have no valid relation between them. The bridge simply never forms." },
+  { id: "human", when: "Human authority required", then: "Workflow parks", tone: "#9c5c2e",
+    pin: "human", focus: "human", evidence: "unauthorized",
+    message: "The workflow waits instead of guessing.",
+    behaviour: "The signal parks a few pixels short of the boundary and the execution corridor drifts out of reach. Nothing continues until a person decides." },
+  { id: "toolfail", when: "Tool or booking failure", then: "Nothing changed", tone: "#5c584f",
+    pin: "execute", focus: "act", evidence: "e2e",
+    message: "Authorization does not guarantee execution.",
+    behaviour: "The action was permitted and attempted, but the external world never confirmed it. The case stays open and nothing is reported as done." },
+  { id: "mismatch", when: "External state mismatch", then: "Closure refused", tone: "#a15a45",
+    pin: "mismatch", focus: "verify", evidence: "readback",
+    message: "If the world disagrees, the case stays open.",
+    behaviour: "Verification runs and the rings fire, because the check genuinely happened. Sage never propagates and the closing relation stops partway." },
+  { id: "nomotion", when: "WebGL or motion unavailable", then: "Product works unchanged", tone: "#3f6b5b",
+    hide: true, evidence: "",
+    message: "Presentation can fail without product behaviour failing.",
+    behaviour: "The decorative field is gone from this page right now. Every claim, receipt and control above is still exactly as readable." }
+];
+
+/* Real captures of real CareLoop states. Empty src falls back to the frame's
+ * pending treatment rather than a broken image. */
+const SHOTS = {
+  calm: { src: "product/calm.png", label: "REAL PRODUCT · CALM STATE",
+    alt: "CareLoop dashboard showing no items requiring attention" },
+  authority: { src: "product/authority.png", label: "REAL PRODUCT · HUMAN CHECKPOINT",
+    alt: "CareLoop dashboard with a decision card awaiting approval" },
+  verification: { src: "product/verification.png", label: "REAL PRODUCT · EXTERNAL READ-BACK",
+    alt: "CareLoop case detail showing authorized time, observed time and a match result" }
+};
+
+const NAV = [
+  { id: "story", label: "Story", href: "#story" },
+  { id: "trust", label: "Trust", href: "#trust" },
+  { id: "demo", label: "Demo", href: "#demo" },
+  { id: "proof", label: "Proof", href: "#proof" },
+  { id: "hood", label: "Under the hood", href: "#hood" }
+];
+
+/** The closing chapters have no nav item of their own; the last concept stays
+ *  lit rather than the bar going blank where a judge is deciding what to do. */
+const NAV_ALIAS = { closure: "hood" };
+
+/** Narrative weights for the pinned chapters: the decisive beats earn more
+ *  scroll room than the setup ones, so perceived effort stays even. */
+const STEP_WEIGHTS = [0.75, 0.8, 1, 1.35, 1.35, 1, 1.25, 1.25];
+const STEP_EDGES = (() => {
+  const total = STEP_WEIGHTS.reduce((a, b) => a + b, 0);
+  let acc = 0;
+  return STEP_WEIGHTS.map((w) => (acc += w) / total);
+})();
+
+class Component extends DCLogic {
+  state = { step: 0, scrolled: false, nav: "story", metric: null, mutant: false, system: null, failure: null, zoom: null };
+
+  /** One failure at a time: the previous demonstration always exits cleanly. */
+  pickFailure(id) {
+    const f = FAILURES.find((x) => x.id === id);
+    this.setState({ failure: id });
+    const s = window.__careLoopStory;
+    if (!s) return;
+    s.setHidden(!!(f && f.hide));
+    s.setNoBridge(!!(f && f.noBridge));
+    s.focus(f ? f.focus : null);
+    s.pinState(f && f.pin ? f.pin : null);
+  }
+
+  /** The counterfactual is a state of the persistent field, not a second diagram. */
+  setMutant(on) {
+    this.setState({ mutant: on });
+    if (window.__careLoopStory) window.__careLoopStory.setMutant(on);
+  }
+
+  // Subsystem emphasis is driven by the metric button's own data-atlas, through
+  // the field's delegated handlers — a second focus call here would fight them.
+
+  componentDidMount() {
+    this.onKey = (ev) => {
+      if (ev.key !== "Escape") return;
+      if (this.state.zoom) { this.setState({ zoom: null }); return; }
+      if (this.state.metric) this.setState({ metric: null });
+      if (this.state.failure) this.pickFailure(null);
+      if (this.state.system) {
+        this.setState({ system: null });
+        if (window.__careLoopStory) { window.__careLoopStory.focus(null); window.__careLoopStory.pinState(null); }
+      }
+    };
+    window.addEventListener("keydown", this.onKey);
+    this.onScroll = () => {
+      if (this.ticking) return;
+      this.ticking = true;
+      requestAnimationFrame(() => {
+        this.ticking = false;
+        const vh = window.innerHeight;
+        const scrolled = window.scrollY > 40;
+
+        // Progress is written straight to the DOM: a value that changes every
+        // frame must never go through React.
+        const bar = document.getElementById("cl-progress");
+        if (bar) {
+          const max = document.documentElement.scrollHeight - vh;
+          const p = max > 0 ? Math.max(0, Math.min(1, window.scrollY / max)) : 0;
+          bar.style.transform = "scaleX(" + p.toFixed(4) + ")";
+        }
+
+        // Conceptual chapter, not per-section: whichever [data-nav] owns the
+        // upper third of the viewport.
+        let nav = this.state.nav;
+        for (const el of document.querySelectorAll("[data-nav]")) {
+          const r = el.getBoundingClientRect();
+          if (r.top <= vh * 0.34 && r.bottom > vh * 0.34) { nav = el.getAttribute("data-nav"); break; }
+        }
+
+        const pin = document.querySelector("[data-story-scrub]");
+        let step = this.state.step;
+        if (pin) {
+          const r = pin.getBoundingClientRect();
+          const total = r.height - vh;
+          if (r.bottom < 0) step = STEPS.length - 1;
+          else if (r.top > 0) step = 0;
+          else if (total > 0) {
+            const t = Math.max(0, Math.min(0.999, -r.top / total));
+            step = STEP_EDGES.findIndex((e) => t < e);
+            if (step < 0) step = STEPS.length - 1;
+          }
+        }
+        if (step !== this.state.step || scrolled !== this.state.scrolled || nav !== this.state.nav) {
+          this.setState({ step, scrolled, nav });
+        }
+      });
+    };
+    // Inspection belongs to its own section. Scrolling on is the normal way to
+    // leave it, so that must release every pin — not just clicking back.
+    this.onRelease = () => {
+      if (!this.state.system && !this.state.failure) return;
+      const owner = (sel) => {
+        const el = document.querySelector(sel);
+        return el ? el.closest("section") : null;
+      };
+      const gone = (sec) => {
+        if (!sec) return false;
+        const r = sec.getBoundingClientRect();
+        return r.bottom < 0 || r.top > window.innerHeight;
+      };
+      if (this.state.system && gone(owner("button.cl-chip"))) {
+        this.setState({ system: null });
+        if (window.__careLoopStory) {
+          window.__careLoopStory.focus(null);
+          window.__careLoopStory.pinState(null);
+        }
+      }
+      if (this.state.failure && gone(owner("button.cl-row"))) this.pickFailure(null);
+    };
+    window.addEventListener("scroll", this.onRelease, { passive: true });
+    window.addEventListener("scroll", this.onScroll, { passive: true });
+    window.addEventListener("resize", this.onScroll, { passive: true });
+    this.onScroll();
+  }
+
+  componentWillUnmount() {
+    window.removeEventListener("scroll", this.onRelease);
+    window.removeEventListener("scroll", this.onScroll);
+    window.removeEventListener("resize", this.onScroll);
+    window.removeEventListener("keydown", this.onKey);
+    if (window.__careLoopStory) window.__careLoopStory.destroy();
+  }
+
+  renderVals() {
+    const active = this.state.step;
+    const P = this.props;
+    const live = P.liveUrl ?? PROJECT.liveUrl;
+    const repo = P.githubUrl ?? PROJECT.githubUrl;
+    const video = P.videoUrl ?? PROJECT.videoUrl;
+
+    const steps = STEPS.map((s, i) => {
+      const on = i === active;
+      const past = i < active;
+      const tone = s.key === "reasoning" || s.key === "authority" ? "#695879"
+        : s.key === "human" ? "#9c5c2e"
+        : s.key === "verify" || s.key === "closed" ? "#3f6b5b" : "#6b675e";
+      return {
+        ...s,
+        // Only the active step carries its body. Collapsing the rest keeps the
+        // pin inside a 768px laptop and sharpens the focus the scrub is for.
+        bodyH: on ? "90px" : "0px",
+        bodyOp: on ? 1 : 0,
+        dim: on ? 1 : past ? 0.42 : 0.26,
+        num: on ? tone : "#6b675e",
+        titleTone: on ? "#2e2b26" : "#5c584f",
+        line: on ? "rgba(46,43,38,0.3)" : "rgba(46,43,38,0.11)"
+      };
+    });
+
+    const callout = CALLOUTS[active + 1] || "";
+    const callTone = active + 1 === 4 || active + 1 === 5 ? "#695879" : "#3f6b5b";
+
+    return {
+      steps,
+      callout,
+      callTone,
+      navBg: this.state.scrolled ? "rgba(247, 244, 238, 0.92)" : "rgba(247, 244, 238, 0)",
+      navLine: this.state.scrolled ? "rgba(46, 43, 38, 0.12)" : "rgba(46, 43, 38, 0)",
+
+      // A missing URL never produces a dead anchor or an unexpected new tab:
+      // the CTA states what is pending and falls back to a real chapter.
+      liveHref: live || "#demo",
+      liveTarget: live ? "_blank" : "_self",
+      liveLabel: live ? "Open CareLoop ↗" : "Deployment pending",
+      liveTone: live ? "#2e2b26" : "#6b675e",
+      repoHref: repo || "#hood",
+      repoTarget: repo ? "_blank" : "_self",
+      repoLabel: repo ? "View source ↗" : "Repository pending",
+      repoTone: repo ? "#2e2b26" : "#6b675e",
+      liveOpacity: live ? 1 : 0.45,
+      repoOpacity: repo ? 1 : 0.45,
+      noLive: live ? "false" : "true",
+      // No URL means no link: a pending state must not be clickable.
+      hasVideo: !!video,
+      noVideo: !video,
+      videoHref: video || "",
+
+      // Product captures are real states of the real CareLoop build, not mockups.
+      zoomCalm: () => this.setState({ zoom: "calm" }),
+      zoomAuthority: () => this.setState({ zoom: "authority" }),
+      zoomVerification: () => this.setState({ zoom: "verification" }),
+      closeZoom: () => this.setState({ zoom: null }),
+      zoomed: (() => {
+        const z = SHOTS[this.state.zoom];
+        if (!z) return null;
+        // A background avoids putting a URL in a template hole: the browser
+        // would try to preload the literal "{{ … }}" before hydration.
+        return {
+          alt: z.alt,
+          label: z.label,
+          style: {
+            width: "100%",
+            height: "78vh",
+            borderRadius: 5,
+            background: "#f7f4ee url(\"" + z.src + "\") center / contain no-repeat"
+          }
+        };
+      })(),
+
+
+      navItems: (() => {
+        const active = NAV_ALIAS[this.state.nav] || this.state.nav;
+        return NAV.map((n) => ({
+          ...n,
+          tone: active === n.id ? "#2e2b26" : "#6b675e",
+          mark: active === n.id ? 0.7 : 0,
+          current: active === n.id ? "true" : "false"
+        }));
+      })(),
+
+      pairs: [
+        { step: "01", agent: "Referral requested", world: "Clinic never recorded it" },
+        { step: "02", agent: "Message sent", world: "Appointment not actually booked" },
+        { step: "03", agent: "Task marked complete", world: "Unknown" }
+      ],
+
+      authority: [
+        { who: "Reasoning", verb: "PROPOSES", tone: "#695879", atlas: "reason",
+          does: "Reads documents and drafts what should happen next.", cannot: "Cannot grant itself authority." },
+        { who: "Authority", verb: "PERMITS · PARKS · DENIES", tone: "#4a4740", atlas: "gate",
+          does: "Deterministic code resolves policy against trusted facts.", cannot: "Cannot be argued with by a prompt." },
+        { who: "Execution", verb: "ACTS", tone: "#6b675e", atlas: "act",
+          does: "Runs the one authorized action, bound to its arguments.", cannot: "Cannot widen its own scope or retry blindly." },
+        { who: "Verification", verb: "CONFIRMS", tone: "#3f6b5b", atlas: "verify",
+          does: "Reads the external system back, independently.", cannot: "Cannot take the executor's word for it." }
+      ],
+
+      metrics: EVIDENCE.map((e) => {
+        const open = this.state.metric === e.id;
+        const pending = !e.value;
+        return {
+          ...e,
+          value: pending ? "—" : e.value,
+          tone: pending ? "#6b675e" : e.featured ? "#3f6b5b" : "#2e2b26",
+          size: e.featured ? "54px" : "44px",
+          pad: e.featured ? "32px 26px 30px" : "26px 24px 26px",
+          fill: open ? "rgba(74, 125, 108, 0.05)" : "#f7f4ee",
+          catTone: CAT_TONE[e.category] || "#6b675e",
+          // Pending describes the VALUE, not the action. Method and invariant
+          // are worth reading before a number exists.
+          pendingNote: pending ? "Verified result pending" : "",
+          action: open ? "Showing evidence" : "Inspect evidence →",
+          actionTone: open ? "#3f6b5b" : "#315e52",
+          expanded: open ? "true" : "false",
+          aria: e.label + (open ? ", evidence shown" : ", inspect evidence"),
+          onPick: () => this.setState({ metric: open ? null : e.id })
+        };
+      }),
+
+      openMetric: (() => {
+        const e = EVIDENCE.find((x) => x.id === this.state.metric);
+        if (!e) return null;
+        const pending = !e.value;
+        return {
+          label: e.label,
+          caveat: e.caveat || "",
+          rows: [
+            { k: "RESULT", v: pending ? "Verified result pending" : e.value, tone: pending ? "#6b675e" : "#2e2b26" },
+            { k: "WHAT WAS TESTED", v: e.tested, tone: "#5c584f" },
+            { k: "METHOD", v: e.method, tone: "#5c584f" },
+            { k: "EXPECTED INVARIANT", v: e.invariant, tone: "#5c584f" }
+          ],
+          // A link with nowhere to go is worse than a plain statement.
+          links: e.sourceUrl
+            ? [{ text: e.sourceLabel + " ↗", href: e.sourceUrl, target: "_blank", tone: "#315e52" }]
+            : [],
+          noSource: e.sourceUrl ? "" : "Source pending",
+          crossLink: e.crossLink || ""
+        };
+      })(),
+
+      closeMetric: () => this.setState({ metric: null }),
+      toggleMutant: () => this.setMutant(!this.state.mutant),
+      openMutationEvidence: () => this.setState({ metric: "mutation" }),
+      mutantOn: this.state.mutant ? "true" : "false",
+
+      mut: {
+        switchLabel: this.state.mutant ? "Restore authority boundary" : "Simulate boundary removed",
+        switchBorder: this.state.mutant ? "rgba(161, 90, 69, 0.45)" : "rgba(46, 43, 38, 0.22)",
+        track: this.state.mutant ? "rgba(161, 90, 69, 0.22)" : "transparent",
+        trackBorder: this.state.mutant ? "rgba(161, 90, 69, 0.5)" : "rgba(46, 43, 38, 0.24)",
+        knob: this.state.mutant ? "16px" : "2px",
+        knobFill: this.state.mutant ? "#a15a45" : "#6b675e",
+        hint: "A counterfactual build, not a product control.",
+        reading: this.state.mutant
+          ? "The same unsafe path the boundary used to stop now runs to completion. Nothing dramatic happens — which is exactly why the evaluation is worth having."
+          : "The evaluation is only useful if it turns red when the protection is removed. Remove the boundary and watch the same path become reachable."
+      },
+
+      mutation: [
+        { name: "CARELOOP", value: "—", tone: "#3f6b5b",
+          fill: this.state.mutant ? "#f7f4ee" : "rgba(74, 125, 108, 0.05)",
+          dim: this.state.mutant ? 0.45 : 1,
+          verdict: "Boundary holds.",
+          note: "Adversarial suite against the shipped build, authority boundary intact." },
+        { name: "BOUNDARY REMOVED", value: "—", tone: "#a15a45",
+          fill: this.state.mutant ? "rgba(161, 90, 69, 0.05)" : "#f7f4ee",
+          dim: this.state.mutant ? 1 : 0.45,
+          verdict: "Unsafe paths become reachable.",
+          note: "The same suite with the policy gate removed. If this result does not get worse, the boundary was never doing the work." }
+      ],
+
+      systems: SYSTEMS.map((y) => {
+        const on = this.state.system === y.atlas;
+        return {
+          ...y,
+          pressed: on ? "true" : "false",
+          fill: on ? "rgba(74, 125, 108, 0.07)" : "transparent",
+          border: on ? "rgba(49, 94, 82, 0.42)" : "rgba(46, 43, 38, 0.18)",
+          // Focus is owned by the chip's own data-atlas through the field's
+          // delegated handler; calling it here too would toggle it straight off.
+          onPick: () => {
+            const next = on ? null : y.atlas;
+            this.setState({ system: next });
+            if (window.__careLoopStory) {
+              window.__careLoopStory.pinState(next ? y.pin || "architecture" : null);
+            }
+          }
+        };
+      }),
+
+      sysDetail: (() => {
+        const y = SYSTEMS.find((x) => x.atlas === this.state.system);
+        if (!y) return [
+          { k: "AT REST", v: "Eight subsystems, one field. Select one to isolate what it owns — and, more usefully, what it is not allowed to do.", tone: "#5c584f", keyTone: "#6b675e" }
+        ];
+        return [
+          { k: "RESPONSIBILITY", v: y.does, tone: "#2e2b26", keyTone: "#6b675e" },
+          { k: "INPUT", v: y.input, tone: "#5c584f", keyTone: "#6b675e" },
+          { k: "OUTPUT", v: y.output, tone: "#5c584f", keyTone: "#6b675e" },
+          { k: "CANNOT", v: y.cannot, tone: "#2e2b26", keyTone: y.tone },
+          { k: "IF IT CANNOT PROCEED", v: y.onFail, tone: "#5c584f", keyTone: "#6b675e" },
+          { k: "SOURCE", v: "Source pending", tone: "#6b675e", keyTone: "#6b675e" }
+        ];
+      })(),
+
+      // Separation is the point: propose, authorize, act, observe, verify, close.
+      flow: FLOW.map((step, i) => ({
+        label: (i ? "→ " : "") + step.label,
+        tone: this.state.system && step.atlas === this.state.system ? step.tone : "#6b675e"
+      })),
+
+      failures: FAILURES.map((x) => {
+        const on = this.state.failure === x.id;
+        return {
+          ...x,
+          open: on ? "true" : "false",
+          fill: on ? "rgba(46, 43, 38, 0.035)" : "transparent",
+          line: on ? "rgba(46, 43, 38, 0.3)" : "rgba(46, 43, 38, 0.11)",
+          mark: on ? x.tone : "transparent",
+          cue: on ? "Showing" : "Show behaviour →",
+          cueTone: on ? "#6b675e" : "#315e52",
+          onPick: () => this.pickFailure(on ? null : x.id)
+        };
+      }),
+
+      failDetail: (() => {
+        const x = FAILURES.find((y) => y.id === this.state.failure);
+        if (!x) return null;
+        return {
+          message: x.message,
+          behaviour: x.behaviour,
+          evidenceText: x.evidence ? "Evidence →" : "Evidence pending",
+          evidenceTone: x.evidence ? "#315e52" : "#6b675e",
+          onEvidence: () => {
+            if (!x.evidence) return;
+            this.setState({ metric: x.evidence });
+            const el = document.getElementById("proof");
+            if (el) window.scrollTo({ top: el.offsetTop - 40, behavior: "smooth" });
+          }
+        };
+      })(),
+
+      clearFailure: () => this.pickFailure(null),
+
+      limits: [
+        { title: "Current scope", body: "Administrative coordination only: paperwork, referrals, appointments and follow-ups. CareLoop does not diagnose, treat, prescribe or interpret symptoms." },
+        { title: "Still requires human judgment", body: "Any decision that commits a person's time, money or records stops at the human checkpoint. The policy layer decides where that line falls; it is not inferred by the model." },
+        { title: "Before production deployment", body: "Real integrations, credentialing, audit retention and clinical review are all outstanding. Nothing here has been used with real patient data." },
+        { title: "Known technical limits", body: "A synthetic demo world, a single caregiver identity and no authentication. The external systems CareLoop verifies against are simulated." }
+      ],
+
+      // The recommended path carries real weight; the other two support it.
+      paths: [
+        { time: "60 SECONDS", title: "Open CareLoop", body: "Run the prepared workflow in the deployed product.",
+          // One wording per destination, used everywhere on the page.
+          // Without a deployment this stays an in-page jump to the demo
+          // chapter — a real destination, never a dead anchor or a new tab.
+          cta: live ? "Open CareLoop ↗" : "Deployment pending — see the demo",
+          href: live || "#demo", target: live ? "_blank" : "_self",
+          ctaTone: live ? "#315e52" : "#6b675e", opacity: 1,
+          size: "23px", pad: "32px 30px 28px",
+          border: "rgba(49, 94, 82, 0.4)", fill: "rgba(74, 125, 108, 0.05)" },
+        { time: "3 MINUTES", title: "Watch the demo", body: "One workflow end to end: authority, action, verification, closure.",
+          // With no film yet, this stays a same-page jump to the demo chapter.
+          cta: video ? "Watch demo ↗" : "Watch demo", href: video || "#demo",
+          target: video ? "_blank" : "_self", ctaTone: "#315e52", opacity: 1,
+          size: "18px", pad: "28px 26px 26px",
+          border: "rgba(46, 43, 38, 0.18)", fill: "transparent" },
+        { time: "DEVELOPER", title: "Explore the source", body: "The policy gate, the verifier and the adversarial suite.",
+          cta: repo ? "View source ↗" : "Repository pending — see the architecture",
+          href: repo || "#hood", target: repo ? "_blank" : "_self",
+          ctaTone: repo ? "#315e52" : "#6b675e", opacity: 1,
+          size: "18px", pad: "28px 26px 26px",
+          border: "rgba(46, 43, 38, 0.18)", fill: "transparent" }
+      ]
+    };
+  }
+}
+
+</script>
+</body>
+</html>

@@ -1,6 +1,6 @@
 /* Direct-load routing, on every route and on paths that match none.
  *
- * **Direct load is the whole point.** The 119 Vitest tests run under jsdom, which has no real
+ * **Direct load is the whole point.** The Vitest suite runs under jsdom, which has no real
  * navigation and no origin server, so no existing test can express a routing defect at all: they
  * mount a component tree at a path the test chose. Here the browser asks the origin for the path,
  * the origin answers `index.html`, and React Router decides what that means — which is the sequence

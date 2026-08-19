@@ -8,7 +8,7 @@
  * **Contrast is the reason this has to be a real browser.** axe's `color-contrast` rule is
  * documented as non-functional under jsdom: it needs layout and resolved colours, which jsdom does
  * not produce. So the single most common accessibility defect in a design-led product is
- * unreachable from the existing 119 Vitest tests by construction, not by omission.
+ * unreachable from the Vitest suite by construction, not by omission.
  *
  * **`page.setContent`, never a file in `frontend/public/`.** A fixture with deliberately broken
  * contrast placed there would be built into the bundle and served from CloudFront — shipping a

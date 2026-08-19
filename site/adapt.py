@@ -159,6 +159,192 @@ def _repoint_lightbox_sources(text: str, prefix: str) -> str:
     return text
 
 
+#: Copy the dossier states that the repository does not support, and what it says instead.
+#:
+#: **Why this is a table here rather than a re-export.** The page's copy lives inside
+#: ``vendor/dossier.bundle.html``, which is the fidelity surface and may not be rebuilt: its
+#: embedded manifest holds every font, capture, script and the runtime, and ``check_site.py``
+#: asserts its SHA-256. So a correction reaches the page the same way the mobile stylesheet does
+#: — as a textual substitution applied to a copy of the bundle. ``src/dossier.dc.html`` stays the
+#: editable source and carries every replacement, which ``check_site.py`` asserts in both
+#: directions: the new string present in ``src/``, the old string absent from the generated page.
+#:
+#: **No pair may contain a double quote or a newline.** The bundle carries this copy twice — once
+#: as HTML markup and once inside a JSON-escaped template — and a string free of both characters
+#: is byte-identical in the two encodings, so one plain replace reaches both. A pair needing
+#: escaping would silently reach only one of them, which is exactly the failure a substitution
+#: table invites. ``_apply_copy_corrections`` refuses one rather than trusting this comment.
+#:
+#: Session W. Each of these was falsifiable by reading the repository the page links to: there is
+#: no calendar integration, a trusted booking is authorised autonomously, only ``book_appointment``
+#: has an external read-back, and two ledger rows were labelled for measurements nobody had made.
+COPY_CORRECTIONS: Final[tuple[tuple[str, str], ...]] = (
+    (
+        "CareLoop read the paperwork, found the deadline, checked the calendar and found the "
+        "conflict. It stops here — not because it failed, but because this choice belongs to a "
+        "person.",
+        "CareLoop read the paperwork, extracted the deadline and validated it against the "
+        "referral. Then it reached an action that is not its to take — sending on the carer's "
+        "behalf — and stopped.",
+    ),
+    (
+        "A referral arrives. CareLoop opens a case and pulls in only the context this event needs.",
+        "A referral arrives, and with it a continuity notice addressed to the agent. CareLoop "
+        "opens one case and reads both.",
+    ),
+    (
+        "The deadline is read from page 2 of the referral; the visit length from the instructions. "
+        "Each fact keeps its source.",
+        "The deadline and the patient id are read from the referral and validated. The notice's "
+        "instructions are quoted as evidence and never become permission. Each fact keeps its "
+        "source.",
+    ),
+    (
+        "The model drafts a plan: Tuesday conflicts with Maya's calendar, Thursday at 2:00 PM is "
+        "open and still meets the deadline.",
+        "The model proposes one action: book the slot the referral offers, with the provider the "
+        "referral names.",
+    ),
+    (
+        "Booking on someone's behalf is not the agent's call. The signal parks. The topology "
+        "simply refuses to continue.",
+        "This booking is the agent's to take: a provider from trusted configuration, a slot "
+        "validated against the referral. An outbound message on the carer's behalf is not, and the "
+        "same boundary parks that one until a person approves the exact recipient, subject and "
+        "body.",
+    ),
+    (
+        "Approved, and bound to the exact arguments shown. The executor books the appointment "
+        "once, idempotently.",
+        "Authorized, and bound to the exact arguments the boundary allowed. The executor books the "
+        "appointment once, idempotently.",
+    ),
+    (
+        "The loop cannot close without the person.",
+        "The boundary decides which actions need a person. The model never does.",
+    ),
+    (
+        "Any decision that commits a person's time, money or records stops at the human "
+        "checkpoint. The policy layer decides where that line falls; it is not inferred by the "
+        "model.",
+        "Where the line falls is a deterministic rule rather than a model's judgement. An action "
+        "whose recipient, portal or granted role is not established by trusted configuration is "
+        "refused outright; an outbound message on someone's behalf stops for a person. A booking "
+        "with a trusted provider and a validated slot runs without asking — the line is drawn by "
+        "what an action can reach, not by how consequential it sounds.",
+    ),
+    (
+        "The clinics, payers and portals CareLoop acts against.",
+        "The clinic CareLoop books against, running in its own process. Payers and portals are "
+        "simulated.",
+    ),
+    (
+        "Compare what was authorized with what the outside world reports.",
+        "Re-read the external record of the one action that has one, and compare it with what was "
+        "authorized.",
+    ),
+    (
+        "The authorized action and an independent read-back.",
+        "The authorized booking and an independent read of the clinic's own record.",
+    ),
+    (
+        "CareLoop proposes actions, checks authority against deterministic policy, executes only "
+        "what is permitted, and verifies the external result before a case is closed.",
+        "CareLoop proposes actions, checks authority against deterministic policy, executes only "
+        "what is permitted, and re-reads the clinic's own record before a booking is called done.",
+    ),
+    (
+        "Prompt-injection attempts blocked",
+        "Poisoned-document runs that reached an effect",
+    ),
+    (
+        "Adversarial suite replays injected documents through the full agent path.",
+        "The poison-only scenario, run against the deployed demo on 2026-08-19 and read from each "
+        "case's own audit trail.",
+    ),
+    (
+        "Referral and continuity documents carrying instructions addressed to an automated system.",
+        "Thirteen runs of a case whose only document is a continuity notice addressed to the "
+        "agent.",
+    ),
+    (
+        "Covers the attack corpus in the repository, not all possible phrasings.",
+        "Thirteen runs of one scenario against one model on one day. The corpus result is the row "
+        "above.",
+    ),
+    (
+        "Mutation score, policy layer",
+        "Same corpus, authority layer removed",
+    ),
+    (
+        "End-to-end scenarios",
+        "Deployed runs settling as specified",
+    ),
+    (
+        "Full workflow runs against the synthetic demo world.",
+        "Every demo scenario and the approval cycle, driven through the CDN against the deployed "
+        "demo.",
+    ),
+    (
+        "Referral, malicious document and verification-mismatch scenarios, start to settled.",
+        "Four scenarios five times each, plus five approval cycles, each in a freshly minted "
+        "world.",
+    ),
+    (
+        "Each scenario runs the real agent path with no step stubbed.",
+        "scripts/verify_lock.py, public HTTP only, run 2026-08-19.",
+    ),
+    (
+        "Every scenario reaches a terminal state the backend considers valid.",
+        "One run in twenty-five did not: the model failed twice running to form a proposal that "
+        "satisfies its own schema, and the case ended FAILED having done nothing.",
+    ),
+    (
+        "Verification mismatches caught",
+        "Booking fields re-read from the clinic",
+    ),
+    (
+        "Cases where the world disagreed and the case stayed open.",
+        "Provider, patient, slot and reason, each compared against the clinic's own record.",
+    ),
+    (
+        "External read-backs seeded to disagree with the authorized action.",
+        "A read-back moved behind CareLoop's back on each of the four fields in turn.",
+    ),
+    (
+        "Unit and integration tests",
+        "Repository test suite",
+    ),
+    (
+        "Standard repository test run.",
+        "python -m pytest -q, offline, on a mock model provider, at zero cost.",
+    ),
+)
+
+
+def _apply_copy_corrections(text: str, source_page: str | None) -> str:
+    """Replace every claim in :data:`COPY_CORRECTIONS`, and prove the source agrees.
+
+    Each pair must occur exactly once, so a bundle that has moved on raises rather than silently
+    correcting nothing. When ``source_page`` is given, the replacement is additionally required to
+    be present in it — ``src/dossier.dc.html`` is the editable source, and a correction that lived
+    only in this table would make the two disagree the moment anybody re-exported.
+    """
+    for old, new in COPY_CORRECTIONS:
+        if any(c in s for s in (old, new) for c in (chr(34), chr(10))):
+            raise AdaptationError(
+                f"copy correction {old[:40]!r}: a pair carrying a quote or a newline is not "
+                f"byte-identical in the bundle's two encodings"
+            )
+        if source_page is not None and new not in source_page:
+            raise AdaptationError(
+                f"copy correction {new[:40]!r}: not present in src/dossier.dc.html, so the "
+                f"editable source and the generated page disagree"
+            )
+        text = _replace_exactly_once(text, old, new, f"copy correction {old[:40]!r}")
+    return text
+
+
 def _extract_mobile_media_query(text: str) -> str:
     """Return the whole ``@media (max-width: 720px) { … }`` block, braces included."""
     start = text.find(MOBILE_MEDIA_OPENER)
@@ -426,6 +612,7 @@ def adapt(bundle: str, config: dict, source_page: str | None = None) -> str:
     social = f"{base}/{image}" if base and image else image
 
     text = bundle
+    text = _apply_copy_corrections(text, source_page)
     if source_page is not None:
         text = _sync_mobile_media_query(text, source_page)
     text = _strip_dead_preconnects(text)

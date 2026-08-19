@@ -1,5 +1,11 @@
 """FROZEN output schemas — the exact shapes the benchmark of 2026-08-11 was measured on.
 
+**Pre-B2, and the planner half is now historical twice over.** Everything here predates the
+planner moving off ``Model.structured_output`` onto the closed ``propose_*`` tool-call seam, so the
+planner schema below is not a stale copy of a live shape — it is a copy of a shape that no longer
+exists anywhere. ``docs/model-benchmark.md`` is the pre-B2 record;
+``docs/model-benchmark-post-b2.md`` measures what replaced it.
+
 **These are not CareLoop's agent schemas.** The real ones live in ``careloop/agents/schemas.py``,
 designed in commit 5 on the merits. This file was provisional when it was written and is now a
 historical artifact: it records what was put in front of six candidate models, so that the numbers
@@ -21,13 +27,14 @@ Field                ``bench`` (frozen)                      ``careloop.agents``
 ``patient_id``       present                                 present
 ``summary``          present                                 present
 destination fields   none                                    none, and now for a stated reason
-``PlannerIntent``    flat, generated from ``REGISTRY``       flat, generated from ``REGISTRY``
+``PlannerIntent``    flat, generated from ``REGISTRY``       gone: replaced by ``PROPOSAL_TOOLS``
 undeclared args      dropped by ``intent_args``              rejected at construction
 ===================  ======================================  ===================================
 
 Two constraints the real schemas kept, because the benchmark is what established they work:
-every field required and ``str``-typed with ``""`` for "not supplied", and ``PlannerIntent``
-generated from the tool registry.
+every field required and ``str``-typed with ``""`` for "not supplied", and the proposal shapes
+generated from the tool registry. The second survived B2 and the wrapper object did not: the model
+is now offered one closed schema per registered action rather than one schema naming a tool.
 
 **One caveat about replay.** The cache key also covers the rendered system prompt, and
 ``bench.catalogue`` renders from the live ``REGISTRY``. Adding a tool therefore invalidates the

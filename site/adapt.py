@@ -287,6 +287,85 @@ def _fill_evidence(text: str, evidence: dict[str, str], counterfactual: dict[str
     return text
 
 
+#: The architecture inspector's SOURCE row, as the page ships it: one fixed literal shared by every
+#: subsystem. Wiring receipts means making it read the selected subsystem instead.
+SOURCE_ROW: Final = (
+    r"{ k: \"SOURCE\", v: \"Source pending\", "
+    r"tone: \"#6b675e\", keyTone: \"#6b675e\" }"
+)
+SOURCE_ROW_WIRED: Final = (
+    r"{ k: \"SOURCE\", v: y.sourceReceipt || \"Source pending\", "
+    r"tone: \"#6b675e\", keyTone: \"#6b675e\" }"
+)
+
+
+def _receipt_url(repo: str, sha: str, path: str) -> str:
+    """A permalink to one path at one commit.
+
+    ``blob`` for a file and ``tree`` for a directory, chosen by the trailing slash the config
+    carries. GitHub does not serve a directory under ``blob``, so emitting one form for both would
+    put a 404 behind a receipt — the exact failure this whole arrangement is switched off to avoid.
+    """
+    kind = "tree" if path.endswith("/") else "blob"
+    return f"{repo.rstrip('/')}/{kind}/{sha}/{path.rstrip('/')}"
+
+
+def _wire_source_receipts(text: str, receipts: dict) -> str:
+    """Point every configured receipt at a pinned commit, or leave the page exactly as it was.
+
+    **Disabled is a true no-op.** While ``enabled`` is false this returns its input unchanged, so a
+    page built with receipts off is byte-identical to one built with the whole config section
+    deleted. That is what keeps a private repository from showing a judge a link they cannot open.
+
+    Enabled without a ``sha`` raises rather than falling back to a branch: ``blob/main`` moves, and
+    a receipt that drifts off the line it cites is a false citation carrying a working link.
+
+    Two different renderings, because the design gives the two kinds of receipt different markup.
+    Subsystem receipts land in the architecture inspector's SOURCE row, which is drawn as text, so
+    they resolve to repository paths. Ledger receipts land in ``EVIDENCE``, whose ``sourceUrl`` the
+    page already renders as a link, so they resolve to clickable pinned URLs.
+    """
+    if not receipts.get("enabled", False):
+        return text
+
+    sha = receipts.get("sha", "")
+    if not sha:
+        raise AdaptationError(
+            "source_receipts.enabled is true but sha is empty. Pin the submission commit; "
+            "this refuses to fall back to a branch name."
+        )
+    repo = receipts.get("repo", "")
+    if not repo:
+        raise AdaptationError("source_receipts.enabled is true but repo is empty")
+
+    subsystems: dict[str, list[str]] = receipts.get("subsystems", {})
+    for atlas, paths in subsystems.items():
+        anchor = rf"{{ atlas: \"{atlas}\", name: \""
+        seen = text.count(anchor)
+        if seen != 1:
+            raise AdaptationError(f"subsystem {atlas!r}: expected 1 entry, found {seen}")
+        receipt = " · ".join(p.rstrip("/") for p in paths)
+        wired = rf"{{ sourceReceipt: \"{receipt}\", atlas: \"{atlas}\", name: \""
+        text = text.replace(anchor, wired, 1)
+
+    if subsystems:
+        text = _replace_exactly_once(text, SOURCE_ROW, SOURCE_ROW_WIRED, "architecture SOURCE row")
+
+    for eid, entry in receipts.get("evidence", {}).items():
+        url = _receipt_url(repo, sha, entry["path"])
+        label = entry.get("label", "View source")
+        anchor = rf"id: \"{eid}\", category: \""
+        seen = text.count(anchor)
+        if seen != 1:
+            raise AdaptationError(f"evidence receipt {eid!r}: expected 1 entry, found {seen}")
+        text = text.replace(
+            anchor,
+            rf"sourceUrl: \"{url}\", sourceLabel: \"{label}\", id: \"{eid}\", category: \"",
+            1,
+        )
+    return text
+
+
 def _crawler_head(site: dict[str, str]) -> str:
     """The tags a crawler that does not run JavaScript will actually receive.
 
@@ -354,6 +433,7 @@ def adapt(bundle: str, config: dict, source_page: str | None = None) -> str:
     text = _repoint_lightbox_sources(text, "assets/product/")
     text = _fill_project_config(text, config.get("destinations", {}))
     text = _fill_evidence(text, config.get("evidence", {}), config.get("counterfactual", {}))
+    text = _wire_source_receipts(text, config.get("source_receipts", {}))
     text = _inject_crawler_head(text, site)
 
     after = manifest_digest(text)

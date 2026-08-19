@@ -75,3 +75,56 @@ tests = ""
 [counterfactual]
 careloop = ""
 boundary_removed = ""
+
+
+# Source receipts — where each claim on the page can be checked in the repository.
+#
+# **Disabled, deliberately, and this is the whole point of the switch.** The repository is private,
+# so a receipt rendered today would be a link a judge cannot open: a 404 under a claim is worse
+# than no link at all, and worse than the page's own honest "Source pending". While `enabled` is
+# false `adapt.py` emits nothing — the generated page is byte-identical to one built with this
+# whole section deleted, which `tests/check_site.py` asserts rather than assumes.
+#
+# Flipping this on is a two-value change and touches no markup: set `enabled = true` and `sha` to
+# the submission commit. Every mapping below is already written and already validated against the
+# working tree, so the only thing the flip adds is the ability to resolve.
+#
+# **`sha` is empty on purpose and must stay empty until the submission is locked.** `adapt.py`
+# refuses to build a receipt without one rather than falling back to a branch name: `blob/main`
+# moves, and a receipt that drifts off the line it was citing is a false citation with a working
+# link, which is the worst of both.
+[source_receipts]
+enabled = false
+sha = ""
+repo = "https://github.com/Asembris/CareLoop"
+
+# Subsystem receipts, keyed by the `atlas` id the page's SYSTEMS array uses.
+#
+# These render in the architecture inspector's SOURCE row, which the design draws as **text, not a
+# link** — so even once enabled these resolve to repository paths a reader can navigate to, and no
+# markup changes to make that happen. Each is a list because two of them are only honest as a pair:
+# a claim about human authority is carried by the lookup *and* by the test that pins it.
+[source_receipts.subsystems]
+reason = ["careloop/agents/"]
+facts = ["careloop/provenance/"]
+gate = ["careloop/policy/rules.yaml"]
+human = ["careloop/state/case.py", "tests/test_approval_capability.py"]
+act = ["careloop/tools/"]
+verify = ["careloop/graph/verify.py", "tests/test_verify_readback.py"]
+
+# Proof-ledger receipts, keyed by the id the page's EVIDENCE array uses. These *are* rendered as
+# links by the existing markup, so once enabled they become clickable pinned URLs.
+#
+# One path each, because the design gives each ledger row exactly one link. That is why the
+# unauthorized-action evidence is split across two rows rather than crammed into one: the document
+# that states the result and its limits, and the harness that produces it, are different artifacts
+# and each earns its own receipt.
+#
+# `injection` and `e2e` are deliberately unmapped. Their labels do not yet describe what the
+# repository measures — see the evidence audit — and a receipt under a wrong label would lend the
+# label credibility it has not earned. They stay pending until the label is fixed.
+[source_receipts.evidence]
+unauthorized = { path = "docs/security-evaluation.md", label = "Read the method" }
+mutation = { path = "evals/replay.py", label = "Read the harness" }
+readback = { path = "tests/test_verify_readback.py", label = "Read the test" }
+tests = { path = ".github/workflows/ci.yml", label = "Read the CI job" }

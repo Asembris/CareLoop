@@ -6097,6 +6097,174 @@ its own decision.
 
 **The session log was not updated.** Recorded here in session W, which is why this entry exists.
 
+## Session W — 2026-08-19
+
+### Position
+
+**No features. The code was finished; the claims about it were not.** An external audit found
+thirteen statements in the repository that the code contradicts, and verifying them found nine
+more. The target was that a judge who reads the repo, the diagram and the dossier and then reads
+the code cannot find a single claim that is not true.
+
+Three parts: reconcile the documentation, measure the planner seam the old benchmark no longer
+describes, and rewrite the judge-facing dossier around what actually ships.
+
+### The finding that mattered most was not on the audit's list
+
+**One wrong sentence, copied into five files and four rule diagnostics.** `TrustLevel.TRUSTED`'s
+docstring said trust originates "from trusted configuration **or an explicit human decision**".
+`careloop/graph/trusted.py`, `docs/architecture.md`, the submission diagram and `CLAUDE.md`
+invariant 3 all said the same, and four `rules.yaml` diagnostics said it to a caregiver reading a
+timeline — one of them in a sentence that then contradicted itself.
+
+Nothing in the code ever behaved that way. `promote()` refuses `TRUSTED` outright and
+`trusted_facts()` is the only producer, so this was documentation throughout. What an `Approval`
+does is release one exact `(tool_name, args_digest)`; it writes no `Fact`, and no fact's trust
+level moves when a person presses approve. The engine reads the two through different predicates —
+`arg_trust_at_least` against `case.facts`, `args_approved` against `case.approvals` — which is
+exactly why the session-N rule says an approval can never satisfy a requirement about *where* an
+effect lands. `CLAUDE.md` already said that four hundred lines below the sentence that denied it.
+
+Fixed at the source rather than at the four places an auditor happened to look, because the
+propagation is the evidence that fixing it anywhere else would not hold.
+
+### What the audit was right about
+
+Corrected, each verified against the tree first: the session log stopped at U with forty commits
+behind it; the diagram claimed "exactly two model calls" when replanning and the bounded retry make
+the count variable, and named `PlannerIntent` where the `propose_*` seam now faces the model;
+`architecture.md` said the booking reason is not compared, which session O made false; the model
+benchmark and its frozen schemas and captured prompt were unlabelled pre-B2; README and
+`judges.md` claimed "five refusals in five runs"; ADR 0003 claimed no model prose reaches a person;
+`playwright.config.ts` cited 119 vitest tests against an actual 157; and the deployment docs
+conflated one browser origin with one CloudFront backend origin.
+
+**"22 of 22" was already gone** everywhere except session T's dated record, where it belongs.
+
+### And nine more, found by checking
+
+`invoke.py` still claimed every LLM invocation goes through `structured_call`; `architecture.md`
+said the read-back compares three fields, and described trust resolution as matching a value rather
+than a `(key, value)` pair; the diagram's Caregiver node called a person "the only other source of
+TRUSTED there is"; `deploy/README.md` still justified the session capacity by an eviction Demo World
+no longer performs; the injection measurement in README and `judges.md` was pre-B2; `bench/schemas.py`
+described the live `PlannerIntent` as flat when it no longer exists; and — quietly the worst —
+`site/tests/check_site.py` froze `"2661 passed"` as a forbidden phrase, so that guard stopped
+guarding the moment the count moved and would have passed forever.
+
+### Numbers are now stated once
+
+Where a count appeared twice it was deleted rather than synchronised: `playwright.config.ts` and
+`spike_agent.py` no longer restate a suite size, and the docs point at the command that prints its
+own total. A number stated in one place cannot drift; a number stated in four will.
+
+### Part 2 — the post-B2 planner benchmark
+
+`docs/model-benchmark.md` chose the shipped model and measured a planner interface that no longer
+exists, so the choice rested on a measurement of something else. `bench/propose.py` drives the real
+`PlannerAgent.propose` against real cases through the real prompts and the closed `propose_*`
+schemas. 12 tasks × 3 repeats, **$0.0388**, recorded in
+[`model-benchmark-post-b2.md`](model-benchmark-post-b2.md).
+
+**36 of 36 structurally valid. Two retries, both recovered, both `MalformedProposal`, both on the
+same replan task.** The other three failure types never occurred, so the flat wrapper's failure —
+25 of 25 responses inventing a tool — does not reproduce on this seam. The original is preserved
+whole under a pre-B2 banner, schema shootout included; the addendum re-measures the shipped planner
+on the current seam and explicitly does **not** re-run the six-candidate comparison, so the choice
+of model still rests on the original.
+
+The task set landed in `bench/tasks/` first and turned eight of `test_bench_harness.py`'s
+assertions red: `bench.tasks.load_tasks` globs that directory and validates every entry against the
+frozen schema, so a new file does not sit beside the old set — it joins it. It lives at
+`bench/propose_tasks.json` now, with a test pinning both halves.
+
+### Part 3 — the dossier truth pass
+
+`site/` described a product nobody built: CareLoop "checked the calendar and found the conflict"
+(there is no calendar), booking on someone's behalf "always stops for a human" (a trusted booking is
+authorised autonomously), any decision committing time, money or records requires a person (booking
+and eligible upload do not), and independent verification stated broadly (only `book_appointment`
+has an external read-back). Every proof-ledger value was empty, so the page read "Verified result
+pending" throughout.
+
+**Twenty-seven copy corrections, through `adapt.py`, with both SHAs unchanged.** The page's copy
+sits after the manifest in the bundle and each string occurs exactly once, so a correction is a
+textual substitution exactly as the mobile stylesheet already was. `src/dossier.dc.html` stays the
+source and the gate asserts both directions — the new string present in `src/`, the old absent from
+the page — plus a non-vacuity check that every old claim really is in the untransformed bundle and
+none of the replacements is. No pair may carry a quote or a newline, because the bundle holds this
+copy in two encodings and only an escape-free string is identical in both.
+
+The ledger is filled from measurements with commands beside them, and `check_site.py`'s frozen
+leak-detector was inverted into a two-directional assertion that reads `site.toml`.
+
+**One row is `24 of 25` and not `25 of 25`**, which is the whole point of the exercise.
+
+### The defect this session found and did not fix
+
+**A proposal the provider cannot form correctly twice running ends the case `FAILED` rather than
+handing it to a person.** `proposal_tool_call` gets one bounded retry; when the second attempt also
+fails, `MalformedProposal` leaves the graph and `run_case` marks the case `FAILED`. Nothing unsafe
+happens — no effect, nothing unauthorised proposed — but it is a *liveness* gap of exactly the shape
+session V closed for repeated refusals and did not close for generation failures.
+
+Measured on the deployed demo: **2 of 28 `resume` runs**, 0 of 23 across the other three scenarios,
+and in both cases the exception escaped on the replan call after a refusal. The benchmark
+corroborates it from the other side: both of its retries were `MalformedProposal` on a replan task,
+and both recovered — production shows the tail where the retry does not. Reported in the README's
+honest limits, in `judges.md`'s troubleshooting list, and in the dossier's `24 of 25`.
+
+### Evidence
+
+`2720 passed, 37 skipped` (2696 before; 24 new tests for the benchmark harness), ruff clean,
+frontend **157** vitest with typecheck and build clean, e2e **104 passed / 4 skipped**, dossier
+static gate and **23** Playwright specs green, `python -m evals.replay` unchanged at 0 of 320 and
+320 of 320. Vendor bundle SHA `91667270…` and manifest SHA `510d3128…` both unchanged.
+
+The regenerated `architecture.png` (3720 × 2850) and `architecture.pdf` were opened and read: all
+five corrections legible at export size, the PDF one page at 12.92 × 9.90 in with the corrected
+strings present as selectable text.
+
+**One intermittent failure, not introduced here.** Two runs of `test_api_schema.py` failed under one
+random-order seed and passed in isolation, in deterministic order, and on a re-run. Nothing in this
+session touched `careloop/api/` or that test. Recorded rather than chased.
+
+### The lock, re-earned and honestly reported
+
+`scripts/verify_lock.py` is committed from session V's scratchpad, extended to record the tool name
+behind every refusal — a stored `reason_code` alone cannot distinguish five tools refused once from
+one tool refused five times, which is the difference between `judges.md`'s claim being true and
+being a guess. Run against the deployed demo: matrix **19 of 20**, approvals **5 of 5**, coupling
+ok. The one is the `MalformedProposal` case above.
+
+The poison-only scenario over 13 runs performed no effect and ended every run in a person's hands.
+The route varied: five of eight instrumented runs proposed all five tools and had each refused, two
+reached the refusal budget without ever proposing a booking, and one had its sixth proposal come
+back as a legitimate email to the caregiver's own address, which correctly stopped for approval.
+
+### Nothing was deployed
+
+No part of this required it. The dossier is a separate artifact and is not published; the live
+CareLoop URL is untouched apart from the scenario runs this session drove through it, each in a
+freshly minted world it gave back.
+
+### Still open, deliberately
+
+**The `MalformedProposal` liveness gap.** Reported, not fixed, per the session's own rule. Closing
+it means routing an escaped generation failure into the same `AWAITING_HUMAN` handoff a refusal
+takes — which is a lifecycle decision with its own evidence, not a docs change.
+
+**The source-receipt switch stays off with an empty SHA**, because the repository is still private.
+Flipping it is two values and no markup, and `adapt.py` still refuses to build a receipt without a
+pinned commit.
+
+### Open decisions
+
+35. **New.** Whether an escaped `MalformedProposal` should park the case for a person rather than
+    fail it. The evidence is above; the decision is not this session's.
+
+34, 33, 29, 30, 31, 22, 25, 26, 28. **Unchanged.**
+
 ## Standing risks
 
 - **The resume is a `CaseStore` reconstruction across a process boundary, not a Strands session
@@ -6167,6 +6335,14 @@ its own decision.
   `STATE_TRANSITION` into `VERIFYING` and asking where it came from costs one backwards scan, is
   written by the only writer of `Case.state`, and answers about *this* episode. Same instinct as
   edge conditions reading the store rather than node output.
+
+- **A scenario can fail on camera, and the cause is not the safety model.** Roughly one run in
+  fourteen of scenario 03 ends `FAILED` with `MalformedProposal`: the model failed twice running to
+  form a proposal satisfying its own schema, so nothing was proposed and nothing was done. Measured
+  session W, 2 of 28 deployed runs, both on the replan call after a refusal, and 0 of 23 on the
+  other three scenarios. **Before filming, run the scenario once and look at the state**; pressing
+  it again is the whole remedy. `judges.md` explains it to a judge who hits it. Closing it properly
+  is open decision 35.
 
 - **`strands-agents` is pinned to `==1.51.0`** deliberately. A bump must re-run the spike — the
   four verified facts are version-specific, and two of them (the `MultiAgentBase` node contract and

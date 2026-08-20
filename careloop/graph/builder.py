@@ -39,7 +39,9 @@ runs exactly five nodes and reports ``FAILED``.
 
 ``plan → gate → plan`` is the cycle the bound exists for, and it is now the only cycle in the graph.
 ``AWAITING_HUMAN`` and ``DONE`` end a run by having no satisfied outgoing edge, which is why neither
-needs a terminal node.
+needs a terminal node — and ``plan`` reaches ``AWAITING_HUMAN`` too, when the planner's own bounded
+retry produced no proposal to gate. That is the only outcome of ``plan`` that is not a proposal, and
+it is why ``plan → gate`` carries a condition; see the edge itself.
 
 **There was a second cycle, ``verify → plan``, and it was a defect rather than a feature.** A failed
 verification returned the case to the planner. Every entry into ``VERIFYING`` is post-effect, so
@@ -142,8 +144,22 @@ def build_graph(
     builder.add_edge(TRIAGE, EVIDENCE, when_case_is(context, CaseState.GATHERING_EVIDENCE))
     builder.add_edge(EVIDENCE, PLAN, when_case_is(context, CaseState.PLANNING))
 
-    # The planner does not decide whether its proposal is worth gating; every proposal is gated.
-    builder.add_edge(PLAN, GATE)
+    # **Every proposal is gated, and the condition is what makes that checkable.**
+    #
+    # The planner still does not decide whether its proposal is worth checking — it has no way to
+    # express that and this condition gives it none. What the condition asks is whether there is a
+    # proposal at all. ``PlanNode`` leaves the case in ``PLANNING`` when it produced one and parks
+    # it in ``AWAITING_HUMAN`` when the bounded retry produced nothing, and those are its only two
+    # outcomes, so "the case is still PLANNING" and "a proposal was written" are the same statement.
+    #
+    # It was unconditional until the plan node could park, and then it had to change. Measured
+    # both ways: an unconditional edge routes a *parked* case straight into the gate, where a
+    # first-proposal exhaustion was overwritten with ``FAILED`` by the gate's own no-proposal
+    # branch, and an exhaustion after a refusal had the gate re-judge the proposal it had already
+    # denied — on a case a person had just been handed. Same reasoning as the absent
+    # ``verify -> plan`` edge: an edge is what stops the graph routing somewhere, and a node's own
+    # guard is not a substitute for one.
+    builder.add_edge(PLAN, GATE, when_case_is(context, CaseState.PLANNING))
 
     builder.add_edge(GATE, EXECUTE, when_case_is(context, CaseState.READY_TO_EXECUTE))
     # The replan cycle. A denied proposal leaves the case in PLANNING, and this edge takes it back

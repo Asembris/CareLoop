@@ -66,11 +66,17 @@ export type TimelineKind =
   | "VERIFICATION_PASSED"
   | "VERIFICATION_FAILED";
 
-/** The seven members of `careloop.policy.verdicts.ReasonCode`.
+/** The nine members of `careloop.policy.verdicts.ReasonCode`.
  *
  *  Note `AUTHORITY_NOT_TRUSTED`, which the mock adapter invented as `AUTHORITY_ESCALATION`. The
  *  two the backend keeps apart are `INSUFFICIENT_FACT_TRUST` (remediable — validate and repropose)
- *  and `AUTHORITY_NOT_TRUSTED` (irremediable — no validator can raise an AUTHORITY argument). */
+ *  and `AUTHORITY_NOT_TRUSTED` (irremediable — no validator can raise an AUTHORITY argument).
+ *
+ *  The last three are the reasons a *case* stopped rather than reasons a call was refused, so no
+ *  rule carries them and the policy engine never emits one. `DecisionView.reason_code` is typed
+ *  `ReasonCode | string` precisely so a build that has not been updated still renders — but a code
+ *  missing from this union is a code nothing in `services/` was made to say anything truthful
+ *  about, which is why it is kept complete rather than relied upon to degrade. */
 export type ReasonCode =
   | "DESTINATION_NOT_TRUSTED"
   | "AUTHORITY_NOT_TRUSTED"
@@ -79,7 +85,8 @@ export type ReasonCode =
   | "INSUFFICIENT_FACT_TRUST"
   | "NO_RULE_MATCH"
   | "NO_SAFE_ACTION_AVAILABLE"
-  | "EXTERNAL_STATE_NOT_CONFIRMED";
+  | "EXTERNAL_STATE_NOT_CONFIRMED"
+  | "NO_VALID_PROPOSAL_PRODUCED";
 
 /** `careloop.api.runs.RunState`. `SETTLED` means the graph stopped — read the case for what it
  *  stopped *at*: parked for a decision, done, or failed. */

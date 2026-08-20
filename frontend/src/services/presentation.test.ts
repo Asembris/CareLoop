@@ -246,6 +246,7 @@ describe("decisions", () => {
       "INSUFFICIENT_FACT_TRUST",
       "NO_RULE_MATCH",
       "EXTERNAL_STATE_NOT_CONFIRMED",
+      "NO_VALID_PROPOSAL_PRODUCED",
       "A_CODE_THIS_BUILD_HAS_NEVER_HEARD_OF",
       ""
     ]) {
@@ -316,12 +317,47 @@ describe("decisions", () => {
     }
   });
 
+  it("does not tell a caregiver policy refused something when nothing was proposed", () => {
+    // The third non-approval reason, and it is not the other two. `NO_SAFE_ACTION_AVAILABLE` says
+    // every action was refused *by policy*; `NO_VALID_PROPOSAL_PRODUCED` says no action was ever
+    // formed, so there was nothing for policy to refuse. Sharing the copy would send a caregiver
+    // looking for a rule that never matched, and would claim a defence fired when what happened is
+    // that CareLoop could not write down a next step.
+    const copy = decisionCopy("NO_VALID_PROPOSAL_PRODUCED", "", {});
+    expect(copy.title).toBe("CareLoop could not work out a safe next step");
+    expect(copy.body).not.toContain("refused");
+    expect(copy.body).not.toContain("policy");
+    expect(copy.body).toContain("Nothing was sent, booked or changed");
+
+    const others = [
+      decisionCopy("NO_SAFE_ACTION_AVAILABLE", "", {}).body,
+      decisionCopy("EXTERNAL_STATE_NOT_CONFIRMED", "book_appointment", {}).body
+    ];
+    for (const other of others) expect(copy.body).not.toBe(other);
+  });
+
+  it("promises no recovery action that does not exist", () => {
+    // The correction that shaped this copy. There is no in-system way to ask CareLoop to try
+    // again after it could not form a proposal: no approval is raised, `recheckable` is false, and
+    // `reopen_case` refuses anything that is not DONE. Copy offering any of those would be the
+    // small lie a decided card refuses to tell — worse here than elsewhere, because the person
+    // would wait for a button that is never going to appear.
+    const copy = decisionCopy("NO_VALID_PROPOSAL_PRODUCED", "", {});
+    const text = `${copy.title} ${copy.body} ${copy.after}`;
+    for (const forbidden of ["look again", "ask it to", "approve it", "Approve", "resume", "retry"]) {
+      expect(text).not.toContain(forbidden);
+    }
+    expect(copy.after).toContain("nothing here to approve");
+    expect(copy.after).toContain("picked up by hand");
+  });
+
   it("still offers no approval affordance for it", () => {
     // The safety half, separate from the copy half: a new reason to stop must never arrive with
     // authority attached, and `decisionKindFor` defaulting closed is what guarantees that. The
     // re-check does not change this — it is a different axis, carried by `recheckable`, and a
     // re-checkable card still renders no Approve and no Reject.
     expect(decisionKindFor("EXTERNAL_STATE_NOT_CONFIRMED")).toBe("NO_SAFE_ACTION_AVAILABLE");
+    expect(decisionKindFor("NO_VALID_PROPOSAL_PRODUCED")).toBe("NO_SAFE_ACTION_AVAILABLE");
   });
 });
 

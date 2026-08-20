@@ -619,6 +619,61 @@ describe("NO_SAFE_ACTION_AVAILABLE", () => {
   });
 });
 
+describe("NO_VALID_PROPOSAL_PRODUCED", () => {
+  const handoff = () =>
+    approval({ reason_code: "NO_VALID_PROPOSAL_PRODUCED", tool_name: "", args: {} });
+
+  const parked = () =>
+    card({
+      case_id: "demo-referral",
+      state: "AWAITING_HUMAN",
+      section: "needs_you",
+      decision: handoff()
+    });
+
+  it("renders no affordance at all, because there is no operation behind one", async () => {
+    // Three absences, and they are three different claims. Approve and Reject are absent because
+    // no approval was raised — the same reason they are absent for the parking above. The
+    // re-check is absent for a different reason: nothing was carried out, so there is no external
+    // record to look at again, and `recheckable` is false in the backend's own projection.
+    serve([parked()]);
+    show();
+
+    await screen.findByText("CareLoop could not work out a safe next step");
+    expect(screen.getByText("MANUAL FOLLOW-UP REQUIRED")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reject" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Not now" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Check the clinic again" })).not.toBeInTheDocument();
+  });
+
+  it("does not claim policy refused anything", async () => {
+    // The copy defect this value exists to avoid. Every other non-approval card says a defence
+    // fired; here nothing was proposed, so nothing was refused, and telling a caregiver otherwise
+    // sends them looking for a rule that never matched.
+    serve([parked()]);
+    show();
+
+    await screen.findByText("CareLoop could not work out a safe next step");
+    expect(screen.queryByText("No safe action is available")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Every action CareLoop could take here was refused/)
+    ).not.toBeInTheDocument();
+  });
+
+  it("promises nothing the product cannot do", async () => {
+    // There is no in-system way forward from this handoff: no approval, no re-check, and no
+    // reopen. The card has to be honest about that rather than imply a button that never comes.
+    serve([parked()]);
+    show();
+
+    await screen.findByText(/nothing here to approve/);
+    expect(screen.getByText(/picked up by hand/)).toBeInTheDocument();
+    expect(screen.queryByText(/ask it to look again/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/CareLoop will not retry/)).not.toBeInTheDocument();
+  });
+});
+
 describe("EXTERNAL_STATE_NOT_CONFIRMED", () => {
   const handoff = (over = {}) =>
     approval({

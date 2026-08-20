@@ -87,9 +87,23 @@ class ClinicRefused(Exception):
     """Raised when the clinic answered and declined.
 
     An unknown slot, a slot somebody else holds, or a key already recorded against a different
-    booking. The message carries the clinic's own detail because it is a diagnostic and never
-    reaches a model: a node raising is turned into a ``FAILED`` case carrying the exception's
-    *type* name, and the text stops there.
+    booking.
+
+    **The message is built from CareLoop's own vocabulary and never from the clinic's.** It used
+    to interpolate the response body — ``the clinic refused POST /clinic/appointments with 409:
+    <whatever the service said>`` — on the reasoning that a node raising becomes a ``FAILED`` case
+    carrying only the exception's *type*, so the text stopped there. **It did not.** An exception
+    that escapes a node escapes the graph, and ``Graph.stream_async`` runs under
+    ``use_span(..., end_on_exit=True)``, whose default ``record_exception=True`` copies
+    ``str(exception)`` into an OpenTelemetry ``exception.message`` attribute verbatim. Measured
+    this session against a loopback Demo World: a slot collision put the clinic's own sentence,
+    including a confirmation id, into span telemetry. A service CareLoop does not control chooses
+    that text, so treating it as a private diagnostic was a claim about the transport rather than
+    about the exception.
+
+    So the two things this carries are both CareLoop's: ``operation`` names what CareLoop was
+    trying to do, and ``status_code`` is the number the transport returned. The clinic's body is
+    not read, not stored, and not retained anywhere — see :meth:`ClinicClient._request`.
 
     ``status_code`` is carried so that a *caller* can tell what kind of refusal it received without
     parsing the message. Nothing above :mod:`careloop.tools.clinic` reads it — the graph layer sees
@@ -97,8 +111,9 @@ class ClinicRefused(Exception):
     consulted, to decide whether a refusal is the clinic saying it holds no such appointment.
     """
 
-    def __init__(self, message: str, *, status_code: int) -> None:
-        super().__init__(message)
+    def __init__(self, *, operation: str, status_code: int) -> None:
+        super().__init__(f"the clinic refused {operation} with status {status_code}")
+        self.operation = operation
         self.status_code = status_code
 
 
@@ -171,6 +186,7 @@ class ClinicClient:
         response = self._request(
             "POST",
             "/clinic/appointments",
+            operation="book_appointment",
             json={
                 "provider_id": args["provider_id"],
                 "patient_id": args["patient_id"],
@@ -199,11 +215,15 @@ class ClinicClient:
             ClinicRefused: if the clinic answered and declined for any other reason.
         """
         try:
-            response = self._request("GET", f"/clinic/appointments/{confirmation_id}")
+            response = self._request(
+                "GET",
+                f"/clinic/appointments/{confirmation_id}",
+                operation="read_appointment",
+            )
         except ClinicRefused as refusal:
             if refusal.status_code == httpx.codes.NOT_FOUND:
                 raise AppointmentNotFound(
-                    str(refusal), status_code=refusal.status_code
+                    operation=refusal.operation, status_code=refusal.status_code
                 ) from refusal
             raise
         return _appointment(response)
@@ -213,7 +233,7 @@ class ClinicClient:
 
         Demo control only, and one of the two primitives :meth:`put_back` chooses between.
         """
-        self._request("POST", "/demo/reset")
+        self._request("POST", "/demo/reset", operation="reset_world")
 
     def end_session(self) -> bool:
         """End this client's world. Returns whether Demo World was still holding one.
@@ -238,7 +258,9 @@ class ClinicClient:
                 "this client reaches the clinic's default world, which has no lifetime to end; "
                 "only a session-scoped client may end the world it is scoped to"
             )
-        response = self._request("DELETE", "/demo/session", timeout=END_SESSION_TIMEOUT)
+        response = self._request(
+            "DELETE", "/demo/session", operation="end_session", timeout=END_SESSION_TIMEOUT
+        )
         return bool(response.json()["existed"])
 
     def put_back(self) -> bool | None:
@@ -270,7 +292,22 @@ class ClinicClient:
         """Release the underlying connection pool."""
         self._client.close()
 
-    def _request(self, method: str, path: str, **kwargs: object) -> httpx.Response:
+    def _request(
+        self, method: str, path: str, *, operation: str, **kwargs: object
+    ) -> httpx.Response:
+        """Perform one clinic call, or raise in CareLoop's own words.
+
+        ``operation`` is what CareLoop was trying to do, named here rather than derived from
+        ``path``: a path is a template plus values — ``/clinic/appointments/{confirmation_id}`` —
+        and formatting one into a refusal is how identifiers get into diagnostics by accident. The
+        four callers each name their own, so what an exception says is chosen at the call site by
+        CareLoop and cannot be influenced by the request or by the answer.
+
+        **The response body is never read on the failing path.** There is deliberately no helper
+        that turns it into a string: a refusal carries ``operation`` and ``status_code`` and
+        nothing else, so there is no field for the clinic's text to sit in and no later change that
+        could serialise it by accident. See :class:`ClinicRefused` for what that cost and why.
+        """
         try:
             response = self._client.request(method, f"{self._base_url}{path}", **kwargs)
         except httpx.HTTPError as unreachable:
@@ -279,21 +316,8 @@ class ClinicClient:
             ) from unreachable
 
         if response.status_code >= 400:
-            raise ClinicRefused(
-                f"the clinic refused {method} {path} with {response.status_code}: "
-                f"{_detail(response)}",
-                status_code=response.status_code,
-            )
+            raise ClinicRefused(operation=operation, status_code=response.status_code)
         return response
-
-
-def _detail(response: httpx.Response) -> str:
-    """The clinic's own explanation, if it gave one in the shape FastAPI uses."""
-    try:
-        body = response.json()
-    except ValueError:
-        return response.text
-    return str(body.get("detail", body)) if isinstance(body, dict) else str(body)
 
 
 def _appointment(response: httpx.Response) -> AppointmentBooked:

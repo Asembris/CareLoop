@@ -299,16 +299,45 @@ class TestTheGraphShape:
 
         assert out_of_dispatch == {"triage", "evidence", "plan", "execute", "verify"}
 
-    def test_every_proposal_is_gated_unconditionally(self) -> None:
-        """The plan → gate edge carries no condition: the planner does not choose to be checked."""
-        graph = build_graph(context_for(opened_case()))
+    def test_every_proposal_is_gated_and_the_planner_cannot_opt_out(self) -> None:
+        """The plan → gate edge asks whether there is a proposal, never whether to check one.
+
+        It carried no condition at all until ``PlanNode`` could park a case, and the change is
+        narrower than it looks. ``PlanNode`` has exactly two outcomes: a proposal, with the case
+        left in ``PLANNING``; or no proposal at all, with the case parked in ``AWAITING_HUMAN``
+        because the bounded retry in ``careloop.agents.invoke.proposal_tool_call`` produced nothing
+        well-formed. So "the case is still ``PLANNING``" and "a proposal was written" are the same
+        statement, and the condition cannot express anything the planner would want it to.
+
+        The behavioural half — that a proposal is always gated, and that a parked case never
+        reaches the gate — is asserted through real runs in ``tests/test_proposal_exhaustion.py``.
+        """
+        context = context_for(opened_case(state=CaseState.PLANNING))
+        graph = build_graph(context)
         plan_to_gate = next(
             edge
             for edge in graph.edges
             if (edge.from_node.node_id, edge.to_node.node_id) == ("plan", "gate")
         )
 
-        assert plan_to_gate.condition is None
+        assert plan_to_gate.condition is not None
+        assert plan_to_gate.condition(None) is True
+
+    def test_a_parked_case_does_not_reach_the_gate(self) -> None:
+        """The other half of the same edge, and the reason it stopped being unconditional.
+
+        An unconditional edge routes a case the plan node has just handed to a person straight into
+        the policy gate, which is the one place a stale proposal could be judged again.
+        """
+        context = context_for(opened_case(state=CaseState.AWAITING_HUMAN))
+        graph = build_graph(context)
+        plan_to_gate = next(
+            edge
+            for edge in graph.edges
+            if (edge.from_node.node_id, edge.to_node.node_id) == ("plan", "gate")
+        )
+
+        assert plan_to_gate.condition(None) is False
 
 
 def _proposed(case: Case, tool_name: str, args: dict[str, str]) -> Case:

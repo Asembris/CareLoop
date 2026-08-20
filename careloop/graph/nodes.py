@@ -17,12 +17,20 @@ judged against the previous state.
 **Two nodes call a model.** ``triage`` and ``plan``, once each, and neither can act on what comes
 back — the gate node decides, and it is not the node that asked.
 
+**Three nodes park a case for a person, and they mean three different things.** ``plan`` parks when
+no valid next action could be formed at all; ``gate`` parks when every action was formed and
+refused; ``verify`` parks when an action was carried out and cannot be confirmed. All three write a
+``MANUAL_HANDOFF_REQUIRED`` entry, raise **no** ``Approval``, and are told apart by their reason
+code — see :func:`_park_with_nothing_proposable`, :func:`_park_with_nothing_safe_to_do` and
+:func:`_park_with_nothing_certifiable`.
+
 The node bodies read top to bottom in the order a case moves through them:
 
 ``dispatch``  routes a case to wherever it should resume, and writes nothing
 ``triage``    classifies the inbound event                        NEW → GATHERING_EVIDENCE
 ``evidence``  reads documents, records facts, validates them      GATHERING_EVIDENCE → PLANNING
 ``plan``      asks the planner for one action                     PLANNING (no transition)
+                                                                  PLANNING → AWAITING_HUMAN
 ``gate``      decides allow / park / replan                       PLANNING → READY_TO_EXECUTE
                                                                   PLANNING → AWAITING_HUMAN
 ``execute``   dispatches the tool through both enforcement points READY_TO_EXECUTE → EXECUTING
@@ -53,6 +61,7 @@ from strands.agent import AgentResult
 from strands.multiagent.base import MultiAgentBase, MultiAgentResult, NodeResult, Status
 from strands.telemetry.metrics import EventLoopMetrics
 
+from careloop.agents.invoke import RECOVERABLE_PROPOSAL_FAILURES
 from careloop.graph.context import (
     Proposal,
     Refusal,
@@ -248,18 +257,40 @@ class EvidenceNode(DeterministicNode):
 
 
 class PlanNode(DeterministicNode):
-    """Ask the planner for one next action. No transition — the case stays ``PLANNING``.
+    """Ask the planner for one next action.
 
-    The proposal is written to the timeline as ``PLAN_PROPOSED`` and read back from there by the
-    gate node. It is a proposal and nothing else: the planner's schema has no field through which
-    it could ask to be executed, and this node has no code that would carry one out.
+    Two outcomes, and only the first is a proposal.
+
+    A proposal is written to the timeline as ``PLAN_PROPOSED`` and read back from there by the
+    gate node, with **no transition** — the case stays ``PLANNING``. It is a proposal and nothing
+    else: the planner's schema has no field through which it could ask to be executed, and this
+    node has no code that would carry one out.
+
+    **A provider that cannot form one parks the case instead.** ``PLANNING`` →
+    ``AWAITING_HUMAN``, through :func:`_park_with_nothing_proposable`. The bound is
+    :func:`careloop.agents.invoke.proposal_tool_call`'s and this node does not add to it: by the
+    time the exception arrives here the one retry has already been spent, so what is caught is
+    *exhaustion*, never a first failure.
+
+    **The caught set is exactly** :data:`careloop.agents.invoke.RECOVERABLE_PROPOSAL_FAILURES`,
+    imported rather than restated, because a second list is a second place to drift and the one
+    direction that must not drift is wider. Everything else — a throttle, a credential error, a
+    wedged call the node timeout kills, a bug in this package — still leaves the node, still
+    reaches :func:`careloop.graph.runner.run_case`, and still ends the case ``FAILED``. That is
+    the distinction ``FAILED`` exists to carry: something broke, rather than the model failed to
+    write down an action.
     """
 
     async def run(self) -> str:
         case = self.context.current_case()
         base = case.version
 
-        intent = await self.context.planner.propose(case, self.context.denials(case))
+        try:
+            intent = await self.context.planner.propose(case, self.context.denials(case))
+        except RECOVERABLE_PROPOSAL_FAILURES as failure:
+            case = _park_with_nothing_proposable(case, failure, self.context.now())
+            self.context.commit(case, expected_version=base)
+            return "plan: no valid next action could be formed; parked for manual handling"
 
         case = append_event(
             case,
@@ -969,6 +1000,66 @@ def _park_with_nothing_safe_to_do(case: Case, now, reason: NothingLeftToTry) -> 
         CaseState.AWAITING_HUMAN,
         reason=reason.summary,
         actor="policy",
+        now=now,
+    )
+
+
+def _park_with_nothing_proposable(case: Case, failure: Exception, now) -> Case:
+    """Stop because no next action could be formed, and hand the case to a person.
+
+    ``PLANNING`` → ``AWAITING_HUMAN``. **No approval is raised**, for the reason the two parks
+    below and above raise none and then one more of its own: there is not merely no proposal worth
+    authorising, there is **no proposal at all**. Nothing was written to the timeline, nothing was
+    evaluated, and on a case that had already been refused once ``latest_proposal`` still names the
+    call policy *denied* — which is precisely the record an approval here would release. That is
+    not hypothetical: it is the defect :func:`_park_with_nothing_safe_to_do` documents, one node
+    earlier.
+
+    **A sibling rather than a branch, for the reason the other two are siblings.** The three mean
+    different things — every action was refused; an action was carried out and cannot be
+    confirmed; no action could be written down — and they are told apart by their reason code,
+    which is what a reason code is for. Folding them into one writer would buy a diagnostic that is
+    false for whichever case it was not written about.
+
+    **Nothing the model produced survives.** The arguments that failed validation are discarded
+    inside :func:`careloop.agents.invoke._one_proposal_attempt`; only the *type* of the failure is
+    recorded here, and only in the diagnostic the API withholds. That is
+    :mod:`careloop.agents.invoke`'s own discipline — its two log lines carry the exception type and
+    never its message — and it is kept by construction rather than by everyone remembering: a
+    ``ValidationError`` renders ``input_value``, and that input is model output derived from
+    document content.
+
+    **The reason code is the product-facing truth and the exception type is not.**
+    ``NO_VALID_PROPOSAL_PRODUCED`` is what a caregiver, a projection and a lifecycle read;
+    ``MalformedProposal`` is an implementation name and stays in the logs and in this diagnostic.
+    So it is deliberately absent from the payload, which is the allowlisted half a response can
+    carry.
+    """
+    case = append_event(
+        case,
+        kind=TimelineKind.MANUAL_HANDOFF_REQUIRED,
+        actor="planner",
+        summary="no valid next action could be formed; manual follow-up is required",
+        diagnostic=(
+            f"the planner was asked for one next action and produced nothing that satisfies an "
+            f"offered proposal schema. careloop.agents.invoke.proposal_tool_call had already "
+            f"spent its one retry — MAX_PROPOSAL_ATTEMPTS attempts against the identical schemas "
+            f"and the identical prompts — so this is exhaustion rather than a first failure, and "
+            f"asking again is what has just been tried. The last attempt failed with "
+            f"{type(failure).__name__}; the arguments it carried were discarded rather than "
+            f"recorded, so nothing model-authored is on this case from it. Parked rather than "
+            f"failed: nothing broke, nothing was proposed, nothing was evaluated and nothing was "
+            f"done. No approval is raised — there is no call to authorise, and the newest proposal "
+            f"this case carries, if it carries one at all, is one policy has already refused."
+        ),
+        payload={"reason_code": str(ReasonCode.NO_VALID_PROPOSAL_PRODUCED)},
+        now=now,
+    )
+    return transition(
+        case,
+        CaseState.AWAITING_HUMAN,
+        reason="no valid next action could be formed",
+        actor="planner",
         now=now,
     )
 

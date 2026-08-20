@@ -455,11 +455,13 @@ const REFUSAL_PHRASES: Record<string, string> = {
   REQUIRES_HUMAN_APPROVAL: "without a person's decision",
   NO_RULE_MATCH: "with no rule permitting it",
   NO_SAFE_ACTION_AVAILABLE: "safely",
-  // Never reached in practice: this code is carried by a MANUAL_HANDOFF_REQUIRED entry and never by
-  // a POLICY_DENY, because nothing was refused — an action was carried out and could not be
-  // confirmed. Listed so the map stays total over the backend's vocabulary rather than falling
-  // through to a bare tool phrase if a future writer ever does deny with it.
-  EXTERNAL_STATE_NOT_CONFIRMED: "and could not be confirmed afterwards"
+  // Never reached in practice: these two are carried by a MANUAL_HANDOFF_REQUIRED entry and never
+  // by a POLICY_DENY, because nothing was refused — an action was carried out and could not be
+  // confirmed, or no action could be formed at all. Listed so the map stays total over the
+  // backend's vocabulary rather than falling through to a bare tool phrase if a future writer ever
+  // does deny with one.
+  EXTERNAL_STATE_NOT_CONFIRMED: "and could not be confirmed afterwards",
+  NO_VALID_PROPOSAL_PRODUCED: "before it could be written down"
 };
 
 export function blockedFor(toolName: string, reasonCode: string): BlockedAction {
@@ -543,6 +545,32 @@ export function decisionCopy(
       after:
         "CareLoop will not repeat the action. If you have checked or corrected the other " +
         "system, you can ask it to look again.",
+      approveLabel: "Approve",
+      rejectLabel: "Reject",
+      recheckLabel: "Check the clinic again"
+    };
+  }
+
+  // The third reason a case stops with nothing to approve, and it is not the one below either.
+  // That one says every action was refused *by policy*; this one says no action was ever formed,
+  // so there was nothing for policy to refuse. Using the wrong one would tell a caregiver a
+  // defence fired when what actually happened is that CareLoop could not write down a next step —
+  // and would send them looking for a rule that never matched.
+  //
+  // **Nothing here offers a way forward inside CareLoop, because there is not one.** There is no
+  // approval to grant, no external record to look at again, and no button that asks CareLoop to
+  // try again. Copy implying any of those would be the small lie a decided card refuses to tell.
+  if (reasonCode === "NO_VALID_PROPOSAL_PRODUCED") {
+    return {
+      title: "CareLoop could not work out a safe next step",
+      body:
+        "CareLoop tried twice to work out a valid next action here and could not. It stopped " +
+        "rather than guess. Nothing was sent, booked or changed, and nothing will be done " +
+        "automatically — this one needs a person.",
+      facts,
+      after:
+        "Nothing was changed. CareLoop will not try again on its own, and there is nothing here " +
+        "to approve — this case has to be picked up by hand.",
       approveLabel: "Approve",
       rejectLabel: "Reject",
       recheckLabel: "Check the clinic again"

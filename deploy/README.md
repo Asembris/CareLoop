@@ -76,6 +76,78 @@ argument; `tests/test_session_lifecycle.py` carries the property.
 | `careloop-demoworld.service` | the clinic, port 8100 |
 | `bootstrap.sh` | runs **on** the instance: installs Python, the venv, the units |
 | `push.sh` | runs **locally**: builds the frontend, ships the tree, restarts the services |
+| `../scripts/observability.py` | the one span processor CareLoop adds: it removes an attribute and does nothing else |
+
+## Observability
+
+The API unit runs under `opentelemetry-instrument` with the AWS distro, which sends **traces only**
+to CloudWatch and surfaces them in Bedrock AgentCore GenAI Observability. The whole decision is
+[ADR 0004](../docs/adr/0004-agentcore-observability-out-of-band.md); what matters here is how to
+operate it.
+
+```
+EC2 CareLoop ──ADOT SDK──▶ SigV4-signed OTLP ──▶ CloudWatch Transaction Search / X-Ray
+                                                      ──▶ AgentCore GenAI Observability
+```
+
+No collector process: AWS states the ADOT Collector is not supported for agent observability outside
+AgentCore Runtime, so the application signs and posts its own OTLP. Nothing new runs on the box.
+
+**Turning it off is one line.** `careloop-api.service` carries the instrumented `ExecStart` and,
+immediately below it, the uninstrumented one commented out. Swap the two, `systemctl daemon-reload
+&& systemctl restart careloop-api`, and CareLoop runs exactly as it did before — the global tracer
+provider becomes a no-op, nothing is recorded, and the startup banner says `telemetry (not
+instrumented)`. No reinstall, no redeploy, no code change. Telemetry is not part of CareLoop's
+availability contract, and that line is where it is true.
+
+**What is and is not exported.** Model id, token counts, latency, HTTP status, `rpc.method`, region,
+and the shape of the run. Not prompts, not model responses, not system prompts, not evidence text,
+not patient identifiers, not caregiver names, not tool arguments, not tool results, not session
+tokens, not credentials, and not external response bodies. Two settings in `careloop.env` pin that
+rather than inheriting it, because both libraries default the unsafe way in one direction each —
+read the comments there before changing either.
+
+**The access key id is redacted in-process.** ADOT attaches the calling credential's access key id
+to every AWS span and offers no switch. `scripts/observability.py` overwrites it with `[redacted]`
+before it can be exported. It is a temporary `ASIA…` id from the instance profile and discloses only
+the account id, so this is tidiness rather than a fix — but the traces are meant to be published, so
+it is removed. `tests/test_observability.py` proves it, including the case where the processor is
+absent.
+
+### One-time AWS setup, per account
+
+Not performed by `push.sh` and not automated on purpose — each of these is an account-level change
+that should be made deliberately.
+
+```bash
+# 1. Transaction Search: let X-Ray write spans into CloudWatch Logs.
+aws logs put-resource-policy --policy-name TransactionSearchXRayAccess --policy-document '{"Version":"2012-10-17","Statement":[{"Sid":"TransactionSearchXRayAccess","Effect":"Allow","Principal":{"Service":"xray.amazonaws.com"},"Action":"logs:PutLogEvents","Resource":["arn:aws:logs:us-east-1:<ACCOUNT>:log-group:aws/spans:*","arn:aws:logs:us-east-1:<ACCOUNT>:log-group:/aws/application-signals/data:*"],"Condition":{"ArnLike":{"aws:SourceArn":"arn:aws:xray:us-east-1:<ACCOUNT>:*"},"StringEquals":{"aws:SourceAccount":"<ACCOUNT>"}}}]}'
+aws xray update-trace-segment-destination --destination CloudWatchLogs --region us-east-1
+
+# 2. The agent log group, and its retention. NEVER EXPIRE is the default and is not acceptable.
+aws logs create-log-group --log-group-name /aws/bedrock-agentcore/runtimes/careloop --region us-east-1
+aws logs put-retention-policy --log-group-name /aws/bedrock-agentcore/runtimes/careloop --retention-in-days 14 --region us-east-1
+
+# 3. Attach the telemetry statement to the EC2 instance profile role (see ADR 0004 for the table).
+```
+
+Verify in the console: **CloudWatch → Application Signals (APM) → Transaction search** shows
+enabled, and **CloudWatch → GenAI Observability → Bedrock AgentCore** lists `careloop` after the
+first scenario is run.
+
+### Deploying it, and checking the boot
+
+`opentelemetry-instrument` is part of process startup, so the instrumented unit is the one place
+telemetry can affect availability. Check the boot rather than assuming it:
+
+```bash
+sudo systemctl restart careloop-api
+systemctl is-active careloop-api                       # active
+journalctl -u careloop-api -n 20 --no-pager | grep telemetry   # ADOT, access key id redacted
+curl -fsS https://<distribution>.cloudfront.net/api/health      # {"status":"ok"}
+```
+
+If any of those fails, swap to the commented `ExecStart` and restart; the demo is unaffected.
 
 ## Deploying
 

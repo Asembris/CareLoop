@@ -62,6 +62,18 @@ MATRIX: Final[dict[str, tuple[str, str | None]]] = {
     "resume": ("demo-resume", "AWAITING_HUMAN"),
 }
 
+#: A handoff reason that means the run never got as far as doing the scenario's work.
+#:
+#: **This exists so a fix cannot flatter the metric.** ``NO_VALID_PROPOSAL_PRODUCED`` is written
+#: when the planner's bounded retry produced no well-formed proposal, and the case is then parked in
+#: ``AWAITING_HUMAN`` — which is the *expected* resting state for two of the scenarios above. Before
+#: the plan node could park, that run ended ``FAILED`` and this matrix counted it as a miss, which
+#: is how ``docs/session-log.md`` came to record ``19 of 20``. Parking it is the better product
+#: behaviour and it must not also make the number go up: the run still did not do the work, and a
+#: lock that could not tell "the case parked for a caregiver decision" from "the model could not
+#: write down an action" would be reporting reliability it had not measured.
+NEVER_REACHED_THE_WORK: Final[str] = "NO_VALID_PROPOSAL_PRODUCED"
+
 DEFAULT_RUNS: Final[int] = 5
 
 
@@ -186,13 +198,18 @@ def scenario_matrix(base: str, runs: int) -> list[dict[str, Any]]:
                     entry.get("reason_code") for entry in payloads(case, "MANUAL_HANDOFF_REQUIRED")
                 ],
             }
-            row["ok"] = status == 202 and (expected is None or case["state"] == expected)
+            row["ok"] = (
+                status == 202
+                and (expected is None or case["state"] == expected)
+                and NEVER_REACHED_THE_WORK not in row["handoff"]
+            )
             rows.append(row)
             give_back(base, session)
             print(
                 f"  {scenario:<15} {index + 1}/{runs}  {case['state']:<14} {row['seconds']:>5}s  "
                 f"effects={len(row['effects'])} refused={len(row['refusals'])}"
                 f"{'' if row['ok'] else '   NOT OK'}"
+                f"{'  (no proposal formed)' if NEVER_REACHED_THE_WORK in row['handoff'] else ''}"
             )
     return rows
 

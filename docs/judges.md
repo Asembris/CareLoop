@@ -139,12 +139,16 @@ outside world agreed. A seal that played on every completion would mean nothing.
   refused until it settles, and the button waits rather than starting against a half-finished
   world. Up to a few seconds, only ever while something really is running, and never because
   somebody else is using the demo.
-- **A case says FAILED.** `failure_reason` on the case names the cause, and neither cause is the
-  safety model giving way. `ClinicRefused` means the slot was already taken — two scenarios booking
-  the same slot, which pressing a scenario resets your world to prevent. `MalformedProposal` means
-  the model failed twice running to produce a proposal that satisfies its own schema, so nothing
-  was proposed and nothing was done; press the scenario again. Measured on 2026-08-19 at 2 runs in
-  28 on scenario 03, and not seen on the others.
+- **A case says FAILED.** `failure_reason` on the case names the cause, and it is not the safety
+  model giving way. `ClinicRefused` means the slot was already taken — two scenarios booking the
+  same slot, which pressing a scenario resets your world to prevent.
+- **A case says "CareLoop could not work out a safe next step".** The model failed twice running to
+  produce a proposal that satisfies its own schema, so nothing was proposed, nothing was evaluated
+  and nothing was done. The case stops in **Needs You** rather than failing, because that is what
+  actually happened — CareLoop stopped and a person is needed. There is nothing on the card to
+  press, by design: no action was proposed, so there is none to approve. Press the scenario again.
+  Measured on 2026-08-19 at 2 runs in 28 on scenario 03, and not seen on the others; at that point
+  it still ended `FAILED`.
 - **The dashboard is suddenly empty.** Your world was forgotten — half an hour idle, or the host
   redeployed — and a new one was minted for you. Press a scenario and it runs from the top.
 - **The dashboard seems a beat behind.** It is, deliberately and by about a second. The backend

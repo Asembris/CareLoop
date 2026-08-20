@@ -177,14 +177,17 @@ One page of caption, including what each zone means and why there are exactly tw
   provenance.
 - The offline suite only ever sees the mock model, so green means the spine is correct, not that a
   provider is well-behaved. Three separate sessions found bugs that no offline test could catch.
-- **A proposal the provider cannot form correctly twice running ends the case `FAILED` rather than
-  handing it to a person.** The planner's `propose_*` call gets one bounded retry; if the second
-  answer also fails to satisfy the schema, `MalformedProposal` leaves the graph and the case is
-  marked `FAILED`. Nothing unsafe happens — no effect is performed and nothing unauthorized is
-  proposed — but it is a *liveness* gap of the same shape as the one session Q closed for repeated
-  refusals, and it is not closed for generation failures. Measured on the deployed demo,
-  **2026-08-19: 2 of 28 `resume` runs**, both on the replan call after a refusal; 0 of 23 runs of
-  the other three scenarios. Reported, not fixed, in session W.
+- **A proposal the provider cannot form twice running parks the case for a person, and there is no
+  in-system way to ask CareLoop to try again.** The planner's `propose_*` call gets one bounded
+  retry; if the second answer is also unusable the case stops in `AWAITING_HUMAN` with reason
+  `NO_VALID_PROPOSAL_PRODUCED`, having proposed nothing, evaluated nothing and done nothing. That is
+  the honest resting place and it is where session X moved it from `FAILED` — but it is a *stop*,
+  not a recovery: no approval is raised, so there is nothing to approve; no effect happened, so
+  there is nothing to re-check; and `reopen_case` takes only a finished case. The case has to be
+  picked up by hand. A caregiver-triggered replan would close that and is deliberately not in this
+  patch. Measured on the deployed demo before the change, **2026-08-19: 2 of 28 `resume` runs**
+  reached the second failure, both on the replan call after a refusal; 0 of 23 runs of the other
+  three scenarios.
 - Cost per case is not reported. Nothing stamps token usage on a case, and the API inventing one
   would be worse than its absence.
 - The API's run registry is in memory — execution context, not a business fact, so a restart costs

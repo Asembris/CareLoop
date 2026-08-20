@@ -65,9 +65,11 @@ size and nothing stronger.
 **Independent corroboration, from a different instrument.** On the deployed demo the same day, 2 of
 28 runs of scenario 03 ended `FAILED` with `MalformedProposal`, and in both the exception escaped
 on **the replan call after a refusal** — the same path, the same failure type, from the real graph
-rather than this harness. What the deployed runs add is the tail this one does not reach: when the
-retry *also* fails, the exception leaves the graph and the case is marked `FAILED` rather than
-handed to a person. That is recorded in the README's honest limits and was not fixed in session W.
+rather than this harness. What the deployed runs add is the tail this one does not reach: the retry
+*also* fails. At the time of this run that left the case `FAILED`; session X changed the outcome to
+a manual handoff in `AWAITING_HUMAN` carrying `NO_VALID_PROPOSAL_PRODUCED`. **The measurements on
+this page are unchanged and describe the run as it happened** — the rate is a fact about the model
+and the seam, not about what the graph then does with the failure.
 
 **Cost and latency are unremarkable and that is worth saying.** A proposal costs about a tenth of a
 cent and takes about 1.7 s at p50. The tool specifications are the larger half of the request —

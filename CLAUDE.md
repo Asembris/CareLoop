@@ -671,6 +671,68 @@ it takes to recreate the bug rather than trip over one of its own guards — tur
 four files while every `verify_action` comparison test, the whole happy path, idempotency, and every
 policy and approval suite stay green.
 
+**A model that cannot form an action does not break the case; it stops it.** `PlanNode` catches
+exactly `careloop.agents.invoke.RECOVERABLE_PROPOSAL_FAILURES` around the one call to
+`planner.propose`, and parks the case `PLANNING` → `AWAITING_HUMAN` through
+`_park_with_nothing_proposable`, carrying `NO_VALID_PROPOSAL_PRODUCED`. The bound is
+`proposal_tool_call`'s and nothing here adds to it: by the time the exception arrives the one retry
+has been spent, so what is caught is **exhaustion**, never a first failure, and
+`MAX_PROPOSAL_ATTEMPTS` is untouched.
+
+It used to end `FAILED`. Nothing unsafe ever happened on that path and nothing could — no proposal
+exists to act on — but `FAILED` means *something broke*, it is filed under **Completed** where a
+caregiver reads it as finished, and its `failure_reason` was the literal string
+`a graph node raised: MalformedProposal`, an exception class on a projected field. Measured on the
+deployed demo, 2026-08-19: 2 of 28 `resume` runs, both on the replan call after a refusal.
+
+**The caught set is imported, never restated.** A second list is a second place to drift, and the
+one direction that must not drift is wider: a throttle, a credential error, a node timeout, an
+exhausted test script or a bug in this package still leaves the node, still reaches `run_case`, and
+still ends the case `FAILED`. `NoStructuredOutput` lives in the same module and is deliberately not
+in the tuple — triage's seam is a different question with a different lifecycle, and it is
+untouched. A mutant widening the catch to `Exception` turns 14 tests red, four of them in files
+written long before this patch.
+
+**`plan → gate` carries a condition now, and it had to.** It was the graph's one unconditional edge.
+Measured with it left alone: a first-proposal exhaustion parked and was then routed straight into
+the gate, whose no-proposal branch overwrote the park with `FAILED`; and an exhaustion *after* a
+refusal had the gate re-judge the proposal it had already denied, on a case a person had just been
+handed. `when_case_is(context, PLANNING)` asks whether there is a proposal, never whether to check
+one — `PlanNode` has exactly two outcomes, a proposal with the case left `PLANNING` or no proposal
+with the case parked, so "still `PLANNING`" and "a proposal was written" are the same statement.
+Same reasoning as the absent `verify → plan` edge: an edge is what stops the graph routing
+somewhere, and a node's own guard is not a substitute for one.
+
+**No approval, and the denied-proposal case is why that matters here more than anywhere.** On a case
+that was refused once and then could not replan, `latest_proposal` still names the call policy
+**denied** — which is exactly the record an approval would release, one node earlier than the defect
+`_park_with_nothing_safe_to_do` documents below. So the park raises none, `approve` and `reject`
+answer `NoSuchApproval`, and nothing can walk the case into execution.
+
+**The ninth `ReasonCode`, and the third that parks a case rather than refusing a call**, so no rule
+carries it and the engine never emits it. Not `NO_SAFE_ACTION_AVAILABLE`: that asserts every tool
+was proposed and refused, and here *nothing was proposed and nothing was refused* — there is not one
+`POLICY_DENY` from the cycle that parked. One code covers all four generation failures on purpose;
+they are four facts about a provider and one fact about CareLoop, and the lifecycle makes no
+distinction between them.
+
+**The exception type stays out of the product vocabulary.** `NO_VALID_PROPOSAL_PRODUCED` is what a
+caregiver, a projection and a lifecycle read; `MalformedProposal` is an implementation name and
+lives in `invoke.py`'s two log lines and in the handoff's **diagnostic**, which the API withholds
+wholesale. It is deliberately **not** a payload key: the payload is the allowlisted half a response
+can carry, and the old `failure_reason` string is not worth reproducing as public API surface. The
+*type* only, never `str(failure)` — a `ValidationError` renders `input_value`, and that input is
+model output derived from document content.
+
+**What this does not do.** It creates no recovery. There is no approval to grant, no external effect
+to re-check, and `reopen_case` still takes only a finished case, so a parked case is inert: a later
+run executes `("dispatch",)` and commits nothing. A caregiver-triggered `request_replan` —
+`AWAITING_HUMAN → PLANNING` is already a legal transition — would close that and is deliberately a
+separate patch, because it recovers *authority to act* rather than knowledge and deserves its own
+evidence. The card says so rather than implying a button that is not there.
+`tests/test_proposal_exhaustion.py` owns the property; five mutants each turn their own tests red,
+including one that reverts the edge to unconditional.
+
 **An `Approval` is a capability, and a manual handoff is not one.** An approval says a caregiver was
 asked about *one exact call*, identified by `(tool_name, args_digest)`; deciding it releases that
 call and nothing else. `NO_SAFE_ACTION_AVAILABLE` — every tool in the registry proposed and refused

@@ -6269,6 +6269,114 @@ pinned commit.
 
 34, 33, 29, 30, 31, 22, 25, 26, 28. **Unchanged.**
 
+## Session X — 2026-08-20
+
+### Position
+
+One patch, closing **open decision 35**. A proposal the provider cannot form twice running no longer
+ends the case `FAILED`; it parks in `AWAITING_HUMAN` carrying the ninth `ReasonCode`,
+`NO_VALID_PROPOSAL_PRODUCED`, having proposed nothing, evaluated nothing and done nothing.
+
+| Commit | Subject |
+|---|---|
+| `c681bd4` | Add NO_VALID_PROPOSAL_PRODUCED to the closed reason vocabulary |
+| `6a3ba2d` | Park the case when the planner's bounded retry produces no proposal |
+| `3e04093` | Tell a caregiver the planner could not form an action, and offer nothing |
+| `3ead398` | Stop the deployed lock counting an unformed proposal as a passing run |
+
+Nothing pushed.
+
+### What was actually wrong
+
+Not safety. Nothing unsafe ever happened on that path and nothing could: the exception is raised
+before any proposal exists, so there was nothing to authorise, nothing to execute and nothing to
+persist. What was wrong was the resting place. `FAILED` means *something broke*; it is filed under
+**Completed**, where `SECTIONS` puts every at-rest state, so a case CareLoop could not plan was
+presented to a caregiver as finished; and `failure_reason` read `a graph node raised:
+MalformedProposal`, which is an exception class on a projected field.
+
+Traced rather than inferred, before writing anything: `PlanNode.run` → `PlannerAgent.propose` →
+`proposal_tool_call`, whose loop spends `MAX_PROPOSAL_ATTEMPTS = 2` and re-raises; no `except`
+anywhere between there and `run_case`'s **crash** handler, which exists so a crashed run leaves a
+case that says so. A generation failure is not a crash, but it arrived where crashes arrive and got
+the crash's answer.
+
+### The thing the plan got wrong
+
+**`plan → gate` was the graph's one unconditional edge, and the first implementation was silently
+overridden by it.** The park committed, the graph routed into the gate anyway, and the gate's
+no-proposal branch rewrote the case to `FAILED` — the exact outcome the patch was removing. Worse
+in the denial shape: `latest_proposal` still names the refused call, so the gate re-judged a
+proposal it had already denied on a case a person had just been handed.
+
+So the edge now carries `when_case_is(context, PLANNING)`. That is a deviation from the approved
+plan, which said no graph-edge change, and it is reported as one. It does not weaken what the old
+comment protected: `PlanNode` has exactly two outcomes — a proposal with the case left `PLANNING`,
+or no proposal with the case parked — so the condition asks whether there is a proposal, never
+whether to check one, and the planner still cannot express a preference either way. Same reasoning
+as the absent `verify → plan` edge, one node earlier.
+
+### What is deliberately not here
+
+**No recovery operation.** A parked case is *inert*: no approval to grant, no effect to re-check,
+`reopen_case` takes only a finished case, and a later run executes `("dispatch",)` and commits
+nothing. `AWAITING_HUMAN → PLANNING` is already legal, so a caregiver-triggered `request_replan`
+would be the `request_recheck` shape again — but it recovers *authority to act* rather than
+knowledge, which is a categorically larger decision than 2C was, and it gets its own patch and its
+own evidence. The card says so rather than implying a button that is not there.
+
+### Two corrections that came from auditing rather than from building
+
+**`RunState.SETTLED` is safe and the deployed lock was not.** Audited every consumer: `runs.py`
+documents it as "the graph stopped — read the case for what it stopped *at*", `backend.ts` repeats
+it, and the only readers are `stageFor` and `stageLabelFor`, which map `AWAITING_HUMAN` to the last
+node rather than to `SETTLED`. No metric, health endpoint or counter aggregates it. But
+`scripts/verify_lock.py` decides a scenario passed by comparing the case's state to an expected one,
+and `AWAITING_HUMAN` is the expected state for two scenarios — so parking a generation failure would
+have turned the recorded `19 of 20` into `20 of 20` without the run having done the work. One clause
+now excludes it. **A fix must not be allowed to flatter the metric that measured the defect.**
+
+**`proposal_failure` was planned as a payload key and is not one.** Traced where it would surface:
+the payload allowlist is what `GET /api/cases/{id}` serialises. The reason code is the product-facing
+truth and the exception class is not, so the type name stays in `invoke.py`'s logs and in the
+handoff diagnostic the API withholds wholesale. The old `failure_reason` string was not worth
+reproducing as public API surface.
+
+### Evidence
+
+`2776 passed, 37 skipped` (2720 before: 53 new in `tests/test_proposal_exhaustion.py`, 2 from the
+ninth code joining two parametrised suites, 1 new wiring test). Frontend **162** vitest (157
+before), typecheck and build clean, e2e **104 passed / 4 skipped**, `python -m evals.replay`
+unchanged at 0 of 320 and 320 of 320, dossier static gate and **23** Playwright specs green, ruff
+clean.
+
+**Five mutants, each red in its own place.** Removing the catch: 27 red. Raising an `Approval` in
+the park: 6 red, one of them `test_approval_shape.py`'s single-writer sweep, written long before.
+Reusing `NO_SAFE_ACTION_AVAILABLE`: 10 red. Widening to `except Exception`: 14 red, including
+`test_no_safe_action.py::test_a_provider_that_produces_nothing_does_not_park` and three
+`test_api_events.py` run-registry tests — all pre-existing. Reverting `plan → gate` to
+unconditional: 20 red.
+
+**The intermittent `test_api_schema.py` failure recorded in session W is still intermittent and is
+now characterised.** It is `hypothesis.errors.FailedHealthCheck: Too many generated examples are
+filtered out`, on the same two parametrised cases, and it is not caused by this patch: the OpenAPI
+schema — schemathesis's only input — is **byte-identical** before and after at sha256
+`ee1f9d2deb5449a6779ab7d37e0cd34566aab4eb90492124f0422822ab75f56f`, and the code has 9 codes the
+schema does not mention. Twelve full runs this session, five with the flake, the last three
+consecutive clean; it passes in isolation every time. Worth a look if it ever fails on CI.
+
+### Open decisions
+
+35. **Closed.** An escaped generation failure parks the case. What it does *not* do is give the
+    caregiver a way to ask CareLoop to try again — that is the new one below.
+
+36. **New.** Whether a caregiver should be able to ask CareLoop to replan a case parked with
+    `NO_VALID_PROPOSAL_PRODUCED`. `AWAITING_HUMAN → PLANNING` is legal and `request_recheck` is the
+    shape; what it needs is an argument about recovering authority rather than knowledge, and a
+    measurement of whether a second planning attempt on an unchanged case is worth anything.
+
+34, 33, 29, 30, 31, 22, 25, 26, 28. **Unchanged.**
+
 ## Standing risks
 
 - **The resume is a `CaseStore` reconstruction across a process boundary, not a Strands session

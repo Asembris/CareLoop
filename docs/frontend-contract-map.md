@@ -277,10 +277,12 @@ from the case timeline. The adapter composes.
 ## 4. The six questions in `frontend/docs/API_INTEGRATION_MAP.md`
 
 **1. Does the decision payload expose a kind discriminator?**
-Yes. `DecisionView.reason_code`, a string from the closed 7-member `ReasonCode` enum.
-`REQUIRES_HUMAN_APPROVAL` and `NO_SAFE_ACTION_AVAILABLE` are the two that ever reach an `Approval`,
-so the map is direct. Map anything unrecognised to not-approvable: defaulting closed is both correct
-and free.
+Yes. `DecisionView.reason_code`, a string from the closed `ReasonCode` enum — 7 members when this
+was written, 9 now. `REQUIRES_HUMAN_APPROVAL` is the only one that ever reaches an `Approval`; the
+three park codes (`NO_SAFE_ACTION_AVAILABLE`, `EXTERNAL_STATE_NOT_CONFIRMED`,
+`NO_VALID_PROPOSAL_PRODUCED`) are reasons a *case* stopped and raise none. Map anything
+unrecognised to not-approvable: defaulting closed is both correct and free, and it is what let the
+eighth and ninth codes arrive needing only truthful copy rather than a new affordance.
 
 **2. Does the verification result carry both the authorized and the observed values?**
 **No.** Authorized is reachable — `PLAN_PROPOSED`'s `payload.args`, allowlisted. Observed exists only

@@ -39,6 +39,7 @@ from careloop.api.app import create_app
 from careloop.api.sessions import DEFAULT_SESSION_LIMIT, demo_session_worlds
 from careloop.state.sqlite_store import SqliteCaseStore
 from careloop.tools.clinic import ClinicClient
+from scripts.observability import install_telemetry_redaction
 
 
 def load_env_file(path: Path) -> int:
@@ -90,6 +91,12 @@ def main() -> None:
 
     load_env_file(Path(arguments.env_file))
 
+    # Telemetry only, and only ever subtractive. Installed here because it must be registered
+    # before the first AWS call and this is the earliest point that exists; returns False when the
+    # process is not running under `opentelemetry-instrument`, which is the ordinary uninstrumented
+    # case rather than a fault. Nothing below reads the result except the line that prints it.
+    redacting = install_telemetry_redaction()
+
     if arguments.isolate_sessions:
         app = create_app(
             sessions=demo_session_worlds(clinic_url=arguments.clinic_url),
@@ -112,6 +119,7 @@ def main() -> None:
     print(f"frontend      {arguments.static_dir or '(API only)'}")
     print(f"triage model  {os.environ.get('CARELOOP_MODEL_TRIAGE', '(mock)')}")
     print(f"planner model {os.environ.get('CARELOOP_MODEL_PLANNER', '(mock)')}")
+    print(f"telemetry     {'ADOT, access key id redacted' if redacting else '(not instrumented)'}")
 
     import uvicorn
 

@@ -58,9 +58,26 @@ if ! usable; then
     sudo rm -rf "$VENV"
     sudo env UV_PYTHON_INSTALL_DIR="$PYTHONS" /usr/local/bin/uv venv --python 3.12 "$VENV" >/dev/null
 fi
-# The runtime dependencies only. Not `.[dev]`: the host does not run the test suite, and
-# reportlab, pytest and the rest are a larger attack surface for no gain.
-sudo /usr/local/bin/uv pip install --python "$VENV/bin/python" -e "$APP" >/dev/null
+# The runtime dependencies plus the observability extra. Not `.[dev]`: the host does not run the
+# test suite, and reportlab, pytest and the rest are a larger attack surface for no gain.
+#
+# `[observability]` is aws-opentelemetry-distro and nothing else, and it is installed *here* rather
+# than declared as a base dependency because CareLoop must not depend on telemetry to run — see
+# pyproject.toml. It brings the `opentelemetry-instrument` launcher the unit's ExecStart uses. If
+# this install is ever removed, the wrapper in careloop-api.service must be removed with it, or the
+# service will not start; that pairing is the one coupling this extra creates and it is checked
+# below.
+sudo /usr/local/bin/uv pip install --python "$VENV/bin/python" -e "$APP[observability]" >/dev/null
+
+# Fail here, with the reason, rather than as a systemd "Failed to locate executable" after the
+# deploy. The unit's ExecStart names this launcher; if the extra did not install, the service is
+# dead on the next restart and the error at that point says nothing about why.
+if [ ! -x "$VENV/bin/opentelemetry-instrument" ]; then
+    echo "ERROR: the observability extra did not install opentelemetry-instrument." >&2
+    echo "       careloop-api.service's ExecStart names it. Either fix the install or switch" >&2
+    echo "       the unit to its commented uninstrumented ExecStart before restarting." >&2
+    exit 1
+fi
 
 # The check the first deploy needed and did not have. Fails here, with the reason, rather than
 # as systemd's "Failed to locate executable ... No such file or directory" for a file that `ls`

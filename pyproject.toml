@@ -97,6 +97,28 @@ evals = [
     "strands-agents[openai]==1.51.0",
 ]
 
+# AWS-native production tracing for the deployed EC2 host only — see
+# docs/adr/0004-agentcore-observability-out-of-band.md. Deliberately not part of `dev`, and
+# emphatically not a base dependency, for three separate reasons.
+#
+# CareLoop must not depend on telemetry to function: the base dependency set is what the
+# application needs to *work*, and an observability backend being reachable is not one of those
+# things. Second, `check`'s contract is that no provider SDK is reachable, asserted by inspecting
+# the installed tree; standing 64 packages in front of that claim is the same reasoning that
+# already keeps `bench`, `evals`, `schema`, `frontend` and `e2e` separate. Third, the default suite
+# must keep running with nothing installed but `.[dev]` — tests/test_observability.py drives the
+# stock OpenTelemetry SDK, which arrives as a hard dependency of strands-agents, so the redaction
+# guard is proven without this extra being present anywhere.
+#
+# Pinned exactly, like `bench` and `evals` restate the strands pin, and for the same reason: a
+# range would let an install move the OTel closure off the versions the spike was measured
+# against. Measured on a clean install of this pin: 64 packages added, **zero existing versions
+# moved** — opentelemetry-api/sdk stay at 1.44.0 and strands-agents stays at 1.51.0, because
+# 0.19.0 pins exactly the versions strands-agents already resolves.
+observability = [
+    "aws-opentelemetry-distro==0.19.0",
+]
+
 # Property-based schema testing over careloop/api/ only — tests/test_api_schema.py. Offline and
 # $0: schemathesis drives the FastAPI app in-process over ASGI, so there is no server, no port and
 # no model call. Separate from `dev` for a reason that is not install size.

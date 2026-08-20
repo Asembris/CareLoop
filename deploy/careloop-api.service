@@ -18,7 +18,17 @@ EnvironmentFile=/opt/careloop/app/deploy/careloop.env
 # With it on, --db is not used: a world lives in memory for as long as somebody is using it, and
 # durable cross-process ownership is demonstrated by scripts/resume_demo.py rather than here.
 # --db stays on the line so that dropping the flag restores the single durable world exactly.
-ExecStart=/opt/careloop/venv/bin/python scripts/demo_serve.py \
+# `opentelemetry-instrument` is the collector-less ADOT entry point: it configures the SDK and
+# loads the instrumentations before the script's first line, then execs it. Everything it needs is
+# in careloop.env, including which distro to load — nothing is left to entry-point auto-selection.
+#
+# **This wrapper is the only thing that turns telemetry on, and removing it is the whole rollback.**
+# The uninstrumented line is kept immediately below, commented, because that is the fallback the
+# lifespan and every test already assume: without the wrapper the global tracer provider is a
+# no-op, no span is recorded, and scripts/observability.py reports "not instrumented" at startup.
+# Telemetry is not part of CareLoop's availability contract, and this is where that is true.
+ExecStart=/opt/careloop/venv/bin/opentelemetry-instrument \
+    /opt/careloop/venv/bin/python scripts/demo_serve.py \
     --host 0.0.0.0 \
     --port 8000 \
     --isolate-sessions \
@@ -26,6 +36,17 @@ ExecStart=/opt/careloop/venv/bin/python scripts/demo_serve.py \
     --clinic-url ${CARELOOP_CLINIC_URL} \
     --static-dir ${CARELOOP_STATIC_DIR} \
     --env-file /dev/null
+
+# ROLLBACK — swap the two: comment the block above, uncomment this, `systemctl daemon-reload &&
+# systemctl restart careloop-api`. No code change, no reinstall, no redeploy.
+#ExecStart=/opt/careloop/venv/bin/python scripts/demo_serve.py \
+#    --host 0.0.0.0 \
+#    --port 8000 \
+#    --isolate-sessions \
+#    --db ${CARELOOP_DB} \
+#    --clinic-url ${CARELOOP_CLINIC_URL} \
+#    --static-dir ${CARELOOP_STATIC_DIR} \
+#    --env-file /dev/null
 
 # Restart on failure, but give the app's own lifespan a chance to drain in-flight runs first: a
 # run killed mid-flight leaves a case wherever its last committed node put it. Recoverable —

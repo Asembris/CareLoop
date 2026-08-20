@@ -124,6 +124,38 @@ class ReasonCode(StrEnum):
     action was *carried out*, which is close to the opposite.
     """
 
+    NO_VALID_PROPOSAL_PRODUCED = "NO_VALID_PROPOSAL_PRODUCED"
+    """No well-formed next action could be produced. The case needs manual handling.
+
+    The ninth code, and the third that parks a *case* rather than refusing a call — so like the two
+    above no rule carries it and the engine never emits it. The graph writes it onto the
+    ``MANUAL_HANDOFF_REQUIRED`` entry
+    :func:`careloop.graph.nodes._park_with_nothing_proposable` appends, at the one point where a
+    proposal was asked for and the bounded retry in
+    :func:`careloop.agents.invoke.proposal_tool_call` came back with nothing usable.
+
+    **It is not a refusal, and that is why it is not one of the codes above.** Nothing was
+    evaluated: no rule matched, no verdict was reached, no argument was inspected, and the policy
+    engine was never called, because there was no call to judge. Reusing
+    ``NO_SAFE_ACTION_AVAILABLE`` would state that every action in the catalogue was proposed and
+    denied — on a path where *nothing* was proposed and *nothing* was denied — and would put a
+    false statement in an append-only trail. That is the same argument
+    ``EXTERNAL_STATE_NOT_CONFIRMED`` makes one code up, and it holds here for the opposite reason:
+    that one covers an action that happened, this one covers an action that was never formed.
+
+    **Deliberately one code for all four generation failures.** An answer carrying no tool call,
+    one carrying several, one naming a tool that was not offered and one whose arguments do not
+    satisfy the schema are four different facts about a provider — they are
+    :data:`careloop.agents.invoke.RECOVERABLE_PROPOSAL_FAILURES`, and they are told apart in the
+    logs and in the timeline diagnostic where the distinction is actionable. What they share is
+    that CareLoop has no valid next action, which is the only part a caregiver or a lifecycle can
+    do anything with. Splitting the code would offer a distinction the lifecycle does not make.
+
+    **Named for what CareLoop knows rather than for what the provider did**, like the two codes
+    above. ``MALFORMED_PROPOSAL`` would name one of the four and would put an implementation-level
+    exception name into the product vocabulary.
+    """
+
 
 #: The only strings that ever reach the model.
 #:
@@ -168,6 +200,14 @@ REASON_TEXT: Final[Mapping[ReasonCode, str]] = {
     ReasonCode.EXTERNAL_STATE_NOT_CONFIRMED: (
         "The result of an action already carried out could not be confirmed to match it. A "
         "caregiver has been asked to check before anything further is done."
+    ),
+    # Says what happened and stops. It claims no refusal, because nothing was refused; it promises
+    # no decision, because there is none to make; and unlike every other text here it gives the
+    # planner no directive at all, since the run is over before this could be read and there is no
+    # step it could take that would form a proposal it has already failed twice to form.
+    ReasonCode.NO_VALID_PROPOSAL_PRODUCED: (
+        "No valid next action could be formed here. CareLoop has stopped without doing anything "
+        "and the case needs manual handling."
     ),
 }
 

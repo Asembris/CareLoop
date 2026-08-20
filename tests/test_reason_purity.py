@@ -80,7 +80,7 @@ class TestTheMappingIsTotalAndClosed:
     def test_the_mapping_has_no_entries_outside_the_enum(self) -> None:
         assert all(isinstance(key, ReasonCode) for key in REASON_TEXT)
 
-    def test_the_vocabulary_is_the_eight_agreed_codes(self) -> None:
+    def test_the_vocabulary_is_the_nine_agreed_codes(self) -> None:
         """Growth is a deliberate decision recorded in the session log, not a drive-by addition."""
         assert {code.value for code in ReasonCode} == {
             "DESTINATION_NOT_TRUSTED",
@@ -91,6 +91,7 @@ class TestTheMappingIsTotalAndClosed:
             "NO_RULE_MATCH",
             "NO_SAFE_ACTION_AVAILABLE",
             "EXTERNAL_STATE_NOT_CONFIRMED",
+            "NO_VALID_PROPOSAL_PRODUCED",
         }
 
     def test_the_vocabulary_has_not_grown(self) -> None:
@@ -107,13 +108,18 @@ class TestTheMappingIsTotalAndClosed:
         session, when ``EXTERNAL_STATE_NOT_CONFIRMED`` was added for the case where an effect *has*
         been carried out and its result cannot be confirmed: reusing the code above would have said
         every action was refused, which is close to the opposite of what happened, and would have
-        put a false statement in an append-only trail.
+        put a false statement in an append-only trail. From eight to nine, when
+        ``NO_VALID_PROPOSAL_PRODUCED`` was added for the case where the bounded retry in
+        ``careloop.agents.invoke.proposal_tool_call`` produced no well-formed proposal at all:
+        every other code here is the reason a *call* was refused, and on that path there is no
+        call — nothing was proposed, nothing was evaluated and nothing was denied, so both park
+        codes above would have described something that did not happen.
 
         Changing this number is a deliberate decision that requires an entry in
         ``docs/session-log.md`` saying which code was added and what would not work without it.
         Editing the literal to make a red suite green is the drift this test exists to catch.
         """
-        assert len(ReasonCode) == 8
+        assert len(ReasonCode) == 9
 
     def test_texts_are_distinct(self) -> None:
         """Two codes rendering identically would be indistinguishable to the planner."""
@@ -214,15 +220,17 @@ class TestEvaluationLeaksNothing:
         assert seen == set(Verdict)
 
     def test_the_matrix_exercises_every_reason_code_the_engine_can_produce(self) -> None:
-        """Every code except the two no rule can carry.
+        """Every code except the three no rule can carry.
 
-        Both exempt codes park a *case* rather than refusing a call, which is why no rule names them
-        and the engine never emits them. ``NO_SAFE_ACTION_AVAILABLE`` is the reason a case was
-        parked once every call had been refused; ``EXTERNAL_STATE_NOT_CONFIRMED`` is the reason a
-        case was parked once an effect had been carried out and could not be confirmed. The graph
-        writes each onto the ``MANUAL_HANDOFF_REQUIRED`` entry it appends, so they need codes,
-        and ``tests/test_no_safe_action.py`` and ``tests/test_post_effect_lifecycle.py`` are where
-        they are exercised.
+        All three exempt codes park a *case* rather than refusing a call, which is why no rule
+        names them and the engine never emits them. ``NO_SAFE_ACTION_AVAILABLE`` is the reason a
+        case was parked once every call had been refused; ``EXTERNAL_STATE_NOT_CONFIRMED`` is the
+        reason a case was parked once an effect had been carried out and could not be confirmed;
+        ``NO_VALID_PROPOSAL_PRODUCED`` is the reason a case was parked once the planner's bounded
+        retry produced no well-formed proposal to judge at all. The graph writes each onto the
+        ``MANUAL_HANDOFF_REQUIRED`` entry it appends, so they need codes, and
+        ``tests/test_no_safe_action.py``, ``tests/test_post_effect_lifecycle.py`` and
+        ``tests/test_proposal_exhaustion.py`` are where they are exercised.
         """
         engine = default_engine()
         seen = {
@@ -232,16 +240,22 @@ class TestEvaluationLeaksNothing:
         assert seen == {*ReasonCode, None} - {
             ReasonCode.NO_SAFE_ACTION_AVAILABLE,
             ReasonCode.EXTERNAL_STATE_NOT_CONFIRMED,
+            ReasonCode.NO_VALID_PROPOSAL_PRODUCED,
         }
 
-    def test_only_the_two_parking_codes_are_outside_the_engines_reach(self) -> None:
+    def test_only_the_three_parking_codes_are_outside_the_engines_reach(self) -> None:
         """Vacuity: the carve-out above must stay a carve-out for exactly the codes named.
 
         Without this, a future code that no rule ever carries could be added and the exemption
         above would silently widen to cover it — which is how a closed vocabulary acquires members
-        nothing produces. It widened once, by one, and this line is what made that a decision: both
-        exempt codes name a reason a case *stopped*, and a third would have to argue itself into the
-        same category rather than into the same set.
+        nothing produces. It has widened twice, by one each time, and this line is what made each a
+        decision rather than an edit: every exempt code names a reason a case *stopped*, and a new
+        one has to argue itself into that category rather than into this set.
+
+        ``NO_VALID_PROPOSAL_PRODUCED`` argued it. It is not the reason a call was refused, because
+        there was no call — the planner's bounded retry produced nothing well-formed, so no
+        argument was inspected, no rule matched and ``evaluate`` was never reached. A code the
+        engine cannot emit is exactly right for a stopping the engine took no part in.
         """
         engine = default_engine()
         seen = {
@@ -251,6 +265,7 @@ class TestEvaluationLeaksNothing:
         assert {*ReasonCode} - seen == {
             ReasonCode.NO_SAFE_ACTION_AVAILABLE,
             ReasonCode.EXTERNAL_STATE_NOT_CONFIRMED,
+            ReasonCode.NO_VALID_PROPOSAL_PRODUCED,
         }
 
     def test_no_model_visible_reason_contains_an_argument_value(self) -> None:

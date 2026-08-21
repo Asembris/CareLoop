@@ -46,6 +46,7 @@ from evaluators.contract import (
     ErrorCode,
     NaReason,
 )
+from evaluators.handler import lambda_handler
 from evaluators.settlement import (
     CHECKS,
     Evidence,
@@ -1360,3 +1361,129 @@ class TestNoPayloadValueReachesTheResult:
             for field in ("explanation", "errorMessage"):
                 if field in result:
                     assert result[field] in known
+
+
+# --------------------------------------------------------------------------------------------
+# The Lambda handler
+# --------------------------------------------------------------------------------------------
+
+
+class TestTheHandlerIsTotal:
+    """No input makes it raise, and no exception text reaches what it returns."""
+
+    @pytest.mark.parametrize(
+        "event",
+        [None, {}, [], "", 0, True, {"schemaVersion": "1.0"}, {"evaluationInput": None}],
+        ids=repr,
+    )
+    def test_a_malformed_event_returns_an_error_rather_than_raising(self, event: Any) -> None:
+        result = lambda_handler(event, None)
+        assert "errorCode" in result
+        assert result["errorMessage"] in set(ERROR_MESSAGES.values())
+
+    def test_it_delegates_rather_than_deciding(self) -> None:
+        """Its whole job. A real envelope must produce exactly what ``assess`` produces."""
+        envelope = payload(settled_trace())
+        assert lambda_handler(envelope, None) == assess(envelope)
+
+    def test_an_unexpected_failure_becomes_a_fixed_internal_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The one broad catch, proven to catch and proven not to leak.
+
+        The exception's message is a value a payload could plausibly have carried. What comes back
+        names none of it.
+        """
+
+        def explode(_: Any) -> dict[str, Any]:
+            raise RuntimeError(f"leaked {RESOURCE_ID} and {STATE_DIGEST}")
+
+        monkeypatch.setattr("evaluators.handler.assess", explode)
+        result = lambda_handler(payload(settled_trace()), None)
+        assert result == {
+            "errorCode": "INTERNAL_ERROR",
+            "errorMessage": ERROR_MESSAGES[ErrorCode.INTERNAL_ERROR],
+        }
+        rendered = json.dumps(result)
+        assert RESOURCE_ID not in rendered
+        assert STATE_DIGEST not in rendered
+        assert "RuntimeError" not in rendered
+
+    def test_even_a_bare_exception_is_caught(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def explode(_: Any) -> dict[str, Any]:
+            raise KeyboardInterrupt  # not an Exception subclass; must still not be swallowed
+
+        monkeypatch.setattr("evaluators.handler.assess", explode)
+        with pytest.raises(KeyboardInterrupt):
+            lambda_handler(payload(settled_trace()), None)
+
+    def test_the_context_is_never_read(self) -> None:
+        """Nothing depends on the invocation, so any context object gives the same answer."""
+        envelope = payload(settled_trace())
+        answers = [
+            lambda_handler(envelope, None),
+            lambda_handler(envelope, object()),
+            lambda_handler(envelope, {"aws_request_id": "whatever"}),
+            lambda_handler(envelope),
+        ]
+        assert all(answer == answers[0] for answer in answers)
+
+
+class TestTheResultIsDeterministicAndSerialisable:
+    """Same payload, same answer -- and an answer AWS can carry."""
+
+    @pytest.mark.parametrize(
+        "build",
+        [
+            lambda: payload(settled_trace()),
+            lambda: payload(recheck_trace()),
+            lambda: payload(settled_trace(**{ATTR_SETTLEMENT: "NOT_CERTIFIED"})),
+            lambda: payload(simulated_trace()),
+            lambda: payload(quiet_trace()),
+            lambda: payload(settled_trace(), level="SESSION"),
+        ],
+    )
+    def test_the_same_payload_always_gives_the_same_result(self, build: Any) -> None:
+        """No clock, no randomness, no environment, no set iteration reaching the output."""
+        first = assess(build())
+        for _ in range(5):
+            assert assess(build()) == first
+
+    @pytest.mark.parametrize(
+        "build",
+        [
+            lambda: payload(settled_trace()),
+            lambda: payload(recheck_trace()),
+            lambda: payload(simulated_trace()),
+            lambda: payload(quiet_trace()),
+            lambda: payload(settled_trace(), version="9.9"),
+        ],
+    )
+    def test_the_result_is_json_serialisable_and_holds_plain_types(self, build: Any) -> None:
+        result = assess(build())
+        assert json.loads(json.dumps(result)) == result
+        for key, value in result.items():
+            assert type(key) is str
+            assert type(value) in (str, float), key
+
+    def test_span_ordering_in_the_payload_does_not_change_the_answer(self) -> None:
+        """The spans arrive in whatever order the service assembled them."""
+        spans = settled_trace()
+        assert assess(payload(list(reversed(spans)))) == assess(payload(spans))
+
+    def test_the_four_result_shapes_are_exactly_these_and_no_others(self) -> None:
+        """A structural statement about the whole surface, not about one path through it."""
+        shapes = {
+            frozenset(assess(build()))
+            for build in (
+                lambda: payload(settled_trace()),
+                lambda: payload(settled_trace(**{ATTR_SETTLEMENT: "NOT_CERTIFIED"})),
+                lambda: payload(simulated_trace()),
+                lambda: payload(settled_trace(), level="SESSION"),
+            )
+        }
+        assert shapes == {
+            frozenset({"label", "value", "explanation"}),
+            frozenset({"label", "explanation"}),
+            frozenset({"errorCode", "errorMessage"}),
+        }

@@ -13,6 +13,20 @@ User=careloop
 Group=careloop
 WorkingDirectory=/opt/careloop/app
 EnvironmentFile=/opt/careloop/app/deploy/careloop.env
+# **The application's import path is declared here rather than inherited from the launcher.**
+# `scripts/demo_serve.py` imports `scripts.observability`, and `python scripts/demo_serve.py` puts
+# the *script's* directory on sys.path, never the working directory — while the editable install
+# maps `careloop` and nothing else. So the app root has to come from somewhere, and until this line
+# it came from `opentelemetry-instrument`: its `run()` inserts `getcwd()` into PYTHONPATH before
+# exec'ing the command, which upstream's own source marks FIXME. The instrumented ExecStart
+# therefore booted and the rollback one below died on `ModuleNotFoundError: No module named
+# 'scripts'` — telemetry silently supplying an availability property, which is exactly backwards.
+#
+# The same value as WorkingDirectory, deliberately: the launcher only inserts the cwd when it is
+# not already on PYTHONPATH, so with this set its insertion is a no-op and both ExecStarts resolve
+# the identical application root. Removing this line breaks the rollback and nothing else, which is
+# the reason it needs a test rather than a comment — tests/test_deploy_import_path.py.
+Environment=PYTHONPATH=/opt/careloop/app
 # --isolate-sessions is what lets two judges open the URL at the same moment. Every visitor gets
 # their own case store, run registry and clinic, so neither can see or reset the other's world.
 # With it on, --db is not used: a world lives in memory for as long as somebody is using it, and

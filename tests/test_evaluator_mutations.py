@@ -48,6 +48,7 @@ malformed digests settle, and no claim here covers that.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -56,9 +57,16 @@ from typing import Any, Final
 import pytest
 from test_evaluator import (
     ABSENT,
+    CLINIC,
     OTHER_DIGEST,
     READ_END,
+    READ_START,
+    RESOURCE_ID,
+    STATE_DIGEST,
     WRITE_END,
+    WRITE_START,
+    _iso,
+    _span,
     bedrock_spans,
     graph_span,
     internal_operation_span,
@@ -76,16 +84,29 @@ from evaluators.contract import (
     ATTR_EFFECT_DISPATCH,
     ATTR_EFFECT_FIELDS,
     ATTR_EFFECT_STATE_DIGEST,
+    ATTR_HTTP_METHOD,
+    ATTR_HTTP_RESPONSE_STATUS_CODE,
+    ATTR_HTTP_STATUS_CODE,
+    ATTR_HTTP_URL,
     ATTR_OBSERVATION_MODE,
     ATTR_OBSERVATION_OUTCOME,
     ATTR_OBSERVATION_RESOURCE_ID,
     ATTR_OBSERVATION_STATE_DIGEST,
     ATTR_SETTLEMENT,
+    CLINIC_APPOINTMENTS_PATH,
+    EXPECTED_FIELDS,
     CheckId,
     ErrorCode,
     NaReason,
 )
 from evaluators.settlement import assess
+from evaluators.spans import (
+    _iso_to_nanos,
+    end_nanos,
+    http_method,
+    start_nanos,
+    url_path_segments,
+)
 
 # =============================================================================================
 # Outcomes
@@ -236,6 +257,46 @@ def deriving(name: str, build: Callable[[Any], Callable[..., Any]]) -> Apply:
 
     def apply(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(settlement, name, build(getattr(settlement, name)))
+
+    return apply
+
+
+def replacing_check(check_name: str, replacement: Callable[[Any], Any]) -> Apply:
+    """Replace one entry **inside** ``CHECKS``.
+
+    Rebinding ``evaluators.settlement._some_check`` is *not* enough, and the difference is the
+    binding trap one level further in than the one this file's docstring describes. Ordinary
+    helpers such as ``_matching_reads`` are looked up as module globals every time a check runs,
+    so patching the module attribute reaches them. ``CHECKS`` is different: it holds direct
+    references to the function objects, captured when the tuple was built, so a monkeypatched
+    module name is never consulted.
+
+    Three mutants were written the naive way while this file was being assembled and all three
+    were caught by :exc:`MutationHadNoEffect` rather than reported as kills, which is the
+    before/after rule doing precisely its job.
+    """
+
+    def apply(monkeypatch: pytest.MonkeyPatch) -> None:
+        swapped = tuple(
+            replacement if check.__name__ == check_name else check for check in settlement.CHECKS
+        )
+        assert any(check is replacement for check in swapped), check_name
+        monkeypatch.setattr(settlement, "CHECKS", swapped)
+
+    return apply
+
+
+def deriving_check(check_name: str, build: Callable[[Any], Callable[[Any], Any]]) -> Apply:
+    """Replace one entry inside ``CHECKS`` with something built from the shipped original."""
+
+    def apply(monkeypatch: pytest.MonkeyPatch) -> None:
+        original = next(c for c in settlement.CHECKS if c.__name__ == check_name)
+        replacement = build(original)
+        monkeypatch.setattr(
+            settlement,
+            "CHECKS",
+            tuple(replacement if c is original else c for c in settlement.CHECKS),
+        )
 
     return apply
 
@@ -498,7 +559,650 @@ def _family_a() -> tuple[Mutant, ...]:
     return tuple(built)
 
 
-MUTANTS: Final[tuple[Mutant, ...]] = _family_a()
+# =============================================================================================
+# Families D, E, F, G -- the correlation, ordering, field-universe and digest boundaries
+# =============================================================================================
+#
+# These four families hold every mutation measured during the Patch C plan gate to escape the
+# Patch B suite entirely: a broadened read classifier, a broadened write classifier, and a digest
+# comparison that looks at only part of the value. Each flipped a real trace from FAIL to PASS
+# with nothing going red. They are the reason this file exists, and they come first.
+
+FOREIGN_HOST = "http://telemetry.example.test"
+
+#: Digests differing **only in the last character**. Every digest fixture in Patch B differs in
+#: the first, which is exactly why a prefix-only comparison survived there.
+PREFIX_TWIN = STATE_DIGEST[:-1] + ("0" if STATE_DIGEST[-1] != "0" else "1")
+
+#: Digests differing **only in the first character**, for the mirror-image suffix mutation.
+SUFFIX_TWIN = ("0" if STATE_DIGEST[0] != "0" else "1") + STATE_DIGEST[1:]
+
+#: The same bytes in the non-canonical rendering.
+UPPER_DIGEST = STATE_DIGEST.upper()
+
+#: Well formed under a ``{8,}`` pattern, and far too small to identify a joint state.
+SHORT_DIGEST = STATE_DIGEST[:8]
+
+
+# ---- witnesses -------------------------------------------------------------------------------
+
+
+def _httpx_span(span_id: str, method: str, url: str, *, start: int, end: int) -> dict[str, Any]:
+    """One transport span at an arbitrary route, in the delivered shape."""
+    span = _span(
+        span_id,
+        scope="opentelemetry.instrumentation.httpx",
+        attributes={
+            ATTR_HTTP_METHOD: method,
+            ATTR_HTTP_URL: url,
+            ATTR_HTTP_STATUS_CODE: 200,
+            ATTR_HTTP_RESPONSE_STATUS_CODE: 200,
+        },
+        start=start,
+        end=end,
+    )
+    span["status"] = {"code": "UNSET"}
+    return span
+
+
+def foreign_get_only() -> Mapping[str, Any]:
+    """A ``GET`` to somebody else's service whose last path segment is the claimed resource.
+
+    There is **no clinic read at all**. The shipped evaluator refuses this because no clinic read
+    exists; a classifier keying on the last path segment of any ``GET`` would accept a third
+    party's URL as CareLoop's independent observation of the appointment.
+    """
+    return payload(
+        [
+            internal_operation_span(),
+            graph_span(),
+            *bedrock_spans(),
+            write_span(),
+            _httpx_span(
+                "aaaaaaaaaaaaaaa1",
+                "GET",
+                f"{FOREIGN_HOST}/anything/{RESOURCE_ID}",
+                start=READ_START,
+                end=READ_END,
+            ),
+        ]
+    )
+
+
+def unrelated_post_only() -> Mapping[str, Any]:
+    """``PERFORMED``, no ``POST /clinic/appointments``, and an unrelated ``POST`` in the trace."""
+    return payload(
+        [
+            internal_operation_span(),
+            graph_span(),
+            *bedrock_spans(),
+            _httpx_span(
+                "aaaaaaaaaaaaaaa2",
+                "POST",
+                f"{CLINIC}/telemetry/blob",
+                start=WRITE_START,
+                end=WRITE_END,
+            ),
+            read_span(),
+        ]
+    )
+
+
+def deeper_read_path() -> Mapping[str, Any]:
+    """A read one segment too deep, ending in the claimed resource."""
+    return payload(
+        [
+            internal_operation_span(),
+            graph_span(),
+            *bedrock_spans(),
+            write_span(),
+            _httpx_span(
+                "aaaaaaaaaaaaaaa3",
+                "GET",
+                f"{CLINIC}/clinic/appointments/archive/{RESOURCE_ID}",
+                start=READ_START,
+                end=READ_END,
+            ),
+        ]
+    )
+
+
+def deeper_write_path() -> Mapping[str, Any]:
+    """A write to a sub-resource of the collection, which creates no appointment."""
+    return payload(
+        [
+            internal_operation_span(),
+            graph_span(),
+            *bedrock_spans(),
+            _httpx_span(
+                "aaaaaaaaaaaaaaa4",
+                "POST",
+                f"{CLINIC}/clinic/appointments/{RESOURCE_ID}/cancel",
+                start=WRITE_START,
+                end=WRITE_END,
+            ),
+            read_span(),
+        ]
+    )
+
+
+def resource_id_in_the_wrong_case() -> Mapping[str, Any]:
+    return payload(settled_trace(**{ATTR_OBSERVATION_RESOURCE_ID: RESOURCE_ID.upper()}))
+
+
+def unsafe_claimed_resource() -> Mapping[str, Any]:
+    return payload(settled_trace(**{ATTR_OBSERVATION_RESOURCE_ID: "apt-a/apt-b"}))
+
+
+def iso_disagrees_with_nanos() -> Mapping[str, Any]:
+    """A read whose nanosecond fields say *after* the write and whose ISO field says *before*.
+
+    Only reachable by contradicting the service's own enrichment, which is the point: it pins
+    which representation the evaluator consumes when the two cannot both be true.
+    """
+    spans = settled_trace()
+    spans[5]["start_time"] = _iso(WRITE_END - 5_000_000)
+    return payload(spans)
+
+
+def recheck_with_a_failed_read() -> Mapping[str, Any]:
+    return payload(
+        [
+            internal_operation_span(),
+            graph_span(**{ATTR_EFFECT_DISPATCH: "NOT_IN_THIS_TRACE"}),
+            *bedrock_spans(),
+            read_span(status=404, response_status=404),
+        ]
+    )
+
+
+def fields(declared: Any) -> Witness:
+    """A settled trace whose only defect is the declared field universe.
+
+    Both state digests stay well formed and **equal**, so nothing but the field universe can be
+    what refuses the trace. That is the vacuity guard expressed as an experiment rather than as a
+    comment: if the field set stopped being checked, equal digests over an unknown universe would
+    certify settlement.
+    """
+    return lambda: payload(settled_trace(**{ATTR_EFFECT_FIELDS: declared}))
+
+
+def digests(expected: Any, observed: Any) -> Witness:
+    return lambda: payload(
+        settled_trace(
+            **{ATTR_EFFECT_STATE_DIGEST: expected, ATTR_OBSERVATION_STATE_DIGEST: observed}
+        )
+    )
+
+
+# ---- mutation bodies -------------------------------------------------------------------------
+
+
+def _last_segment_of_any_get(span: Any) -> str | None:
+    segments = url_path_segments(span)
+    if http_method(span) != "GET" or not segments:
+        return None
+    return segments[-1]
+
+
+def _under_the_appointments_collection(span: Any) -> str | None:
+    segments = url_path_segments(span)
+    if http_method(span) != "GET" or segments is None or len(segments) < 3:
+        return None
+    if segments[:2] != CLINIC_APPOINTMENTS_PATH:
+        return None
+    return segments[-1]
+
+
+def _any_post(span: Any) -> bool:
+    return http_method(span) == "POST"
+
+
+def _any_post_under_the_collection(span: Any) -> bool:
+    segments = url_path_segments(span)
+    if http_method(span) != "POST" or segments is None:
+        return False
+    return segments[: len(CLINIC_APPOINTMENTS_PATH)] == CLINIC_APPOINTMENTS_PATH
+
+
+def _case_folded_reads(evidence: Any) -> tuple[Any, ...]:
+    claimed = evidence.claim.observation_resource_id
+    if not isinstance(claimed, str):
+        return ()
+    return tuple(read for read in evidence.reads if read.resource_id.lower() == claimed.lower())
+
+
+def _unvalidated_claimed_resource(evidence: Any) -> str | None:
+    claimed = evidence.claim.observation_resource_id
+    return claimed if isinstance(claimed, str) else None
+
+
+def _dispatch_of(evidence: Any) -> str | None:
+    value = evidence.claim.dispatch
+    return value if isinstance(value, str) else None
+
+
+def _the_matched_read(evidence: Any) -> Any:
+    matching = settlement._matching_reads(evidence)
+    return matching[0].span if len(matching) == 1 else None
+
+
+def _ordering_boundary_moved_off_equality(evidence: Any) -> CheckId | None:
+    """``began <= finished`` instead of ``began < finished``: equality becomes a violation."""
+    if _dispatch_of(evidence) != "PERFORMED" or len(evidence.writes) != 1:
+        return None
+    read = _the_matched_read(evidence)
+    if read is None:
+        return None
+    finished = end_nanos(evidence.writes[0])
+    began = start_nanos(read)
+    if finished is None or began is None:
+        return None
+    return CheckId.OBSERVATION_PRECEDES_EFFECT if began <= finished else None
+
+
+def _constant_timestamps(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settlement, "start_nanos", lambda span: 0)
+    monkeypatch.setattr(settlement, "end_nanos", lambda span: 0)
+
+
+def _iso_before_nanos(span: Any) -> int | None:
+    """Read the enriched ISO rendering ahead of the original nanoseconds."""
+    text = span.get("start_time")
+    if isinstance(text, str):
+        found = _iso_to_nanos(text)
+        if found is not None:
+            return found
+    return start_nanos(span)
+
+
+def _is_subset(smaller: Any, larger: Any) -> bool:
+    return smaller is not None and larger is not None and set(smaller) <= set(larger)
+
+
+def _declared_text(evidence: Any) -> str:
+    value = evidence.claim.fields
+    return value if isinstance(value, str) else "not-empty"
+
+
+def _agree_on(window: slice) -> Callable[[Any], bool]:
+    def agree(evidence: Any) -> bool:
+        both = settlement._well_formed_digests(evidence)
+        return both is not None and both[0][window] == both[1][window]
+
+    return agree
+
+
+def _any_two_non_empty_strings(evidence: Any) -> tuple[str, str] | None:
+    expected = evidence.claim.effect_state_digest
+    observed = evidence.claim.observation_state_digest
+    if isinstance(expected, str) and isinstance(observed, str) and expected and observed:
+        return expected, observed
+    return None
+
+
+def _swapped_comparison(evidence: Any) -> bool:
+    both = settlement._well_formed_digests(evidence)
+    return both is not None and both[1] == both[0]
+
+
+# ---- the ledger entries ----------------------------------------------------------------------
+
+_FAMILY_DEFG: Final[tuple[Mutant, ...]] = (
+    Mutant(
+        id="D01",
+        family="D",
+        surface="clinic_read_resource",
+        severity=Severity.CRITICAL,
+        apply=patching("clinic_read_resource", _last_segment_of_any_get),
+        witness=foreign_get_only,
+        expected_before=failed(CheckId.OBSERVATION_ABSENT_FROM_TRACE),
+        expected_after=PASSED,
+        note="any GET's last path segment becomes the observed resource, so a third party's URL "
+        "satisfies CareLoop's independent observation",
+    ),
+    Mutant(
+        id="D02",
+        family="D",
+        surface="is_clinic_write",
+        severity=Severity.CRITICAL,
+        apply=patching("is_clinic_write", _any_post),
+        witness=unrelated_post_only,
+        expected_before=failed(CheckId.DISPATCH_CONTRADICTS_TRANSPORT),
+        expected_after=PASSED,
+        note="any POST counts as creating the appointment, so a booking that never reached the "
+        "clinic is certified",
+    ),
+    Mutant(
+        id="D03",
+        family="D",
+        surface="clinic_read_resource",
+        severity=Severity.CRITICAL,
+        apply=patching("clinic_read_resource", _under_the_appointments_collection),
+        witness=deeper_read_path,
+        expected_before=failed(CheckId.OBSERVATION_ABSENT_FROM_TRACE),
+        expected_after=PASSED,
+        note="the read route accepts any depth under the collection",
+    ),
+    Mutant(
+        id="D04",
+        family="D",
+        surface="is_clinic_write",
+        severity=Severity.CRITICAL,
+        apply=patching("is_clinic_write", _any_post_under_the_collection),
+        witness=deeper_write_path,
+        expected_before=failed(CheckId.DISPATCH_CONTRADICTS_TRANSPORT),
+        expected_after=PASSED,
+        note="the write route accepts a sub-resource POST, which creates no appointment",
+    ),
+    Mutant(
+        id="D05",
+        family="D",
+        surface="_matching_reads",
+        severity=Severity.HIGH,
+        apply=patching("_matching_reads", _case_folded_reads),
+        witness=resource_id_in_the_wrong_case,
+        expected_before=failed(CheckId.RESOURCE_MISMATCH),
+        expected_after=PASSED,
+        note="correlation case-folded, so two different names become one",
+    ),
+    Mutant(
+        id="D06",
+        family="D",
+        surface="_claimed_resource",
+        severity=Severity.MEDIUM,
+        apply=patching("_claimed_resource", _unvalidated_claimed_resource),
+        witness=unsafe_claimed_resource,
+        expected_before=failed(CheckId.OBSERVATION_ABSENT_FROM_TRACE),
+        expected_after=failed(CheckId.RESOURCE_MISMATCH),
+        note="the safe-token guard is dropped; a claimed id carrying a separator stops being "
+        "refused as unusable and is merely reported as unmatched",
+    ),
+    Mutant(
+        id="D07",
+        family="D",
+        surface="_matching_reads",
+        severity=Severity.HIGH,
+        apply=deriving("_matching_reads", lambda original: lambda e: original(e)[:1]),
+        witness=two_matching_reads,
+        expected_before=failed(CheckId.MULTIPLE_OBSERVATIONS),
+        expected_after=PASSED,
+        note="two observations of the claimed resource resolved by taking the first",
+    ),
+    Mutant(
+        id="E01",
+        family="E",
+        surface="end_nanos",
+        severity=Severity.CRITICAL,
+        apply=patching("end_nanos", start_nanos),
+        witness=read_before_write,
+        expected_before=failed(CheckId.OBSERVATION_PRECEDES_EFFECT),
+        expected_after=PASSED,
+        note="ordering compares the read against when the write STARTED, so a read that "
+        "overlapped the write is accepted as evidence for it",
+    ),
+    Mutant(
+        id="E02",
+        family="E",
+        surface="_observation_precedes_effect",
+        severity=Severity.MEDIUM,
+        apply=replacing_check(
+            "_observation_precedes_effect", _ordering_boundary_moved_off_equality
+        ),
+        witness=read_exactly_at_write_end,
+        expected_before=PASSED,
+        expected_after=failed(CheckId.OBSERVATION_PRECEDES_EFFECT),
+        note="the boundary moves off equality and a valid observation is refused. Not an escape "
+        "but the other half of pinning read.start >= write.end exactly",
+    ),
+    Mutant(
+        id="E03",
+        family="E",
+        surface="start_nanos / end_nanos",
+        severity=Severity.CRITICAL,
+        apply=_constant_timestamps,
+        witness=read_before_write,
+        expected_before=failed(CheckId.OBSERVATION_PRECEDES_EFFECT),
+        expected_after=PASSED,
+        note="every timestamp reads as one constant, so timing is always available and the "
+        "ordering comparison can never fail",
+    ),
+    Mutant(
+        id="E04",
+        family="E",
+        surface="start_nanos",
+        severity=Severity.MEDIUM,
+        apply=patching("start_nanos", _iso_before_nanos),
+        witness=iso_disagrees_with_nanos,
+        expected_before=PASSED,
+        expected_after=failed(CheckId.OBSERVATION_PRECEDES_EFFECT),
+        note="the enriched ISO rendering is preferred over the original nanoseconds; the "
+        "documented precedence is the other way round",
+    ),
+    Mutant(
+        id="E05",
+        family="E",
+        surface="_observation_not_successful",
+        severity=Severity.CRITICAL,
+        apply=deriving_check(
+            "_observation_not_successful",
+            lambda original: lambda e: None if _dispatch_of(e) != "PERFORMED" else original(e),
+        ),
+        witness=recheck_with_a_failed_read,
+        expected_before=failed(CheckId.OBSERVATION_NOT_SUCCESSFUL),
+        expected_after=PASSED,
+        note="a no-write dispatch mode treated as relaxing the observation requirement too. The "
+        "only thing those modes remove is the write and the ordering against it",
+    ),
+    Mutant(
+        id="F01",
+        family="F",
+        surface="_declared_fields",
+        severity=Severity.CRITICAL,
+        apply=deriving(
+            "_declared_fields",
+            lambda original: (
+                lambda e: (
+                    EXPECTED_FIELDS if _is_subset(original(e), EXPECTED_FIELDS) else original(e)
+                )
+            ),
+        ),
+        witness=fields("patient_id,provider_id"),
+        expected_before=failed(CheckId.FIELD_SET_UNEXPECTED),
+        expected_after=PASSED,
+        note="a subset is accepted, so equal digests certify a state omitting fields the clinic "
+        "holds",
+    ),
+    Mutant(
+        id="F02",
+        family="F",
+        surface="_declared_fields",
+        severity=Severity.CRITICAL,
+        apply=deriving(
+            "_declared_fields",
+            lambda original: (
+                lambda e: (
+                    EXPECTED_FIELDS if _is_subset(EXPECTED_FIELDS, original(e)) else original(e)
+                )
+            ),
+        ),
+        witness=fields("patient_id,provider_id,reason,slot_start,notes"),
+        expected_before=failed(CheckId.FIELD_SET_UNEXPECTED),
+        expected_after=PASSED,
+        note="a superset is accepted, so the digests cover fields the read-back never compared",
+    ),
+    Mutant(
+        id="F03",
+        family="F",
+        surface="_declared_fields",
+        severity=Severity.MEDIUM,
+        apply=deriving(
+            "_declared_fields",
+            lambda original: lambda e: None if original(e) is None else tuple(sorted(original(e))),
+        ),
+        witness=fields("provider_id,patient_id,reason,slot_start"),
+        expected_before=failed(CheckId.FIELD_SET_UNEXPECTED),
+        expected_after=PASSED,
+        note="order-insensitive comparison. MEDIUM rather than CRITICAL because the field *set* "
+        "is unchanged, so no wrong state universe is certified. What is lost is the canonical "
+        "encoding Patch D is written to emit, and every other canonical form in this repository "
+        "is sorted for the same reason",
+    ),
+    Mutant(
+        id="F04",
+        family="F",
+        surface="_declared_fields",
+        severity=Severity.MEDIUM,
+        apply=deriving(
+            "_declared_fields",
+            lambda original: (
+                lambda e: None if original(e) is None else tuple(dict.fromkeys(original(e)))
+            ),
+        ),
+        witness=fields("patient_id,patient_id,provider_id,reason,slot_start"),
+        expected_before=failed(CheckId.FIELD_SET_UNEXPECTED),
+        expected_after=PASSED,
+        note="duplicates collapsed rather than refused; a malformed declaration is repaired by "
+        "the reader instead of being reported",
+    ),
+    Mutant(
+        id="F05",
+        family="F",
+        surface="_field_set_unexpected",
+        severity=Severity.CRITICAL,
+        apply=deriving_check(
+            "_field_set_unexpected",
+            lambda original: lambda e: None if not _declared_text(e) else original(e),
+        ),
+        witness=fields(""),
+        expected_before=failed(CheckId.FIELD_SET_UNEXPECTED),
+        expected_after=PASSED,
+        note="an empty declaration read as nothing to check. This is the vacuity itself: two "
+        "digests over an empty joint state are trivially equal",
+    ),
+    Mutant(
+        id="F06",
+        family="F",
+        surface="_declared_fields",
+        severity=Severity.MEDIUM,
+        apply=deriving(
+            "_declared_fields",
+            lambda original: (
+                lambda e: (
+                    tuple(e.claim.fields)
+                    if isinstance(e.claim.fields, list | tuple)
+                    else original(e)
+                )
+            ),
+        ),
+        witness=fields(list(EXPECTED_FIELDS)),
+        expected_before=failed(CheckId.FIELD_SET_UNEXPECTED),
+        expected_after=PASSED,
+        note="a second encoding for one fact is admitted",
+    ),
+    Mutant(
+        id="G01",
+        family="G",
+        surface="_digests_agree",
+        severity=Severity.CRITICAL,
+        apply=patching("_digests_agree", _agree_on(slice(0, 8))),
+        witness=digests(STATE_DIGEST, PREFIX_TWIN),
+        expected_before=failed(CheckId.OUTCOME_CONTRADICTS_DIGESTS),
+        expected_after=PASSED,
+        note="only the first eight characters are compared, so two different external states "
+        "sharing a prefix become one",
+    ),
+    Mutant(
+        id="G02",
+        family="G",
+        surface="_digests_agree",
+        severity=Severity.CRITICAL,
+        apply=patching("_digests_agree", _agree_on(slice(-8, None))),
+        witness=digests(STATE_DIGEST, SUFFIX_TWIN),
+        expected_before=failed(CheckId.OUTCOME_CONTRADICTS_DIGESTS),
+        expected_after=PASSED,
+        note="the mirror image of G01, and the reason both ends are attacked: a comparison "
+        "narrowed at either end certifies distinct states as identical",
+    ),
+    Mutant(
+        id="G03",
+        family="G",
+        surface="_digests_agree",
+        severity=Severity.CRITICAL,
+        apply=patching("_digests_agree", lambda evidence: True),
+        witness=digests(STATE_DIGEST, OTHER_DIGEST),
+        expected_before=failed(CheckId.OUTCOME_CONTRADICTS_DIGESTS),
+        expected_after=PASSED,
+        note="state equality asserted unconditionally",
+    ),
+    Mutant(
+        id="G04",
+        family="G",
+        surface="DIGEST_PATTERN",
+        severity=Severity.MEDIUM,
+        apply=patching("DIGEST_PATTERN", re.compile(r"(?i)[0-9a-f]{64}")),
+        witness=digests(UPPER_DIGEST, UPPER_DIGEST),
+        expected_before=failed(CheckId.DIGEST_MALFORMED),
+        expected_after=PASSED,
+        note="canonicality weakened to accept uppercase. MEDIUM, not CRITICAL: the two renderings "
+        "denote the same SHA-256 bytes, so no distinct external states are made equivalent. It is "
+        "also the mutant that must be applied to settlement's own binding -- patching "
+        "contract.DIGEST_PATTERN changes nothing, which is how the plan gate produced a phantom "
+        "survivor",
+    ),
+    Mutant(
+        id="G05",
+        family="G",
+        surface="DIGEST_PATTERN",
+        severity=Severity.HIGH,
+        apply=patching("DIGEST_PATTERN", re.compile(r"[0-9a-f]{8,}")),
+        witness=digests(SHORT_DIGEST, SHORT_DIGEST),
+        expected_before=failed(CheckId.DIGEST_MALFORMED),
+        expected_after=PASSED,
+        note="a truncated digest accepted as well formed. HIGH rather than MEDIUM because, unlike "
+        "G04, this genuinely shrinks the state space: eight hex characters cannot identify a "
+        "joint state",
+    ),
+    Mutant(
+        id="G06",
+        family="G",
+        surface="_well_formed_digests",
+        severity=Severity.HIGH,
+        apply=patching("_well_formed_digests", _any_two_non_empty_strings),
+        witness=malformed_digests,
+        expected_before=failed(CheckId.DIGEST_MALFORMED),
+        expected_after=PASSED,
+        note="any two equal non-empty strings accepted as digests, so a placeholder emitted by a "
+        "half-written producer would certify",
+    ),
+    Mutant(
+        id="G07",
+        family="G",
+        surface="_digests_agree",
+        severity=Severity.EQUIVALENT,
+        apply=patching("_digests_agree", _swapped_comparison),
+        witness=lambda: payload(settled_trace()),
+        expected_before=PASSED,
+        expected_after=PASSED,
+        equivalence=(
+            "String equality is symmetric, so comparing observed == expected decides exactly what "
+            "expected == observed decides. No other check reads the pair's order: the only other "
+            "consumer of _well_formed_digests is _digest_malformed, which asks whether both are "
+            "well formed rather than which is which. The extra probes cover the unequal, "
+            "malformed and outcome-contradiction paths as well as the passing one."
+        ),
+        extra_probes=(
+            digests(STATE_DIGEST, OTHER_DIGEST),
+            digests(STATE_DIGEST, PREFIX_TWIN),
+            malformed_digests,
+            diverged_but_equal,
+            absent_outcome_unequal_digests,
+        ),
+    ),
+)
+
+
+MUTANTS: Final[tuple[Mutant, ...]] = _family_a() + _FAMILY_DEFG
 
 
 # =============================================================================================
@@ -684,6 +1388,41 @@ class TestEveryMutantIsKilled:
             f"{mutant.id} ({mutant.surface}) SURVIVES: severity {mutant.severity}, and no "
             f"standing assertion in this repository notices it"
         )
+
+
+class TestEquivalentMutantsAreProvablyUnobservable:
+    """An equivalent mutant must move **nothing**, over more than its own witness.
+
+    Equivalence is the one classification that retires a mutant without a kill, so it is the one
+    that has to be hardest to claim. Each entry carries a written justification, and each is swept
+    over its own extra probes as well as the whole standing corpus -- chosen to exercise the paths
+    where a directional difference would show up if there were one.
+    """
+
+    EQUIVALENT = tuple(mutant for mutant in MUTANTS if mutant.is_equivalent)
+
+    def test_there_is_something_to_check(self) -> None:
+        assert self.EQUIVALENT
+
+    @pytest.mark.parametrize(
+        "mutant", EQUIVALENT, ids=[mutant.id for mutant in EQUIVALENT] or ["none"]
+    )
+    def test_no_extra_probe_moves_either(
+        self, mutant: Mutant, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        assert mutant.extra_probes, f"{mutant.id} claims equivalence with no extra probes"
+        before = [verdict(probe()) for probe in mutant.extra_probes]
+        mutant.apply(monkeypatch)
+        after = [verdict(probe()) for probe in mutant.extra_probes]
+        assert after == before, f"{mutant.id} is declared EQUIVALENT but moved a probe"
+
+    @pytest.mark.parametrize(
+        "mutant", EQUIVALENT, ids=[mutant.id for mutant in EQUIVALENT] or ["none"]
+    )
+    def test_the_probes_span_more_than_one_outcome(self, mutant: Mutant) -> None:
+        """A sweep over probes that all answer the same thing would prove nothing."""
+        reached = {verdict(probe()) for probe in mutant.extra_probes}
+        assert len(reached) > 1, f"{mutant.id}'s probes do not discriminate"
 
 
 class TestTheStandingCorpusHolds:

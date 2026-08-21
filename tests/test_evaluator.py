@@ -15,6 +15,7 @@ module-level value.
 from __future__ import annotations
 
 import ast
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -40,9 +41,16 @@ from evaluators.contract import (
     CLAIM_ATTRIBUTES,
     ERROR_MESSAGES,
     NA_EXPLANATIONS,
+    PASS_EXPLANATION,
     CheckId,
     ErrorCode,
     NaReason,
+)
+from evaluators.settlement import (
+    CHECKS,
+    Evidence,
+    applicability,
+    assess,
 )
 from evaluators.spans import (
     EnvelopeError,
@@ -832,3 +840,523 @@ class TestTimingNormalisesToOneIntegerQuantity:
         assert start_nanos(span) == 1_787_313_600_123_456_000
         # The half that matters: the microsecond tail is intact rather than rounded away.
         assert start_nanos(span) % 1_000_000_000 == 123_456_000
+
+
+# --------------------------------------------------------------------------------------------
+# The decision procedure
+# --------------------------------------------------------------------------------------------
+
+
+def recheck_trace(**overrides: Any) -> list[dict[str, Any]]:
+    """A trace with an independent read and **no write** -- a re-check or a suppressed duplicate.
+
+    The write belongs to an earlier trace. The read does not, and never may.
+    """
+    settings: dict[str, Any] = {ATTR_EFFECT_DISPATCH: "NOT_IN_THIS_TRACE"}
+    settings.update(overrides)
+    return [internal_operation_span(), graph_span(**settings), *bedrock_spans(), read_span()]
+
+
+def simulated_trace(**overrides: Any) -> list[dict[str, Any]]:
+    """A trace whose effect has no external system at all -- one of the three simulated tools."""
+    settings: dict[str, Any] = {
+        ATTR_EFFECT_TYPE: "send_email",
+        ATTR_EFFECT_DISPATCH: "PERFORMED",
+        ATTR_OBSERVATION_MODE: "NONE",
+        ATTR_OBSERVATION_OUTCOME: "NOT_OBSERVED",
+    }
+    settings.update(overrides)
+    return [internal_operation_span(), graph_span(**settings), *bedrock_spans()]
+
+
+def quiet_trace() -> list[dict[str, Any]]:
+    """A trace that proposed nothing, executed nothing and touched no external system."""
+    return [internal_operation_span(), graph_span(**dict.fromkeys(CLAIM_ATTRIBUTES, ABSENT))]
+
+
+def verdict(spans: list[Any]) -> dict[str, Any]:
+    """Judge a trace through the whole public path, envelope included."""
+    return assess(payload(spans))
+
+
+class TestOneRealShapedTraceSettles:
+    """The measured six-span production shape, with a claim that should pass, and it does.
+
+    If this test ever needs a fixture change to keep passing, that change is a change to what the
+    evaluator believes production looks like, and it belongs in ``docs/spike-findings.md`` before
+    it belongs here.
+    """
+
+    def test_it_passes(self) -> None:
+        assert verdict(settled_trace()) == {
+            "label": "PASS",
+            "value": 1.0,
+            "explanation": PASS_EXPLANATION,
+        }
+
+    def test_the_bedrock_and_wrapper_spans_are_tolerated_rather_than_filtered(self) -> None:
+        """Patch A proved nothing is filtered. The evaluator must cope with all six spans."""
+        spans = settled_trace()
+        assert len(spans) == 6
+        assert verdict(spans)["label"] == "PASS"
+
+    def test_no_root_is_ever_identified(self) -> None:
+        """``invoke_graph`` is not parentless, so a trace with no parentless span still settles.
+
+        The claim is located by attribute presence. Giving every span a parent removes the only
+        thing a root-by-absent-parent heuristic could have keyed on, and changes nothing.
+        """
+        spans = settled_trace()
+        for span in spans:
+            span["parentSpanId"] = "9999999999999999"
+            span["parent_span_id"] = "9999999999999999"
+        assert verdict(spans)["label"] == "PASS"
+
+    def test_a_claim_on_any_span_is_found(self) -> None:
+        """Patch D chooses where to put the nine attributes; Patch B does not care which span."""
+        spans = [
+            internal_operation_span(),
+            graph_span(**dict.fromkeys(CLAIM_ATTRIBUTES, ABSENT)),
+            *bedrock_spans(),
+            write_span(),
+            read_span(),
+        ]
+        spans[-1]["attributes"].update(claim_attributes())
+        assert verdict(spans)["label"] == "PASS"
+
+
+class TestTheNonPassFloor:
+    """One of each shape a result can take, asserted exactly."""
+
+    def test_a_digest_mismatch_fails(self) -> None:
+        result = verdict(settled_trace(**{ATTR_OBSERVATION_STATE_DIGEST: OTHER_DIGEST}))
+        assert result["label"] == "FAIL"
+        assert result["value"] == 0.0
+        assert result["explanation"] == CHECK_EXPLANATIONS[CheckId.OUTCOME_CONTRADICTS_DIGESTS]
+
+    def test_an_effect_with_no_external_system_is_not_applicable(self) -> None:
+        result = verdict(simulated_trace())
+        assert result == {
+            "label": "NOT_APPLICABLE",
+            "explanation": NA_EXPLANATIONS[NaReason.EFFECT_NOT_INDEPENDENTLY_OBSERVABLE],
+        }
+
+    def test_a_trace_claiming_nothing_and_touching_nothing_is_not_applicable(self) -> None:
+        result = verdict(quiet_trace())
+        assert result == {
+            "label": "NOT_APPLICABLE",
+            "explanation": NA_EXPLANATIONS[NaReason.NO_EFFECT_CLAIMED],
+        }
+
+    @pytest.mark.parametrize(
+        "spans", [lambda: simulated_trace(), lambda: quiet_trace()], ids=["simulated", "quiet"]
+    )
+    def test_not_applicable_omits_the_value_key_entirely(self, spans: Any) -> None:
+        """Absent, never ``None`` and never ``0.0``.
+
+        Patch A proved the omission survives the round trip uncoerced. That is what keeps an
+        inapplicable trace out of every average at the schema level rather than by convention, so
+        it is asserted as key absence rather than as a falsy value.
+        """
+        result = verdict(spans())
+        assert "value" not in result
+        assert result.get("value", "missing") == "missing"
+
+    def test_the_wrong_evaluation_level_is_an_error(self) -> None:
+        result = assess(payload(settled_trace(), level="SESSION"))
+        assert result == {
+            "errorCode": "UNSUPPORTED_EVALUATION_LEVEL",
+            "errorMessage": ERROR_MESSAGES[ErrorCode.UNSUPPORTED_EVALUATION_LEVEL],
+        }
+
+    def test_an_error_result_carries_no_label_and_no_value(self) -> None:
+        """Only fields Patch A proved ``EvaluationResultContent`` declares."""
+        result = assess(payload(settled_trace(), level="SESSION"))
+        assert set(result) == {"errorCode", "errorMessage"}
+
+
+class TestClinicTransportCanNeverBeHiddenAsNotApplicable:
+    """The two rules that stop *not applicable* becoming a way to say nothing happened."""
+
+    def test_a_write_with_no_claim_at_all_fails(self) -> None:
+        spans = [internal_operation_span(), *bedrock_spans(), write_span(), read_span()]
+        result = verdict(spans)
+        assert result["label"] == "FAIL"
+        assert result["explanation"] == CHECK_EXPLANATIONS[CheckId.CLAIM_ABSENT]
+
+    def test_a_read_alone_with_no_claim_also_fails(self) -> None:
+        spans = [internal_operation_span(), *bedrock_spans(), read_span()]
+        assert verdict(spans)["explanation"] == CHECK_EXPLANATIONS[CheckId.CLAIM_ABSENT]
+
+    def test_clinic_transport_beside_an_unobservable_effect_type_fails(self) -> None:
+        spans = simulated_trace()
+        spans.extend([write_span(), read_span()])
+        result = verdict(spans)
+        assert result["label"] == "FAIL"
+        assert result["explanation"] == CHECK_EXPLANATIONS[CheckId.EFFECT_TYPE_MISLABELLED]
+
+    def test_two_claim_spans_are_a_finding_rather_than_a_choice(self) -> None:
+        spans = settled_trace()
+        spans[-1]["attributes"].update(claim_attributes())
+        result = verdict(spans)
+        assert result["explanation"] == CHECK_EXPLANATIONS[CheckId.CLAIM_AMBIGUOUS]
+
+
+class TestReCheckAndSuppressedEffectSemantics:
+    """A write may be historical. An observation may not.
+
+    This is the question the plan gate singled out. CareLoop legitimately reaches ``VERIFYING``
+    with no HTTP write in the trace two ways -- a duplicate suppressed from its own ledger, and a
+    caregiver's re-check that runs ``("dispatch", "verify")`` and never reaches the execute node --
+    so making the write mandatory would refuse correct traces. What keeps that from becoming a
+    false ``PASS`` is that everything on the observation side is still required, **in this trace**.
+    """
+
+    @pytest.mark.parametrize("dispatch", ["SUPPRESSED", "NOT_IN_THIS_TRACE"])
+    def test_a_trace_with_no_write_can_settle(self, dispatch: str) -> None:
+        assert verdict(recheck_trace(**{ATTR_EFFECT_DISPATCH: dispatch}))["label"] == "PASS"
+
+    @pytest.mark.parametrize("dispatch", ["SUPPRESSED", "NOT_IN_THIS_TRACE"])
+    def test_but_only_with_an_independent_read_in_this_trace(self, dispatch: str) -> None:
+        """Drop the read and the same claim fails. The observation is never historical."""
+        spans = recheck_trace(**{ATTR_EFFECT_DISPATCH: dispatch})
+        without_read = [span for span in spans if clinic_read_resource(span) is None]
+        result = verdict(without_read)
+        assert result["label"] == "FAIL"
+        assert result["explanation"] == CHECK_EXPLANATIONS[CheckId.OBSERVATION_ABSENT_FROM_TRACE]
+
+    @pytest.mark.parametrize("dispatch", ["SUPPRESSED", "NOT_IN_THIS_TRACE"])
+    def test_a_write_in_the_trace_contradicts_both_of_them(self, dispatch: str) -> None:
+        spans = recheck_trace(**{ATTR_EFFECT_DISPATCH: dispatch})
+        spans.append(write_span())
+        result = verdict(spans)
+        assert result["explanation"] == CHECK_EXPLANATIONS[CheckId.DISPATCH_CONTRADICTS_TRANSPORT]
+
+    def test_performed_without_a_write_contradicts_the_transport(self) -> None:
+        result = verdict(recheck_trace(**{ATTR_EFFECT_DISPATCH: "PERFORMED"}))
+        assert result["explanation"] == CHECK_EXPLANATIONS[CheckId.DISPATCH_CONTRADICTS_TRANSPORT]
+
+    @pytest.mark.parametrize("dispatch", [ABSENT, "", "PERFORMED_MAYBE", 7, None, True])
+    def test_a_dispatch_outside_the_vocabulary_never_settles(self, dispatch: Any) -> None:
+        result = verdict(recheck_trace(**{ATTR_EFFECT_DISPATCH: dispatch}))
+        assert result["label"] == "FAIL"
+
+    @pytest.mark.parametrize("dispatch", ["SUPPRESSED", "NOT_IN_THIS_TRACE"])
+    def test_the_read_must_still_have_succeeded(self, dispatch: str) -> None:
+        spans = [
+            internal_operation_span(),
+            graph_span(**{ATTR_EFFECT_DISPATCH: dispatch}),
+            *bedrock_spans(),
+            read_span(status=404, response_status=404),
+        ]
+        assert (
+            verdict(spans)["explanation"] == CHECK_EXPLANATIONS[CheckId.OBSERVATION_NOT_SUCCESSFUL]
+        )
+
+    @pytest.mark.parametrize("dispatch", ["SUPPRESSED", "NOT_IN_THIS_TRACE"])
+    def test_the_read_must_still_name_the_claimed_resource(self, dispatch: str) -> None:
+        spans = [
+            internal_operation_span(),
+            graph_span(**{ATTR_EFFECT_DISPATCH: dispatch}),
+            *bedrock_spans(),
+            read_span(resource="apt-somebody-elses"),
+        ]
+        assert verdict(spans)["explanation"] == CHECK_EXPLANATIONS[CheckId.RESOURCE_MISMATCH]
+
+    @pytest.mark.parametrize("dispatch", ["SUPPRESSED", "NOT_IN_THIS_TRACE"])
+    def test_every_semantic_requirement_still_applies(self, dispatch: str) -> None:
+        """Ordering is inapplicable without a write. Nothing else is relaxed."""
+        for override, expected in (
+            ({ATTR_OBSERVATION_MODE: "NONE"}, CheckId.NO_INDEPENDENT_OBSERVER),
+            ({ATTR_EFFECT_FIELDS: "patient_id"}, CheckId.FIELD_SET_UNEXPECTED),
+            ({ATTR_EFFECT_STATE_DIGEST: "nothex"}, CheckId.DIGEST_MALFORMED),
+            ({ATTR_OBSERVATION_OUTCOME: "ABSENT"}, CheckId.OUTCOME_NOT_MATCHED),
+            ({ATTR_SETTLEMENT: "NOT_CERTIFIED"}, CheckId.SETTLEMENT_NOT_VERIFIED),
+        ):
+            settings = {ATTR_EFFECT_DISPATCH: dispatch, **override}
+            result = verdict(recheck_trace(**settings))
+            assert result["explanation"] == CHECK_EXPLANATIONS[expected], override
+
+
+class TestTheOrderingsThatAreLoadBearing:
+    """Three orderings that Patch C must not be able to change without a test going red."""
+
+    def test_the_field_set_is_pinned_before_any_digest_is_trusted(self) -> None:
+        """Two digests over an empty joint state are equal, so this ordering is the vacuity guard.
+
+        The claim below is wrong in both ways at once. Reporting the digest failure would mean the
+        evaluator compared digests it had no reason to believe covered anything.
+        """
+        result = verdict(
+            settled_trace(
+                **{
+                    ATTR_EFFECT_FIELDS: "",
+                    ATTR_EFFECT_STATE_DIGEST: STATE_DIGEST,
+                    ATTR_OBSERVATION_STATE_DIGEST: OTHER_DIGEST,
+                    ATTR_OBSERVATION_OUTCOME: "ABSENT",
+                }
+            )
+        )
+        assert result["explanation"] == CHECK_EXPLANATIONS[CheckId.FIELD_SET_UNEXPECTED]
+
+    def test_an_empty_field_set_with_equal_digests_still_fails(self) -> None:
+        """The vacuity itself, stated directly."""
+        result = verdict(settled_trace(**{ATTR_EFFECT_FIELDS: ""}))
+        assert result["explanation"] == CHECK_EXPLANATIONS[CheckId.FIELD_SET_UNEXPECTED]
+
+    def test_the_field_set_must_be_exactly_the_expected_one(self) -> None:
+        for wrong in ("patient_id,provider_id,reason", "patient_id,provider_id,reason,slot", ""):
+            result = verdict(settled_trace(**{ATTR_EFFECT_FIELDS: wrong}))
+            assert result["explanation"] == CHECK_EXPLANATIONS[CheckId.FIELD_SET_UNEXPECTED], wrong
+
+    def test_the_self_contradiction_check_is_independently_reachable(self) -> None:
+        """``DIVERGED`` over equal digests is a claim disagreeing with itself."""
+        result = verdict(settled_trace(**{ATTR_OBSERVATION_OUTCOME: "DIVERGED"}))
+        assert result["explanation"] == CHECK_EXPLANATIONS[CheckId.OUTCOME_CONTRADICTS_DIGESTS]
+
+    def test_the_plain_digest_disagreement_is_independently_reachable(self) -> None:
+        """An outcome that claims no agreement, over digests that do not agree."""
+        result = verdict(
+            settled_trace(
+                **{
+                    ATTR_OBSERVATION_OUTCOME: "ABSENT",
+                    ATTR_OBSERVATION_STATE_DIGEST: OTHER_DIGEST,
+                }
+            )
+        )
+        assert result["explanation"] == CHECK_EXPLANATIONS[CheckId.STATE_DIGESTS_DIFFER]
+
+    def test_the_outcome_requirement_is_independently_reachable(self) -> None:
+        """Equal digests, and an outcome that still does not claim the read established them."""
+        for outcome in ("ABSENT", "UNAVAILABLE", "NOT_OBSERVED"):
+            result = verdict(settled_trace(**{ATTR_OBSERVATION_OUTCOME: outcome}))
+            assert result["explanation"] == CHECK_EXPLANATIONS[CheckId.OUTCOME_NOT_MATCHED], outcome
+
+    def test_multiple_writes_is_decided_before_anything_says_the_write(self) -> None:
+        spans = settled_trace()
+        spans.append(write_span(span_id="8888888888888888"))
+        assert verdict(spans)["explanation"] == CHECK_EXPLANATIONS[CheckId.MULTIPLE_WRITES]
+
+
+class TestAmbiguityFailsRatherThanChoosing:
+    """Every place two candidates could be picked between, and none of them is."""
+
+    def test_two_reads_of_the_claimed_resource(self) -> None:
+        spans = settled_trace()
+        spans.append(read_span(span_id="8888888888888888", start=READ_END, end=READ_END + 1_000))
+        assert verdict(spans)["explanation"] == CHECK_EXPLANATIONS[CheckId.MULTIPLE_OBSERVATIONS]
+
+    def test_a_second_read_of_a_different_resource_is_not_ambiguity(self) -> None:
+        """Only reads naming the claimed resource participate; the rest are other evidence."""
+        spans = settled_trace()
+        spans.append(read_span(resource="apt-unrelated", span_id="8888888888888888"))
+        assert verdict(spans)["label"] == "PASS"
+
+    def test_the_writes_two_status_spellings_disagreeing(self) -> None:
+        spans = [
+            internal_operation_span(),
+            graph_span(),
+            *bedrock_spans(),
+            write_span(status=201, response_status=500),
+            read_span(),
+        ]
+        assert (
+            verdict(spans)["explanation"] == CHECK_EXPLANATIONS[CheckId.TRANSPORT_STATUS_AMBIGUOUS]
+        )
+
+    def test_the_reads_two_status_spellings_disagreeing(self) -> None:
+        spans = [
+            internal_operation_span(),
+            graph_span(),
+            *bedrock_spans(),
+            write_span(),
+            read_span(status=200, response_status=503),
+        ]
+        assert (
+            verdict(spans)["explanation"] == CHECK_EXPLANATIONS[CheckId.TRANSPORT_STATUS_AMBIGUOUS]
+        )
+
+
+class TestOrderingAgainstTheWriteIsCheckedAndNeverSkipped:
+    """Timing is required where an ordering claim exists, and absent where one does not."""
+
+    def test_a_read_that_began_before_the_write_finished_fails(self) -> None:
+        spans = [
+            internal_operation_span(),
+            graph_span(),
+            *bedrock_spans(),
+            write_span(),
+            read_span(start=WRITE_END - 1, end=WRITE_END + 1_000_000),
+        ]
+        assert (
+            verdict(spans)["explanation"] == CHECK_EXPLANATIONS[CheckId.OBSERVATION_PRECEDES_EFFECT]
+        )
+
+    def test_a_read_beginning_exactly_when_the_write_finished_is_allowed(self) -> None:
+        spans = [
+            internal_operation_span(),
+            graph_span(),
+            *bedrock_spans(),
+            write_span(),
+            read_span(start=WRITE_END, end=WRITE_END + 1_000_000),
+        ]
+        assert verdict(spans)["label"] == "PASS"
+
+    @pytest.mark.parametrize("missing", ["write", "read"])
+    def test_unreadable_timing_is_a_failure_and_never_a_skip(self, missing: str) -> None:
+        spans = settled_trace()
+        target = spans[4] if missing == "write" else spans[5]
+        for key in ("startTimeUnixNano", "endTimeUnixNano", "start_time", "end_time"):
+            del target[key]
+        assert verdict(spans)["explanation"] == CHECK_EXPLANATIONS[CheckId.TIMING_UNAVAILABLE]
+
+    def test_with_no_write_in_the_trace_there_is_no_ordering_relation_to_assert(self) -> None:
+        """A scope rather than an exemption -- everything on the read side still applies."""
+        spans = recheck_trace()
+        read = spans[-1]
+        for key in ("startTimeUnixNano", "start_time"):
+            del read[key]
+        assert verdict(spans)["label"] == "PASS"
+
+
+class TestTheWriteMustHaveSucceeded:
+    """A performed write that the transport did not record as succeeding settles nothing."""
+
+    @pytest.mark.parametrize("code", [400, 404, 409, 500, 503])
+    def test_a_refused_write_fails(self, code: int) -> None:
+        spans = [
+            internal_operation_span(),
+            graph_span(),
+            *bedrock_spans(),
+            write_span(status=code, response_status=code),
+            read_span(),
+        ]
+        assert verdict(spans)["explanation"] == CHECK_EXPLANATIONS[CheckId.WRITE_NOT_SUCCESSFUL]
+
+    def test_an_otel_error_on_a_2xx_write_fails(self) -> None:
+        spans = [
+            internal_operation_span(),
+            graph_span(),
+            *bedrock_spans(),
+            write_span(otel="ERROR"),
+            read_span(),
+        ]
+        assert verdict(spans)["explanation"] == CHECK_EXPLANATIONS[CheckId.WRITE_NOT_SUCCESSFUL]
+
+    def test_a_replayed_two_hundred_write_still_settles(self) -> None:
+        """Demo World answers 200 when the idempotency key replays an existing booking."""
+        spans = [
+            internal_operation_span(),
+            graph_span(),
+            *bedrock_spans(),
+            write_span(status=200, response_status=200),
+            read_span(),
+        ]
+        assert verdict(spans)["label"] == "PASS"
+
+
+class TestCorrelationIsAnEqualityBetweenTwoNamesForOneThing:
+    """The claimed resource id against the read's own URL, and nothing looser."""
+
+    def test_a_claim_naming_a_resource_the_trace_never_read_fails(self) -> None:
+        result = verdict(settled_trace(**{ATTR_OBSERVATION_RESOURCE_ID: "apt-never-read"}))
+        assert result["explanation"] == CHECK_EXPLANATIONS[CheckId.RESOURCE_MISMATCH]
+
+    def test_a_suffix_of_the_read_resource_does_not_match_it(self) -> None:
+        """Exact segment equality, never ``endswith``."""
+        result = verdict(settled_trace(**{ATTR_OBSERVATION_RESOURCE_ID: RESOURCE_ID[4:]}))
+        assert result["explanation"] == CHECK_EXPLANATIONS[CheckId.RESOURCE_MISMATCH]
+
+    @pytest.mark.parametrize(
+        "claimed",
+        ["", "apt-a/apt-b", "apt-a?x=1", "apt-a#f", "apt a", "../appointments/apt-a", "%2e%2e"],
+    )
+    def test_a_claimed_id_that_is_not_one_safe_token_is_refused(self, claimed: str) -> None:
+        result = verdict(settled_trace(**{ATTR_OBSERVATION_RESOURCE_ID: claimed}))
+        assert result["explanation"] == CHECK_EXPLANATIONS[CheckId.OBSERVATION_ABSENT_FROM_TRACE]
+
+    @pytest.mark.parametrize("claimed", [ABSENT, None, 7, ["apt-a"]])
+    def test_a_claimed_id_that_is_not_a_string_is_refused(self, claimed: Any) -> None:
+        result = verdict(settled_trace(**{ATTR_OBSERVATION_RESOURCE_ID: claimed}))
+        assert result["explanation"] == CHECK_EXPLANATIONS[CheckId.OBSERVATION_ABSENT_FROM_TRACE]
+
+
+class TestTheCheckListIsStructuredForPatchC:
+    """What Patch B owes Patch C: a list of small named things, each replaceable on its own."""
+
+    def test_there_are_nineteen_ordered_checks(self) -> None:
+        assert len(CHECKS) == 19
+
+    def test_every_check_is_a_distinct_named_function(self) -> None:
+        assert len(set(CHECKS)) == len(CHECKS)
+        assert all(callable(check) and check.__name__.startswith("_") for check in CHECKS)
+
+    def test_every_check_takes_evidence_alone_and_returns_a_code_or_nothing(self) -> None:
+        """A settled trace must leave every check silent, one at a time."""
+        spans = parse_envelope(payload(settled_trace()))
+        evidence = applicability(spans)
+        assert isinstance(evidence, Evidence)
+        for check in CHECKS:
+            assert check(evidence) is None, check.__name__
+
+    def test_applicability_is_reachable_on_its_own(self) -> None:
+        """Phase A is a separate seam and can be attacked without going through ``assess``."""
+        assert isinstance(applicability(parse_envelope(payload(settled_trace()))), Evidence)
+        assert applicability(parse_envelope(payload(quiet_trace()))) is NaReason.NO_EFFECT_CLAIMED
+
+
+class TestNoPayloadValueReachesTheResult:
+    """The behavioural half of the no-interpolation guarantee.
+
+    The table check proves no entry *can* interpolate. This proves that nothing does -- over a
+    passing trace, a failing one, an inapplicable one and an unevaluable one, with every value the
+    payload carries searched for in the rendered result.
+    """
+
+    @pytest.mark.parametrize(
+        "build",
+        [
+            lambda: payload(settled_trace()),
+            lambda: payload(settled_trace(**{ATTR_OBSERVATION_STATE_DIGEST: OTHER_DIGEST})),
+            lambda: payload(settled_trace(**{ATTR_OBSERVATION_RESOURCE_ID: "apt-SENTINEL-XYZ"})),
+            lambda: payload(recheck_trace()),
+            lambda: payload(simulated_trace()),
+            lambda: payload(quiet_trace()),
+            lambda: payload(settled_trace(), level="SESSION"),
+            lambda: payload([{"traceId": TRACE_ID, "attributes": {"http.url": CLINIC}}]),
+        ],
+    )
+    def test_nothing_from_the_payload_appears_in_the_result(self, build: Any) -> None:
+        rendered = json.dumps(assess(build()))
+        for value in (
+            RESOURCE_ID,
+            "apt-SENTINEL-XYZ",
+            STATE_DIGEST,
+            OTHER_DIGEST,
+            CLINIC,
+            TRACE_ID,
+            "adot_cw",
+            "default_session",
+            "book_appointment",
+            "invoke_graph",
+        ):
+            assert value not in rendered, value
+
+    def test_the_result_says_only_things_the_repository_wrote_in_advance(self) -> None:
+        """Every explanation a result can carry comes from one of the three tables."""
+        known = (
+            {PASS_EXPLANATION}
+            | set(CHECK_EXPLANATIONS.values())
+            | set(NA_EXPLANATIONS.values())
+            | set(ERROR_MESSAGES.values())
+        )
+        for build in (
+            lambda: payload(settled_trace()),
+            lambda: payload(settled_trace(**{ATTR_SETTLEMENT: "NOT_CERTIFIED"})),
+            lambda: payload(simulated_trace()),
+            lambda: payload(settled_trace(), version="9.9"),
+        ):
+            result = assess(build())
+            for field in ("explanation", "errorMessage"):
+                if field in result:
+                    assert result[field] in known

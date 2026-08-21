@@ -2,11 +2,13 @@
 
 **Status:** Accepted (AgentCore **Observability** on the existing EC2 host; AgentCore **Runtime**
 remains rejected — [ADR 0002](0002-graph-execution-stays-on-the-host.md) is unchanged)
-**Date:** 2026-08-20
+**Date:** 2026-08-20 (decision); **completed and proven in production 2026-08-21**
 **Pinned against:** `strands-agents==1.51.0`, `aws-opentelemetry-distro==0.19.0`,
 `opentelemetry-{api,sdk}==1.44.0`, `opentelemetry-instrumentation==0.65b0`, Python 3.12, `us-east-1`
-**Evidence:** measured in this session against real Bedrock and a loopback Demo World; see
-*The measured spike* below
+**Evidence:** two measurements, answering different questions. The pre-decision spike, taken
+against real Bedrock and a loopback Demo World — *The measured spike* below. The production
+proof on the deployed ARM instance — *The completion record*, *Rollback independence* and
+*The performance gate — measured* below
 **Seam:** [`scripts/observability.py`](../../scripts/observability.py),
 [`deploy/careloop.env`](../../deploy/careloop.env),
 [`deploy/careloop-api.service`](../../deploy/careloop-api.service),
@@ -266,43 +268,150 @@ export attempts made.
 with the reason if `opentelemetry-instrument` is not installed, rather than leaving systemd to
 report a missing executable; the uninstrumented `ExecStart` is kept in the unit, commented, as a
 one-line rollback; and **a cold boot of the instrumented unit must be observed before this is
-treated as safe.** That is a deployment gate, and it has not been run.
+treated as safe.** That gate has been run, on the deployed instance. It is also where the one
+real defect in this integration was found, and the next section is that defect.
 
-## The performance gate — not yet passed
+## Rollback independence, and the defect the boot gate found
 
-The x86 spike number (**+1139 ms startup**) is not evidence about a burstable ARM `t4g.small` with
-2 vCPU, and is not treated as any. Before this integration is called complete, the deployed instance
-must be measured, observability OFF versus ON, interleaved repeated runs, over: a successful
-referral; a human handoff; a policy denial and replan; and an external booking with its independent
-read-back. Measuring median and p95 end-to-end latency, process startup, RSS, CPU, Bedrock span
-latency and trace completeness.
+**The rollback did not work, and telemetry was the reason.** The commented `ExecStart` was written
+as a one-line escape hatch and had never been booted. Run:
 
-| Metric | Maximum acceptable |
+```
+python scripts/demo_serve.py
+→ ModuleNotFoundError: No module named 'scripts'
+```
+
+**Root cause:** `opentelemetry-instrument` inserts the current working directory into `PYTHONPATH`
+before exec'ing the command it wraps — something upstream's own source marks `FIXME`. The editable
+install maps `careloop` and nothing else, and `python scripts/demo_serve.py` puts the *script's*
+directory on `sys.path` rather than the application root. So the instrumented unit resolved
+`scripts.observability` only because the launcher happened to supply the path, and the
+uninstrumented unit had nothing to resolve it with. **Telemetry was silently supplying an
+availability property**, which is exactly backwards: the rollback exists to be independent of the
+thing it rolls back.
+
+**Fix:** declare the application root in the unit rather than inherit it from the launcher —
+`Environment=PYTHONPATH=/opt/careloop/app`, the same value as `WorkingDirectory`. The launcher only
+inserts the cwd when it is not already present, so with this set its insertion is a no-op and both
+`ExecStart` lines resolve the identical application root.
+
+**Proof, on the deployed instance:** the instrumented unit boots; the uninstrumented unit boots; an
+ordinary referral scenario runs to completion with telemetry OFF; ON is restored; `NRestarts=0`
+across the whole sequence, so no crash loop occurred at any point; and the repository unit, the
+deployed unit and the installed unit are aligned. The rollback is now a property that has been
+exercised rather than one that was written down.
+
+The fix is Git-owned and is not part of this document:
+
+```
+ba10c0c  Make the EC2 rollback boot without the ADOT launcher
+```
+
+It carries its own regression, `tests/test_deploy_import_path.py`, because removing that line breaks
+the rollback and nothing else — a defect no runtime test would notice and a comment would not
+prevent.
+
+## The performance gate — measured
+
+The x86 spike number (**+1139 ms startup**) was never evidence about a burstable ARM `t4g.small`
+with 2 vCPU and was not treated as any. The table below was precommitted before anything was
+measured. It was then run on the deployed instance: observability OFF versus ON, interleaved
+repeated runs, across a successful referral, a human handoff, a policy denial and replan, and an
+external booking with its independent read-back.
+
+| Metric | Maximum acceptable | Measured | |
+|---|---|---|---|
+| process startup | +2000 ms | **+1469 ms** | passed |
+| steady-state RSS | +150 MB | **+29.9 MB** | passed |
+| sustained CPU | +10 percentage points | **+0.6 pp** | passed |
+| median end-to-end | +5% or +100 ms, whichever is smaller | *not resolvable by this experiment* | see below |
+| p95 end-to-end | +10% | *not resolvable by this experiment* | see below |
+| per-node commit interval | +50 ms absolute, if measurable | *not resolvable by this experiment* | see below |
+
+**Three rows passed outright. The three latency rows did not fail — they could not be answered, and
+this ADR does not claim they passed.** The raw real-model A/B produced several deltas that *look*
+like threshold breaches. Every one of the corresponding confidence intervals crossed zero. **Two ON
+medians came out faster than OFF**, which no real overhead can produce. And OFF block-to-block
+Bedrock variance reached **~55.8%** — an order of magnitude wider than the effect the gate was
+written to detect. So the honest statement is about the instrument rather than about the system:
+**the real-model experiment could not resolve instrumentation overhead at the precommitted
+threshold.** Calling that a pass would claim a measurement nobody made; calling it a failure would
+bill Bedrock's variance to the instrumentation.
+
+**So the effect was isolated where Bedrock could not drown it.** A separate, Bedrock-free, high-N
+experiment measured the attributable cost of instrumenting an outbound call directly:
+
+```
+isolated attributable outbound instrumentation cost
+    ≈ +0.46 ms per instrumented outbound call
+    ≈ 2–3 ms attributable overhead per multi-second CareLoop run
+```
+
+Three orders of magnitude below the +100 ms median ceiling — and below the resolution of the
+real-model experiment, which is precisely *why* that experiment could not see it. The two results do
+not conflict: they bound and measure the same quantity, and only the second was capable of producing
+a number.
+
+**Business semantics were identical.** **160 of 160 measured real-model runs were valid**, and
+resting-state outcomes matched between OFF and ON. Real-model runs are **not** byte-comparable — the
+planner is nondeterministic and node sequences differ between identical runs — so the equivalence
+claim is made only where it is actually true: on final outcomes here, and byte-for-byte on the mock
+model in `tests/test_observability.py`.
+
+The gate's own rule — a breach disables the offending instrumentation or stops the rollout, and is
+not rationalised afterwards — was never invoked, because nothing breached. What the three latency
+rows record is an unresolvable measurement, not a rationalised one.
+
+**Engineering conclusion: KEEP ADOT ENABLED.**
+
+## The completion record
+
+Everything this ADR proposed has been carried out and observed on the deployed instance. The
+one-time account steps are the ones written out in `deploy/README.md`; they were run deliberately,
+by hand, exactly as that section says they must be.
+
+| | |
 |---|---|
-| median end-to-end | +5% or +100 ms, whichever is smaller |
-| p95 end-to-end | +10% |
-| per-node commit interval | +50 ms absolute, if measurable |
-| process startup | +2000 ms |
-| steady-state RSS | +150 MB |
-| sustained CPU | +10 percentage points |
+| AgentCore Observability deployed on production EC2 | **done** |
+| CloudWatch Transaction Search enabled | **done** |
+| Bedrock AgentCore Observability recognises CareLoop | **done** |
+| Real production traces observed | **done** |
+| Production `POST` + independent `GET` trace evidence | **done** |
+| Privacy inspection of exported spans | **passed** |
+| `aws.auth.account.access_key` redaction, in production | **passed** |
+| Raw prompt / model-response / tool-argument capture | **disabled, and absent from exported spans** |
+| Application Signals | **disabled** |
+| `t4g.small` OFF-vs-ON performance benchmark | **done** — see *The performance gate — measured* |
+| Rollback independence | **fixed and production-proven** — see *Rollback independence* |
 
-A breach disables the offending instrumentation or stops the rollout. It is not rationalised
-afterwards. Real-model runs are **not** byte-comparable — the planner is nondeterministic and node
-sequences differ between identical runs — so the comparison is statistical and the equivalence
-claim is made only where it is actually true, on the mock model, in `tests/test_observability.py`.
+**The trace that made this worth doing arrived in production.** The booking and its **independent
+read-back** appear as two separate calls to the same external service, in AWS's own tooling, in a
+trace CareLoop cannot fake: `POST /clinic/appointments` and
+`GET /clinic/appointments/{confirmation_id}` under one `invoke_graph` root, beside the Bedrock model
+calls. That is the shape the spike predicted, and it is the shape the deployment produces.
 
-## What has not happened
+**The privacy boundary held under inspection.** No prompt, no model response, no system prompt, no
+evidence or document text, no patient identifier, no caregiver identity, no email address, no tool
+argument, no tool result, no session token, no credential and no external response body appears in
+an exported span. The access key id reads `[redacted]` in production, not merely in a test. Both
+pinned settings — `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=false` and the empty
+`gen_ai_unredacted_attributes=` allowlist — did what they were pinned to do, including the accepted
+cost: the graph span's one event is redacted, so traces correlate by trace id rather than by case id.
 
-**No production CloudWatch trace has been observed.** Nothing in this repository claims one exists.
-No AWS account mutation was made by this change: Transaction Search is not enabled, the log group is
-not created, no IAM was modified and no retention policy was set. Those are one-time account steps
-recorded in `deploy/README.md`, to be run deliberately.
+**No account identifier, credential, key value, host address or other operational detail is recorded
+in this document, deliberately.** What is recorded is that the checks were made and what they
+returned.
 
 ## What would change the answer
 
-- The startup or latency gate fails on the real instance — then the instrumentation set is trimmed,
-  or the wrapper is reverted to the commented `ExecStart`, and this ADR records the measurement.
+- The measured cost regresses on a dependency bump or an instance change — the gate table above is
+  the standard it is re-measured against, and the rollback is now a line in the unit that has been
+  booted rather than one that was only written down.
 - ADOT gains a supported switch for the access-key attribute — then `scripts/observability.py` is
   deleted in favour of it.
-- A real CloudWatch trace turns out to be less useful than the spike predicts — then the honest
-  outcome is removal, not custom spans layered on to rescue it.
+- The production traces turn out to be less useful than they look — then the honest outcome is
+  removal, not custom spans layered on to rescue it. **This is the one bullet the completion record
+  reopens rather than closes:** *No custom node spans* deferred that decision until a real
+  CloudWatch trace had been looked at, and one now has been. Node-level or domain-level span work is
+  therefore newly *eligible* for consideration — as its own reviewed decision, with its own
+  evidence, and with the interruptible-event-bus objection recorded there still standing.

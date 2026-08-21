@@ -23,6 +23,7 @@ from typing import Any
 import pytest
 
 import evaluators
+import evaluators.settlement as settlement
 from evaluators.contract import (
     ATTR_EFFECT_DISPATCH,
     ATTR_EFFECT_FIELDS,
@@ -48,7 +49,6 @@ from evaluators.contract import (
 )
 from evaluators.handler import lambda_handler
 from evaluators.settlement import (
-    CHECKS,
     Evidence,
     applicability,
     assess,
@@ -1286,18 +1286,20 @@ class TestTheCheckListIsStructuredForPatchC:
     """What Patch B owes Patch C: a list of small named things, each replaceable on its own."""
 
     def test_there_are_nineteen_ordered_checks(self) -> None:
-        assert len(CHECKS) == 19
+        assert len(settlement.CHECKS) == 19
 
     def test_every_check_is_a_distinct_named_function(self) -> None:
-        assert len(set(CHECKS)) == len(CHECKS)
-        assert all(callable(check) and check.__name__.startswith("_") for check in CHECKS)
+        assert len(set(settlement.CHECKS)) == len(settlement.CHECKS)
+        assert all(
+            callable(check) and check.__name__.startswith("_") for check in settlement.CHECKS
+        )
 
     def test_every_check_takes_evidence_alone_and_returns_a_code_or_nothing(self) -> None:
         """A settled trace must leave every check silent, one at a time."""
         spans = parse_envelope(payload(settled_trace()))
         evidence = applicability(spans)
         assert isinstance(evidence, Evidence)
-        for check in CHECKS:
+        for check in settlement.CHECKS:
             assert check(evidence) is None, check.__name__
 
     def test_applicability_is_reachable_on_its_own(self) -> None:

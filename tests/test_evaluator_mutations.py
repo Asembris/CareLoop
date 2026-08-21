@@ -48,26 +48,30 @@ malformed digests settle, and no claim here covers that.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Final
+from typing import Any, ClassVar, Final
 
 import pytest
 from test_evaluator import (
     ABSENT,
     CLINIC,
     OTHER_DIGEST,
+    OTHER_TRACE_ID,
     READ_END,
     READ_START,
     RESOURCE_ID,
     STATE_DIGEST,
+    TRACE_ID,
     WRITE_END,
     WRITE_START,
     _iso,
     _span,
     bedrock_spans,
+    claim_attributes,
     graph_span,
     internal_operation_span,
     payload,
@@ -84,6 +88,7 @@ from evaluators.contract import (
     ATTR_EFFECT_DISPATCH,
     ATTR_EFFECT_FIELDS,
     ATTR_EFFECT_STATE_DIGEST,
+    ATTR_EFFECT_TYPE,
     ATTR_HTTP_METHOD,
     ATTR_HTTP_RESPONSE_STATUS_CODE,
     ATTR_HTTP_STATUS_CODE,
@@ -96,15 +101,22 @@ from evaluators.contract import (
     CLINIC_APPOINTMENTS_PATH,
     EXPECTED_FIELDS,
     CheckId,
+    Dispatch,
     ErrorCode,
     NaReason,
+    Settlement,
 )
-from evaluators.settlement import assess
 from evaluators.spans import (
+    EnvelopeError,
+    HttpStatus,
+    StatusKind,
     _iso_to_nanos,
     end_nanos,
     http_method,
+    http_status,
+    otel_status_code,
     start_nanos,
+    trace_id,
     url_path_segments,
 )
 
@@ -130,42 +142,99 @@ class Severity(StrEnum):
     MEDIUM = "MEDIUM"
     """The audit, privacy or error contract weakens without a settlement PASS becoming reachable."""
 
-    EQUIVALENT = "EQUIVALENT"
+    EQUIVALENT: ClassVar = "EQUIVALENT"
     """Provably unobservable. Requires a written justification and is never used to retire a
     mutant that merely happens to be uncaught."""
 
 
+#: Values planted in hostile witnesses, plus every value the ordinary fixtures carry.
+#:
+#: :func:`outcome_of` scans each rendered result for all of them, so leakage is part of what an
+#: outcome *is* rather than a separate suite somebody could forget to run. The ordinary fixture
+#: values are included deliberately: a mutation that echoes a payload into an explanation is
+#: caught on any witness, not only on the ones built to be hostile.
+HOSTILE_RESOURCE: Final[str] = "apt-LEAKCANARY-0001"
+HOSTILE_DIGEST: Final[str] = "dead" * 16
+HOSTILE_HOST: Final[str] = "http://leakcanary-host.example.test"
+SENTINELS: Final[tuple[str, ...]] = (
+    HOSTILE_RESOURCE,
+    HOSTILE_DIGEST,
+    HOSTILE_HOST,
+    "leakcanary",
+    RESOURCE_ID,
+    STATE_DIGEST,
+    OTHER_DIGEST,
+    CLINIC,
+    TRACE_ID,
+    "adot_cw",
+    "default_session",
+    "book_appointment",
+    "invoke_graph",
+)
+
+
 @dataclass(frozen=True)
 class Outcome:
-    """One evaluator verdict, reduced to the two things that matter about it.
+    """One evaluator verdict, reduced to everything a caller can observe about it.
 
-    ``code`` is the closed-vocabulary name the result carries -- a :class:`CheckId`,
-    :class:`NaReason` or :class:`ErrorCode` -- and is ``None`` only for ``PASS``. Comparing whole
-    result dictionaries would make every assertion here depend on explanation wording; comparing
-    label alone would let a mutation that silently changes *which* defence refused a trace slip
-    past as "still a FAIL".
+    Four things, and each is load-bearing:
+
+    ``label`` and ``code``
+        Comparing whole result dictionaries would make every assertion depend on explanation
+        wording; comparing the label alone would let a mutation that silently changes *which*
+        defence refused a trace pass as "still a FAIL".
+
+    ``keys``
+        The result's shape. Patch A proved that ``NOT_APPLICABLE`` omitting ``value`` survives the
+        round trip uncoerced, and that an error result carries ``errorCode``/``errorMessage``
+        rather than a label -- both are contract, and a mutation that adds a field changes neither
+        the label nor the code.
+
+    ``leaks``
+        Which :data:`SENTINELS` appear in the rendered result. The published-surface guarantee is
+        not a separate concern to be tested somewhere else: it is part of what the evaluator
+        returned, so it is part of the outcome, and every one of the sixty-odd mutants is checked
+        against it for free.
     """
 
     label: str
     code: str | None = None
+    keys: frozenset[str] = frozenset()
+    leaks: tuple[str, ...] = ()
 
     def __str__(self) -> str:
-        return self.label if self.code is None else f"{self.label}:{self.code}"
+        rendered = self.label if self.code is None else f"{self.label}:{self.code}"
+        return f"{rendered}+leaks{list(self.leaks)}" if self.leaks else rendered
 
 
-PASSED: Final[Outcome] = Outcome("PASS")
+#: The shape each label is contractually allowed to have.
+_SCORED: Final[frozenset[str]] = frozenset({"label", "value", "explanation"})
+_UNSCORED: Final[frozenset[str]] = frozenset({"label", "explanation"})
+_ERROR_SHAPE: Final[frozenset[str]] = frozenset({"errorCode", "errorMessage"})
+
+PASSED: Final[Outcome] = Outcome("PASS", None, _SCORED)
 
 
 def failed(code: CheckId) -> Outcome:
-    return Outcome("FAIL", code.value)
+    return Outcome("FAIL", code.value, _SCORED)
 
 
 def not_applicable(code: NaReason) -> Outcome:
-    return Outcome("NOT_APPLICABLE", code.value)
+    return Outcome("NOT_APPLICABLE", code.value, _UNSCORED)
 
 
 def errored(code: ErrorCode) -> Outcome:
-    return Outcome("ERROR", code.value)
+    return Outcome("ERROR", code.value, _ERROR_SHAPE)
+
+
+def leaking(base: Outcome, *values: str) -> Outcome:
+    """The same verdict, with named sentinels having reached the published text."""
+    return Outcome(base.label, base.code, base.keys, tuple(s for s in SENTINELS if s in values))
+
+
+def with_keys(base: Outcome, *extra: str) -> Outcome:
+    """The same verdict, in a result carrying fields the contract does not allow it."""
+    return Outcome(base.label, base.code, base.keys | frozenset(extra), base.leaks)
 
 
 def outcome_of(result: Mapping[str, Any]) -> Outcome:
@@ -179,18 +248,26 @@ def outcome_of(result: Mapping[str, Any]) -> Outcome:
 
     ``TestEveryExplanationAnnouncesItsOwnCode`` is what makes the prefix trustworthy.
     """
+    rendered = json.dumps(result, sort_keys=True, default=str)
+    leaked = tuple(sentinel for sentinel in SENTINELS if sentinel in rendered)
+    shape = frozenset(result)
     if "errorCode" in result:
-        return Outcome("ERROR", str(result["errorCode"]))
+        return Outcome("ERROR", str(result["errorCode"]), shape, leaked)
     label = str(result["label"])
     if label == "PASS":
-        return Outcome("PASS")
+        return Outcome("PASS", None, shape, leaked)
     explanation = str(result.get("explanation", ""))
-    return Outcome(label, explanation.split(":")[0] or None)
+    return Outcome(label, explanation.split(":")[0] or None, shape, leaked)
 
 
 def verdict(built: Mapping[str, Any]) -> Outcome:
-    """Judge one payload through the whole public path."""
-    return outcome_of(assess(built))
+    """Judge one payload through the whole public path.
+
+    Reached as ``settlement.assess`` rather than through the name imported at the top of this
+    module, so a mutation that wraps the entry point -- which is where a future edit would most
+    plausibly add "context" to an explanation -- is actually exercised.
+    """
+    return outcome_of(settlement.assess(built))
 
 
 # =============================================================================================
@@ -1202,7 +1279,748 @@ _FAMILY_DEFG: Final[tuple[Mutant, ...]] = (
 )
 
 
-MUTANTS: Final[tuple[Mutant, ...]] = _family_a() + _FAMILY_DEFG
+# =============================================================================================
+# Families B, C, I, J, K, L, M -- applicability, transport success, settlement, dispatch,
+# ambiguity, the envelope boundary, and the published-surface contract
+# =============================================================================================
+
+
+def hostile_trace() -> Mapping[str, Any]:
+    """A settled-shaped trace whose every readable value is a sentinel."""
+    spans = [
+        internal_operation_span(),
+        graph_span(
+            **{
+                ATTR_OBSERVATION_RESOURCE_ID: HOSTILE_RESOURCE,
+                ATTR_EFFECT_STATE_DIGEST: HOSTILE_DIGEST,
+                ATTR_OBSERVATION_STATE_DIGEST: HOSTILE_DIGEST,
+            }
+        ),
+        *bedrock_spans(),
+        _httpx_span(
+            "bbbbbbbbbbbbbbb1",
+            "POST",
+            f"{HOSTILE_HOST}/clinic/appointments",
+            start=WRITE_START,
+            end=WRITE_END,
+        ),
+        _httpx_span(
+            "bbbbbbbbbbbbbbb2",
+            "GET",
+            f"{HOSTILE_HOST}/clinic/appointments/{HOSTILE_RESOURCE}",
+            start=READ_START,
+            end=READ_END,
+        ),
+    ]
+    return payload(spans)
+
+
+def hostile_mismatch() -> Mapping[str, Any]:
+    """The same sentinels, on a trace that must be refused."""
+    return payload(settled_trace(**{ATTR_OBSERVATION_RESOURCE_ID: HOSTILE_RESOURCE}))
+
+
+def transport_without_a_claim() -> Mapping[str, Any]:
+    return payload([internal_operation_span(), *bedrock_spans(), write_span(), read_span()])
+
+
+def read_without_a_claim() -> Mapping[str, Any]:
+    return payload([internal_operation_span(), *bedrock_spans(), read_span()])
+
+
+def mislabelled_with_transport() -> Mapping[str, Any]:
+    spans = simulated_trace()
+    spans.extend([write_span(), read_span()])
+    return payload(spans)
+
+
+def two_claim_spans() -> Mapping[str, Any]:
+    spans = settled_trace()
+    spans[-1]["attributes"].update(claim_attributes())
+    return payload(spans)
+
+
+def orphan_observation_attributes() -> Mapping[str, Any]:
+    """A settled trace plus a span carrying observation attributes and **no** effect type.
+
+    Characterisation, not a complaint. A claim is located by ``careloop.effect.type`` alone, so
+    this second span is invisible today. It cannot manufacture a PASS -- the located claim still
+    has to be complete and correct -- and Patch C deliberately adds no production invariant for
+    it. What it does is fix the behaviour in a test so that changing it later is a decision rather
+    than a drift.
+    """
+    spans = settled_trace()
+    spans[3]["attributes"].update(
+        {
+            ATTR_OBSERVATION_MODE: "NONE",
+            ATTR_OBSERVATION_OUTCOME: "DIVERGED",
+            ATTR_SETTLEMENT: "NOT_CERTIFIED",
+        }
+    )
+    return payload(spans)
+
+
+def write_with(**kwargs: Any) -> Witness:
+    return lambda: trace_with(write=write_span(**kwargs), read=read_span())
+
+
+def read_with(**kwargs: Any) -> Witness:
+    return lambda: trace_with(write=write_span(), read=read_span(**kwargs))
+
+
+def settlement_token(value: Any) -> Witness:
+    return lambda: payload(settled_trace(**{ATTR_SETTLEMENT: value}))
+
+
+def dispatch_token(value: Any) -> Witness:
+    return lambda: payload(recheck_trace(**{ATTR_EFFECT_DISPATCH: value}))
+
+
+def two_target_traces() -> Mapping[str, Any]:
+    return payload(settled_trace(), trace_ids=[TRACE_ID, OTHER_TRACE_ID])
+
+
+def wrong_level() -> Mapping[str, Any]:
+    return payload(settled_trace(), level="SESSION")
+
+
+def second_write_without_a_trace_id() -> Mapping[str, Any]:
+    """A second clinic write that cannot be attributed.
+
+    Refused outright today. A parser that dropped it instead would hand the decision procedure a
+    trace with exactly one write -- the settled one -- and certify it.
+    """
+    stray = write_span(span_id="cccccccccccccccc")
+    del stray["traceId"]
+    del stray["trace_id"]
+    return payload([*settled_trace(), stray])
+
+
+# ---- mutation bodies -------------------------------------------------------------------------
+
+
+def _na_instead_of(refusal: CheckId, reason: NaReason) -> Callable[[Any], Callable[[Any], Any]]:
+    """Report one applicability refusal as an absence of subject matter instead.
+
+    Built through :func:`deriving` so the shipped function is captured **before** the patch: a
+    mutant that called ``settlement.applicability`` after patching would call itself.
+    """
+
+    def build(shipped: Callable[[Any], Any]) -> Callable[[Any], Any]:
+        def applicability(spans: Any) -> Any:
+            outcome = shipped(spans)
+            return reason if outcome is refusal else outcome
+
+        return applicability
+
+    return build
+
+
+def _widened_claim_detection(shipped: Callable[[Any], Any]) -> Callable[[Any], Any]:
+    """Any careloop attribute marks a span as a claim, not just ``careloop.effect.type``."""
+    marks = (ATTR_EFFECT_TYPE, ATTR_OBSERVATION_MODE, ATTR_SETTLEMENT)
+
+    def applicability(spans: Any) -> Any:
+        claimants = sum(
+            1
+            for span in spans
+            if any(settlement.attribute(span, name) is not None for name in marks)
+        )
+        return CheckId.CLAIM_AMBIGUOUS if claimants > 1 else shipped(spans)
+
+    return applicability
+
+
+def _first_claim_wins(shipped: Callable[[Any], Any]) -> Callable[[Any], Any]:
+    def applicability(spans: Any) -> Any:
+        outcome = shipped(spans)
+        if outcome is not CheckId.CLAIM_AMBIGUOUS:
+            return outcome
+        claims = [s for s in spans if settlement.attribute(s, ATTR_EFFECT_TYPE) is not None]
+        return settlement.Evidence(
+            claim=settlement._claim_from(claims[0]),
+            writes=tuple(s for s in spans if settlement.is_clinic_write(s)),
+            reads=tuple(
+                settlement.ClinicRead(s, resource)
+                for s in spans
+                if (resource := settlement.clinic_read_resource(s)) is not None
+            ),
+        )
+
+    return applicability
+
+
+def _successful_requiring_ok(span: Any) -> bool:
+    status = http_status(span)
+    if status.kind is not StatusKind.RESOLVED or status.code is None:
+        return False
+    if not 200 <= status.code < 300:
+        return False
+    return otel_status_code(span) == "OK"
+
+
+def _successful_ignoring_otel_error(span: Any) -> bool:
+    status = http_status(span)
+    return (
+        status.kind is StatusKind.RESOLVED
+        and status.code is not None
+        and (200 <= status.code < 300)
+    )
+
+
+def _successful_accepting(low: int, high: int) -> Callable[[Any], bool]:
+    def successful(span: Any) -> bool:
+        status = http_status(span)
+        if status.kind is not StatusKind.RESOLVED or status.code is None:
+            return False
+        if not (200 <= status.code < 300 or low <= status.code < high):
+            return False
+        return otel_status_code(span) != "ERROR"
+
+    return successful
+
+
+def _successful_when_status_is_absent(span: Any) -> bool:
+    status = http_status(span)
+    if status.kind is StatusKind.ABSENT:
+        return True
+    if status.kind is not StatusKind.RESOLVED or status.code is None:
+        return False
+    return 200 <= status.code < 300 and otel_status_code(span) != "ERROR"
+
+
+def _status_preferring(first: str, second: str) -> Callable[[Any], Any]:
+    def resolve(span: Any) -> Any:
+        for name in (first, second):
+            found = settlement.attribute(span, name)
+            if isinstance(found, int) and not isinstance(found, bool):
+                return HttpStatus(StatusKind.RESOLVED, found)
+        return HttpStatus(StatusKind.ABSENT)
+
+    return resolve
+
+
+def _member_settling(accept: Callable[[object], bool]) -> Callable[..., Any]:
+    original = settlement._member
+
+    def member(vocabulary: Any, value: object) -> Any:
+        if vocabulary is Settlement and accept(value):
+            return Settlement.VERIFIED
+        return original(vocabulary, value)
+
+    return member
+
+
+def _dispatch_ignoring(clause: str) -> Callable[[Any], Any]:
+    def check(evidence: Any) -> Any:
+        dispatch = settlement._member(Dispatch, evidence.claim.dispatch)
+        if dispatch is None:
+            return CheckId.DISPATCH_CONTRADICTS_TRANSPORT
+        if clause != "performed" and dispatch is Dispatch.PERFORMED and not evidence.writes:
+            return CheckId.DISPATCH_CONTRADICTS_TRANSPORT
+        if clause != "historical" and dispatch is not Dispatch.PERFORMED and evidence.writes:
+            return CheckId.DISPATCH_CONTRADICTS_TRANSPORT
+        return None
+
+    return check
+
+
+def _swallowing_parse(shipped: Callable[[Any], Any]) -> Callable[[Any], Any]:
+    """Evaluate whatever spans are present rather than refusing a malformed envelope."""
+
+    def parse(payload_: Any) -> Any:
+        try:
+            return shipped(payload_)
+        except EnvelopeError:
+            spans = ()
+            if isinstance(payload_, Mapping):
+                given = payload_.get("evaluationInput")
+                if isinstance(given, Mapping):
+                    listed = given.get("sessionSpans")
+                    if isinstance(listed, list):
+                        spans = tuple(s for s in listed if isinstance(s, Mapping))
+            return spans
+
+    return parse
+
+
+def _dropping_unattributable_spans(shipped: Callable[[Any], Any]) -> Callable[[Any], Any]:
+    def parse(payload_: Any) -> Any:
+        if isinstance(payload_, Mapping):
+            given = payload_.get("evaluationInput")
+            if isinstance(given, Mapping) and isinstance(given.get("sessionSpans"), list):
+                kept = [
+                    span
+                    for span in given["sessionSpans"]
+                    if isinstance(span, Mapping) and trace_id(span) is not None
+                ]
+                trimmed = {
+                    **payload_,
+                    "evaluationInput": {**given, "sessionSpans": kept},
+                }
+                return shipped(trimmed)
+        return shipped(payload_)
+
+    return parse
+
+
+def _first_target_trace(shipped: Callable[[Any], Any]) -> Callable[[Any], Any]:
+    def parse(payload_: Any) -> Any:
+        if isinstance(payload_, Mapping):
+            target = payload_.get("evaluationTarget")
+            if isinstance(target, Mapping) and isinstance(target.get("traceIds"), list):
+                narrowed = {
+                    **payload_,
+                    "evaluationTarget": {"traceIds": target["traceIds"][:1]},
+                }
+                return shipped(narrowed)
+        return shipped(payload_)
+
+    return parse
+
+
+def _na_on_envelope_error(shipped: Callable[[Any], Any]) -> Callable[[Any], Any]:
+    def assess(payload_: Any) -> Any:
+        try:
+            settlement.parse_envelope(payload_)
+        except EnvelopeError:
+            return settlement.not_applicable_result(NaReason.NO_EFFECT_CLAIMED)
+        return shipped(payload_)
+
+    return assess
+
+
+def _contradictions_as_errors(shipped: Callable[[CheckId], Any]) -> Callable[[CheckId], Any]:
+    def fail_result(code: CheckId) -> Any:
+        return settlement.error_result(ErrorCode.INTERNAL_ERROR)
+
+    return fail_result
+
+
+def _explanation_gaining(extract: Callable[[Any], str]) -> Callable[[Any], Any]:
+    """Wrap ``assess`` so the explanation gains a payload-derived value.
+
+    The entry point is where a future edit would most plausibly add context, and it is the only
+    place that can reach a payload at all -- ``fail_result`` receives a code and nothing else,
+    which is the structural half of the no-interpolation design.
+    """
+    shipped = settlement.assess
+
+    def assess(payload_: Any) -> Any:
+        result = dict(shipped(payload_))
+        if "explanation" in result:
+            result["explanation"] = f"{result['explanation']} ({extract(payload_)})"
+        return result
+
+    return assess
+
+
+def _claimed_resource_of(payload_: Any) -> str:
+    for span in payload_["evaluationInput"]["sessionSpans"]:
+        found = span.get("attributes", {}).get(ATTR_OBSERVATION_RESOURCE_ID)
+        if isinstance(found, str):
+            return found
+    return ""
+
+
+def _first_url_of(payload_: Any) -> str:
+    for span in payload_["evaluationInput"]["sessionSpans"]:
+        found = span.get("attributes", {}).get(ATTR_HTTP_URL)
+        if isinstance(found, str):
+            return found
+    return ""
+
+
+_FAMILY_REST: Final[tuple[Mutant, ...]] = (
+    Mutant(
+        id="B01",
+        family="B",
+        surface="applicability",
+        severity=Severity.HIGH,
+        apply=deriving(
+            "applicability", _na_instead_of(CheckId.CLAIM_ABSENT, NaReason.NO_EFFECT_CLAIMED)
+        ),
+        witness=transport_without_a_claim,
+        expected_before=failed(CheckId.CLAIM_ABSENT),
+        expected_after=not_applicable(NaReason.NO_EFFECT_CLAIMED),
+        note="a booking and a read-back with nothing accounting for them become 'nothing here to "
+        "judge', and contribute no number to any average",
+    ),
+    Mutant(
+        id="B02",
+        family="B",
+        surface="applicability",
+        severity=Severity.HIGH,
+        apply=deriving(
+            "applicability", _na_instead_of(CheckId.CLAIM_ABSENT, NaReason.NO_EFFECT_CLAIMED)
+        ),
+        witness=read_without_a_claim,
+        expected_before=failed(CheckId.CLAIM_ABSENT),
+        expected_after=not_applicable(NaReason.NO_EFFECT_CLAIMED),
+        note="the same escape with read-only transport",
+    ),
+    Mutant(
+        id="B03",
+        family="B",
+        surface="applicability",
+        severity=Severity.HIGH,
+        apply=deriving(
+            "applicability",
+            _na_instead_of(
+                CheckId.EFFECT_TYPE_MISLABELLED, NaReason.EFFECT_NOT_INDEPENDENTLY_OBSERVABLE
+            ),
+        ),
+        witness=mislabelled_with_transport,
+        expected_before=failed(CheckId.EFFECT_TYPE_MISLABELLED),
+        expected_after=not_applicable(NaReason.EFFECT_NOT_INDEPENDENTLY_OBSERVABLE),
+        note="clinic transport hidden behind a claim that names an unobservable effect type",
+    ),
+    Mutant(
+        id="B04",
+        family="B",
+        surface="applicability",
+        severity=Severity.HIGH,
+        apply=deriving("applicability", _first_claim_wins),
+        witness=two_claim_spans,
+        expected_before=failed(CheckId.CLAIM_AMBIGUOUS),
+        expected_after=PASSED,
+        note="two claims resolved by taking the first, which is the evaluator deciding the thing "
+        "it was asked to observe",
+    ),
+    Mutant(
+        id="B05",
+        family="B",
+        surface="applicability",
+        severity=Severity.MEDIUM,
+        apply=deriving("applicability", _widened_claim_detection),
+        witness=orphan_observation_attributes,
+        expected_before=PASSED,
+        expected_after=failed(CheckId.CLAIM_AMBIGUOUS),
+        note="claim detection widened to any careloop attribute. Characterises the "
+        "orphan-attribute "
+        "behaviour rather than proposing it: a span carrying observation attributes with no effect "
+        "type is invisible today, and this pins that as a decision",
+    ),
+    Mutant(
+        id="C01",
+        family="C",
+        surface="successful",
+        severity=Severity.MEDIUM,
+        apply=patching("successful", _successful_requiring_ok),
+        witness=lambda: payload(settled_trace()),
+        expected_before=PASSED,
+        expected_after=failed(CheckId.WRITE_NOT_SUCCESSFUL),
+        note="requires status.code == OK. Production spans carry UNSET on success, so this refuses "
+        "every real CareLoop trace while accepting every fixture written from an OpenTelemetry "
+        "reference. A false FAIL rather than an escape, which is why it is MEDIUM -- but it is the "
+        "single mutation Patch A's A4 finding exists to prevent",
+    ),
+    Mutant(
+        id="C02",
+        family="C",
+        surface="successful",
+        severity=Severity.CRITICAL,
+        apply=patching("successful", _successful_ignoring_otel_error),
+        witness=write_with(otel="ERROR"),
+        expected_before=failed(CheckId.WRITE_NOT_SUCCESSFUL),
+        expected_after=PASSED,
+        note="an OpenTelemetry ERROR status on a 2xx write is ignored",
+    ),
+    Mutant(
+        id="C03",
+        family="C",
+        surface="successful",
+        severity=Severity.CRITICAL,
+        apply=patching("successful", _successful_accepting(300, 400)),
+        witness=write_with(status=302, response_status=302),
+        expected_before=failed(CheckId.WRITE_NOT_SUCCESSFUL),
+        expected_after=PASSED,
+        note="a redirect counts as having created the appointment",
+    ),
+    Mutant(
+        id="C04",
+        family="C",
+        surface="successful",
+        severity=Severity.CRITICAL,
+        apply=patching("successful", _successful_accepting(400, 500)),
+        witness=read_with(status=404, response_status=404),
+        expected_before=failed(CheckId.OBSERVATION_NOT_SUCCESSFUL),
+        expected_after=PASSED,
+        note="the clinic answering that it holds no such appointment counts as an observation "
+        "that it does",
+    ),
+    Mutant(
+        id="C05",
+        family="C",
+        surface="successful",
+        severity=Severity.CRITICAL,
+        apply=patching("successful", _successful_accepting(500, 600)),
+        witness=write_with(status=500, response_status=500),
+        expected_before=failed(CheckId.WRITE_NOT_SUCCESSFUL),
+        expected_after=PASSED,
+        note="a server error counts as a successful write",
+    ),
+    Mutant(
+        id="C06",
+        family="C",
+        surface="successful",
+        severity=Severity.CRITICAL,
+        apply=patching("successful", _successful_when_status_is_absent),
+        witness=write_with(status=ABSENT, response_status=ABSENT),
+        expected_before=failed(CheckId.WRITE_NOT_SUCCESSFUL),
+        expected_after=PASSED,
+        note="a span recording no status at all is treated as a success",
+    ),
+    Mutant(
+        id="C07",
+        family="C",
+        surface="http_status",
+        severity=Severity.MEDIUM,
+        apply=patching(
+            "http_status", _status_preferring(ATTR_HTTP_STATUS_CODE, ATTR_HTTP_RESPONSE_STATUS_CODE)
+        ),
+        witness=write_with(status=201, response_status=500),
+        expected_before=failed(CheckId.TRANSPORT_STATUS_AMBIGUOUS),
+        expected_after=failed(CheckId.WRITE_NOT_SUCCESSFUL),
+        note="a disagreement between the two measured spellings resolved by preferring the old "
+        "one. MEDIUM rather than CRITICAL, and the reason is a real redundancy found while "
+        "writing this: status is resolved twice by different code. The ambiguity checks read "
+        "settlement's own http_status, while successful() resolves it again through spans' -- so "
+        "preferring a spelling in one place loses the diagnostic and is still refused by the "
+        "other. Two independent resolvers, the same shape as the policy layer's two enforcement "
+        "points",
+    ),
+    Mutant(
+        id="C08",
+        family="C",
+        surface="http_status",
+        severity=Severity.MEDIUM,
+        apply=patching(
+            "http_status", _status_preferring(ATTR_HTTP_RESPONSE_STATUS_CODE, ATTR_HTTP_STATUS_CODE)
+        ),
+        witness=write_with(status=500, response_status=201),
+        expected_before=failed(CheckId.TRANSPORT_STATUS_AMBIGUOUS),
+        expected_after=failed(CheckId.WRITE_NOT_SUCCESSFUL),
+        note="the mirror image of C07, and the same backstop catches it",
+    ),
+    Mutant(
+        id="I01",
+        family="I",
+        surface="_member (Settlement)",
+        severity=Severity.CRITICAL,
+        apply=patching("_member", _member_settling(lambda value: value is None)),
+        witness=settlement_token(ABSENT),
+        expected_before=failed(CheckId.SETTLEMENT_ABSENT),
+        expected_after=PASSED,
+        note="a missing settlement conclusion defaults to VERIFIED",
+    ),
+    Mutant(
+        id="I02",
+        family="I",
+        surface="_member (Settlement)",
+        severity=Severity.CRITICAL,
+        apply=patching(
+            "_member", _member_settling(lambda value: isinstance(value, str) and value == "MAYBE")
+        ),
+        witness=settlement_token("MAYBE"),
+        expected_before=failed(CheckId.SETTLEMENT_ABSENT),
+        expected_after=PASSED,
+        note="a token outside the closed vocabulary is read as VERIFIED",
+    ),
+    Mutant(
+        id="I03",
+        family="I",
+        surface="_member (Settlement)",
+        severity=Severity.CRITICAL,
+        apply=patching(
+            "_member",
+            _member_settling(lambda value: isinstance(value, str) and value == "NOT_CERTIFIED"),
+        ),
+        witness=settlement_token("NOT_CERTIFIED"),
+        expected_before=failed(CheckId.SETTLEMENT_NOT_VERIFIED),
+        expected_after=PASSED,
+        note="CareLoop's own conclusion that it could not certify the effect is overridden",
+    ),
+    Mutant(
+        id="J01",
+        family="J",
+        surface="_dispatch_contradicts_transport",
+        severity=Severity.MEDIUM,
+        apply=replacing_check("_dispatch_contradicts_transport", _dispatch_ignoring("performed")),
+        witness=dispatch_token("PERFORMED"),
+        expected_before=failed(CheckId.DISPATCH_CONTRADICTS_TRANSPORT),
+        expected_after=failed(CheckId.WRITE_NOT_SUCCESSFUL),
+        note="PERFORMED with no write in the trace stops being a contradiction. MEDIUM because "
+        "_write_not_successful backstops it -- which is the designed redundancy, demonstrated",
+    ),
+    Mutant(
+        id="J02",
+        family="J",
+        surface="_dispatch_contradicts_transport",
+        severity=Severity.CRITICAL,
+        apply=replacing_check("_dispatch_contradicts_transport", _dispatch_ignoring("historical")),
+        witness=suppressed_but_wrote,
+        expected_before=failed(CheckId.DISPATCH_CONTRADICTS_TRANSPORT),
+        expected_after=PASSED,
+        note="a claim that the effect was suppressed, beside a write that actually happened",
+    ),
+    Mutant(
+        id="J03",
+        family="J",
+        surface="_member (Dispatch)",
+        severity=Severity.CRITICAL,
+        apply=deriving(
+            "_member",
+            lambda original: (
+                lambda vocabulary, value: (
+                    Dispatch.NOT_IN_THIS_TRACE
+                    if vocabulary is Dispatch and isinstance(value, str) and value
+                    else original(vocabulary, value)
+                )
+            ),
+        ),
+        witness=dispatch_token("HISTORICAL"),
+        expected_before=failed(CheckId.DISPATCH_CONTRADICTS_TRANSPORT),
+        expected_after=PASSED,
+        note="an unrecognised dispatch token is read as the historical mode, which is the mode "
+        "with the weakest transport expectation",
+    ),
+    Mutant(
+        id="J04",
+        family="J",
+        surface="_field_set_unexpected",
+        severity=Severity.CRITICAL,
+        apply=deriving_check(
+            "_field_set_unexpected",
+            lambda original: lambda e: None if _dispatch_of(e) != "PERFORMED" else original(e),
+        ),
+        witness=lambda: payload(recheck_trace(**{ATTR_EFFECT_FIELDS: "patient_id"})),
+        expected_before=failed(CheckId.FIELD_SET_UNEXPECTED),
+        expected_after=PASSED,
+        note="a no-write dispatch mode treated as relaxing the field universe. Together with E05 "
+        "this is the proof that SUPPRESSED and NOT_IN_THIS_TRACE remove the write and its "
+        "ordering, and nothing else",
+    ),
+    Mutant(
+        id="K01",
+        family="K",
+        surface="parse_envelope",
+        severity=Severity.HIGH,
+        apply=deriving("parse_envelope", _first_target_trace),
+        witness=two_target_traces,
+        expected_before=errored(ErrorCode.AMBIGUOUS_TARGET),
+        expected_after=PASSED,
+        note="an envelope naming several traces evaluated against the first. Envelope ambiguity "
+        "is an ERROR rather than a FAIL, and resolving it by selection produces a verdict about a "
+        "trace nobody asked about",
+    ),
+    Mutant(
+        id="L01",
+        family="L",
+        surface="parse_envelope",
+        severity=Severity.CRITICAL,
+        apply=deriving("parse_envelope", _swallowing_parse),
+        witness=wrong_level,
+        expected_before=errored(ErrorCode.UNSUPPORTED_EVALUATION_LEVEL),
+        expected_after=PASSED,
+        note="every envelope refusal swallowed and the spans evaluated anyway, so unevaluable "
+        "input settles",
+    ),
+    Mutant(
+        id="L02",
+        family="L",
+        surface="assess",
+        severity=Severity.HIGH,
+        apply=deriving("assess", _na_on_envelope_error),
+        witness=wrong_level,
+        expected_before=errored(ErrorCode.UNSUPPORTED_EVALUATION_LEVEL),
+        expected_after=not_applicable(NaReason.NO_EFFECT_CLAIMED),
+        note="unevaluable input reported as nothing to judge, which removes it from the record "
+        "rather than flagging it",
+    ),
+    Mutant(
+        id="L03",
+        family="L",
+        surface="fail_result",
+        severity=Severity.MEDIUM,
+        apply=deriving("fail_result", _contradictions_as_errors),
+        witness=settlement_token("NOT_CERTIFIED"),
+        expected_before=failed(CheckId.SETTLEMENT_NOT_VERIFIED),
+        expected_after=errored(ErrorCode.INTERNAL_ERROR),
+        note="a genuine contradiction in valid evidence reported as infrastructure trouble, which "
+        "is how a finding stops being read as a finding",
+    ),
+    Mutant(
+        id="L04",
+        family="L",
+        surface="parse_envelope",
+        severity=Severity.CRITICAL,
+        apply=deriving("parse_envelope", _dropping_unattributable_spans),
+        witness=second_write_without_a_trace_id,
+        expected_before=errored(ErrorCode.SPAN_MISSING_TRACE_ID),
+        expected_after=PASSED,
+        note="an unattributable span dropped rather than refused. The dropped span is a second "
+        "clinic write, so discarding it turns an ambiguous trace into a settled one",
+    ),
+    Mutant(
+        id="M01",
+        family="M",
+        surface="assess",
+        severity=Severity.MEDIUM,
+        apply=deriving("assess", lambda _shipped: _explanation_gaining(_claimed_resource_of)),
+        witness=hostile_mismatch,
+        expected_before=failed(CheckId.RESOURCE_MISMATCH),
+        expected_after=leaking(failed(CheckId.RESOURCE_MISMATCH), HOSTILE_RESOURCE),
+        note="the claimed resource id added to the explanation as context. The outcome is "
+        "unchanged, which is exactly why the standing contract has to check the published text "
+        "and not only the verdict",
+    ),
+    Mutant(
+        id="M02",
+        family="M",
+        surface="assess",
+        severity=Severity.MEDIUM,
+        apply=deriving("assess", lambda _shipped: _explanation_gaining(_first_url_of)),
+        witness=hostile_mismatch,
+        expected_before=failed(CheckId.RESOURCE_MISMATCH),
+        expected_after=leaking(failed(CheckId.RESOURCE_MISMATCH), CLINIC),
+        note="an external URL added to the explanation",
+    ),
+    Mutant(
+        id="M03",
+        family="M",
+        surface="not_applicable_result",
+        severity=Severity.MEDIUM,
+        apply=deriving(
+            "not_applicable_result",
+            lambda shipped: lambda reason: {**shipped(reason), "value": 0.0},
+        ),
+        witness=lambda: payload(simulated_trace()),
+        expected_before=not_applicable(NaReason.EFFECT_NOT_INDEPENDENTLY_OBSERVABLE),
+        expected_after=with_keys(
+            not_applicable(NaReason.EFFECT_NOT_INDEPENDENTLY_OBSERVABLE), "value"
+        ),
+        note="NOT_APPLICABLE gains a numeric value, so an inapplicable trace starts contributing "
+        "a zero to every average. Patch A proved the omission survives the round trip uncoerced; "
+        "this is the mutation that would waste that",
+    ),
+    Mutant(
+        id="M04",
+        family="M",
+        surface="error_result",
+        severity=Severity.MEDIUM,
+        apply=deriving(
+            "error_result", lambda shipped: lambda code: {**shipped(code), "label": "ERROR"}
+        ),
+        witness=wrong_level,
+        expected_before=errored(ErrorCode.UNSUPPORTED_EVALUATION_LEVEL),
+        expected_after=with_keys(errored(ErrorCode.UNSUPPORTED_EVALUATION_LEVEL), "label"),
+        note="an error result gains a label value Patch A never proved the service accepts",
+    ),
+)
+
+
+MUTANTS: Final[tuple[Mutant, ...]] = _family_a() + _FAMILY_DEFG + _FAMILY_REST
 
 
 # =============================================================================================
@@ -1399,7 +2217,7 @@ class TestEquivalentMutantsAreProvablyUnobservable:
     where a directional difference would show up if there were one.
     """
 
-    EQUIVALENT = tuple(mutant for mutant in MUTANTS if mutant.is_equivalent)
+    EQUIVALENT: ClassVar = tuple(mutant for mutant in MUTANTS if mutant.is_equivalent)
 
     def test_there_is_something_to_check(self) -> None:
         assert self.EQUIVALENT
@@ -1563,3 +2381,386 @@ class TestTheHarnessDetectsADeliberatelyBrokenEvaluator:
         """The control for the probe above: the same replacement, at the binding that counts."""
         monkeypatch.setattr(settlement, "successful", lambda span: True)
         assert verdict(failed_write()) == PASSED
+
+
+# =============================================================================================
+# Truth tables -- properties stated directly, beside the mutants that attack them
+# =============================================================================================
+
+
+def _matrix_trace(writes: int, reads: int, claims: str) -> Mapping[str, Any]:
+    """A trace with a chosen amount of clinic transport and a chosen kind of claim."""
+    spans: list[Any] = [internal_operation_span()]
+    if claims == "observable":
+        spans.append(graph_span())
+    elif claims == "unobservable":
+        spans.append(graph_span(**{ATTR_EFFECT_TYPE: "send_email"}))
+    elif claims == "multiple":
+        spans.append(graph_span())
+        spans.append(graph_span(**{ATTR_EFFECT_TYPE: "book_appointment"}))
+        spans[-1]["spanId"] = "dddddddddddddddd"
+        spans[-1]["span_id"] = "dddddddddddddddd"
+    spans.extend(bedrock_spans())
+    for index in range(writes):
+        spans.append(write_span(span_id=f"eeeeeeeeeeeeeee{index}"))
+    for index in range(reads):
+        spans.append(
+            read_span(
+                span_id=f"fffffffffffffff{index}",
+                start=READ_START + index,
+                end=READ_END + index,
+            )
+        )
+    return payload(spans)
+
+
+class TestApplicabilityNeverHidesClinicActivity:
+    """The Phase-A invariant, over the whole matrix rather than at a few points.
+
+    ``NOT_APPLICABLE`` is a statement that nothing external happened. The one thing it must never
+    be is a way for a trace that booked or read an appointment to leave no number behind, whether
+    because the claim is missing, because it names the wrong effect type, or because there are two
+    of them.
+    """
+
+    MATRIX: ClassVar = [
+        (writes, reads, claims)
+        for writes in (0, 1, 2)
+        for reads in (0, 1, 2)
+        for claims in ("none", "observable", "unobservable", "multiple")
+    ]
+
+    @pytest.mark.parametrize(
+        ("writes", "reads", "claims"),
+        MATRIX,
+        ids=[f"w{w}r{r}-{c}" for w, r, c in MATRIX],
+    )
+    def test_not_applicable_implies_no_clinic_transport(
+        self, writes: int, reads: int, claims: str
+    ) -> None:
+        result = verdict(_matrix_trace(writes, reads, claims))
+        if result.label == "NOT_APPLICABLE":
+            assert writes == 0 and reads == 0, (
+                f"a trace with {writes} clinic write(s) and {reads} clinic read(s) reported "
+                f"NOT_APPLICABLE, so external activity left no number behind"
+            )
+
+    @pytest.mark.parametrize(
+        ("writes", "reads", "claims"),
+        MATRIX,
+        ids=[f"w{w}r{r}-{c}" for w, r, c in MATRIX],
+    )
+    def test_the_matrix_never_settles_anything_it_should_not(
+        self, writes: int, reads: int, claims: str
+    ) -> None:
+        """Only one cell in the matrix is a complete, unambiguous, settled trace."""
+        result = verdict(_matrix_trace(writes, reads, claims))
+        if result == PASSED:
+            assert (writes, reads, claims) == (1, 1, "observable")
+
+    def test_the_matrix_reaches_every_phase_a_answer(self) -> None:
+        """A matrix that only ever produced one answer would prove nothing."""
+        reached = {verdict(_matrix_trace(w, r, c)) for w, r, c in self.MATRIX}
+        codes = {outcome.code for outcome in reached}
+        assert {
+            NaReason.NO_EFFECT_CLAIMED.value,
+            NaReason.EFFECT_NOT_INDEPENDENTLY_OBSERVABLE.value,
+            CheckId.CLAIM_ABSENT.value,
+            CheckId.EFFECT_TYPE_MISLABELLED.value,
+            CheckId.CLAIM_AMBIGUOUS.value,
+        } <= codes
+
+
+class TestTheOutcomeAndDigestTruthTable:
+    """Every combination of reported outcome against digest agreement, pinned to its exact code.
+
+    Not "some FAIL": the three defences here overlap, and which one refuses a trace is the whole
+    audit value. ``OUTCOME_CONTRADICTS_DIGESTS`` catches a claim disagreeing with itself,
+    ``STATE_DIGESTS_DIFFER`` catches a plain disagreement under an outcome that claims none, and
+    ``OUTCOME_NOT_MATCHED`` catches an outcome that never claimed agreement in the first place.
+    Each is reachable, which is what stops any of them being decorative.
+    """
+
+    TABLE: ClassVar = [
+        ("MATCHED", True, PASSED),
+        ("MATCHED", False, failed(CheckId.OUTCOME_CONTRADICTS_DIGESTS)),
+        ("DIVERGED", True, failed(CheckId.OUTCOME_CONTRADICTS_DIGESTS)),
+        ("DIVERGED", False, failed(CheckId.STATE_DIGESTS_DIFFER)),
+        ("ABSENT", True, failed(CheckId.OUTCOME_NOT_MATCHED)),
+        ("ABSENT", False, failed(CheckId.STATE_DIGESTS_DIFFER)),
+        ("UNAVAILABLE", True, failed(CheckId.OUTCOME_NOT_MATCHED)),
+        ("UNAVAILABLE", False, failed(CheckId.STATE_DIGESTS_DIFFER)),
+        ("NOT_OBSERVED", True, failed(CheckId.OUTCOME_NOT_MATCHED)),
+        ("NOT_OBSERVED", False, failed(CheckId.STATE_DIGESTS_DIFFER)),
+    ]
+
+    @pytest.mark.parametrize(
+        ("outcome", "agree", "expected"),
+        TABLE,
+        ids=[f"{outcome}-{'equal' if agree else 'unequal'}" for outcome, agree, _ in TABLE],
+    )
+    def test_each_combination_reaches_its_own_verdict(
+        self, outcome: str, agree: bool, expected: Outcome
+    ) -> None:
+        observed = STATE_DIGEST if agree else OTHER_DIGEST
+        built = payload(
+            settled_trace(
+                **{
+                    ATTR_OBSERVATION_OUTCOME: outcome,
+                    ATTR_OBSERVATION_STATE_DIGEST: observed,
+                }
+            )
+        )
+        assert verdict(built) == expected
+
+    def test_only_matched_with_equal_digests_settles(self) -> None:
+        settling = [row for row in self.TABLE if row[2] == PASSED]
+        assert settling == [("MATCHED", True, PASSED)]
+
+    def test_all_three_defences_are_independently_reachable(self) -> None:
+        reached = {row[2].code for row in self.TABLE}
+        assert CheckId.OUTCOME_CONTRADICTS_DIGESTS.value in reached
+        assert CheckId.STATE_DIGESTS_DIFFER.value in reached
+        assert CheckId.OUTCOME_NOT_MATCHED.value in reached
+
+
+class TestAmbiguityIsRefusedAndNeverResolved:
+    """Trace-content ambiguity is a finding; envelope-target ambiguity is an error.
+
+    The split follows what the ambiguity is *about*. Two claims or two writes are facts about a
+    trace this evaluator was asked to judge, so they are verdicts. Two target traces means the
+    request itself does not name one thing to judge, so it is unevaluable input.
+    """
+
+    CONTENT: ClassVar = [
+        ("two claims", two_claim_spans, CheckId.CLAIM_AMBIGUOUS),
+        ("two writes", two_writes, CheckId.MULTIPLE_WRITES),
+        ("two matching reads", two_matching_reads, CheckId.MULTIPLE_OBSERVATIONS),
+        ("write status disagrees", ambiguous_write_status, CheckId.TRANSPORT_STATUS_AMBIGUOUS),
+        ("read status disagrees", ambiguous_read_status, CheckId.TRANSPORT_STATUS_AMBIGUOUS),
+    ]
+
+    @pytest.mark.parametrize(("name", "witness", "code"), CONTENT, ids=[row[0] for row in CONTENT])
+    def test_content_ambiguity_is_a_fail(self, name: str, witness: Witness, code: CheckId) -> None:
+        assert verdict(witness()) == failed(code)
+
+    def test_envelope_ambiguity_is_an_error(self) -> None:
+        assert verdict(two_target_traces()) == errored(ErrorCode.AMBIGUOUS_TARGET)
+
+    def test_no_ambiguous_trace_ever_settles(self) -> None:
+        for _, witness, _ in self.CONTENT:
+            assert verdict(witness()) != PASSED
+
+
+class TestMalformedInputNeverSettlesAndNeverDisappears:
+    """Every unevaluable envelope, and the two answers it must never give."""
+
+    MALFORMED: ClassVar = [
+        ("not a mapping", lambda: None, ErrorCode.ENVELOPE_MALFORMED),
+        (
+            "bad schema version",
+            lambda: payload(settled_trace(), version="9.9"),
+            ErrorCode.UNSUPPORTED_SCHEMA_VERSION,
+        ),
+        ("bad level", wrong_level, ErrorCode.UNSUPPORTED_EVALUATION_LEVEL),
+        (
+            "span-id target",
+            lambda: payload(settled_trace(), target={"spanIds": ["x"]}),
+            ErrorCode.UNSUPPORTED_TARGET_KIND,
+        ),
+        ("two target traces", two_target_traces, ErrorCode.AMBIGUOUS_TARGET),
+        (
+            "no target traces",
+            lambda: payload(settled_trace(), trace_ids=[]),
+            ErrorCode.AMBIGUOUS_TARGET,
+        ),
+        (
+            "no evaluation input",
+            lambda: {
+                "evaluationLevel": "TRACE",
+                "evaluationTarget": {"traceIds": [TRACE_ID]},
+                "schemaVersion": "1.0",
+            },
+            ErrorCode.SPANS_MALFORMED,
+        ),
+        ("no spans", lambda: payload([]), ErrorCode.SPANS_MALFORMED),
+        ("a span that is not a mapping", lambda: payload(["nope"]), ErrorCode.SPANS_MALFORMED),
+        (
+            "a span with no trace id",
+            second_write_without_a_trace_id,
+            ErrorCode.SPAN_MISSING_TRACE_ID,
+        ),
+        (
+            "target trace absent",
+            lambda: payload(settled_trace(), trace_ids=[OTHER_TRACE_ID]),
+            ErrorCode.TARGET_TRACE_ABSENT,
+        ),
+    ]
+
+    @pytest.mark.parametrize(
+        ("name", "witness", "code"), MALFORMED, ids=[row[0] for row in MALFORMED]
+    )
+    def test_it_is_reported_as_the_error_it_is(
+        self, name: str, witness: Witness, code: ErrorCode
+    ) -> None:
+        assert verdict(witness()) == errored(code)
+
+    @pytest.mark.parametrize(
+        ("name", "witness", "code"), MALFORMED, ids=[row[0] for row in MALFORMED]
+    )
+    def test_it_never_becomes_pass_or_not_applicable(
+        self, name: str, witness: Witness, code: ErrorCode
+    ) -> None:
+        assert verdict(witness()).label == "ERROR"
+
+    def test_a_contradiction_in_valid_evidence_stays_a_finding(self) -> None:
+        """The reverse boundary: an evidence contradiction is never infrastructure trouble."""
+        for witness in (
+            settlement_token("NOT_CERTIFIED"),
+            lambda: payload(settled_trace(**{ATTR_OBSERVATION_STATE_DIGEST: OTHER_DIGEST})),
+            failed_read,
+            read_before_write,
+        ):
+            assert verdict(witness()).label == "FAIL"
+
+
+class TestThePublishedSurfaceCarriesNothingFromThePayload:
+    """The result is a CloudWatch record and, at submission, a public one."""
+
+    HOSTILE: ClassVar = [
+        ("settled", hostile_trace),
+        ("refused", hostile_mismatch),
+        ("ordinary settled", lambda: payload(settled_trace())),
+        ("not applicable", lambda: payload(simulated_trace())),
+        ("unevaluable", wrong_level),
+    ]
+
+    @pytest.mark.parametrize("entry", HOSTILE, ids=[name for name, _ in HOSTILE])
+    def test_no_sentinel_reaches_the_result(self, entry: tuple[str, Witness]) -> None:
+        name, witness = entry
+        assert verdict(witness()).leaks == (), name
+
+    def test_the_hostile_trace_is_actually_hostile(self) -> None:
+        """A sentinel that is not in the payload cannot prove anything about the result."""
+        rendered = json.dumps(hostile_trace(), default=str)
+        assert HOSTILE_RESOURCE in rendered
+        assert HOSTILE_DIGEST in rendered
+        assert HOSTILE_HOST in rendered
+
+    def test_the_hostile_trace_still_settles(self) -> None:
+        """Hostility is in the values, not in the evidence: this trace is valid and must pass."""
+        assert verdict(hostile_trace()) == PASSED
+
+
+class TestSettlementAbsenceIsNamedRatherThanMerelyRefused:
+    """The diagnostic gap Patch B left, closed.
+
+    Deleting ``_settlement_absent`` turned **zero** tests red before Patch C: absence still
+    reached ``FAIL``, so no assertion noticed that the trail had stopped saying *why*. A missing
+    settlement conclusion and a settlement conclusion of ``NOT_CERTIFIED`` are different facts
+    about what CareLoop knows, and an append-only audit trail is the wrong place to collapse them.
+    """
+
+    def test_a_missing_settlement_is_reported_as_absent(self) -> None:
+        assert verdict(settlement_token(ABSENT)()) == failed(CheckId.SETTLEMENT_ABSENT)
+
+    def test_an_unknown_token_is_also_absent_rather_than_unverified(self) -> None:
+        assert verdict(settlement_token("MAYBE")()) == failed(CheckId.SETTLEMENT_ABSENT)
+
+    def test_a_recorded_refusal_is_reported_as_not_verified(self) -> None:
+        assert verdict(settlement_token("NOT_CERTIFIED")()) == failed(
+            CheckId.SETTLEMENT_NOT_VERIFIED
+        )
+
+    def test_only_verified_settles(self) -> None:
+        for token in (ABSENT, "MAYBE", "NOT_CERTIFIED", "verified", "", 1, None):
+            assert verdict(settlement_token(token)()) != PASSED, token
+
+
+class TestNoWriteModesRemoveTheWriteAndNothingElse:
+    """``SUPPRESSED`` and ``NOT_IN_THIS_TRACE`` drop the write and its ordering. That is all."""
+
+    MODES: ClassVar = ["SUPPRESSED", "NOT_IN_THIS_TRACE"]
+
+    @pytest.mark.parametrize("mode", MODES)
+    def test_they_settle_with_no_write_at_all(self, mode: str) -> None:
+        assert verdict(payload(recheck_trace(**{ATTR_EFFECT_DISPATCH: mode}))) == PASSED
+
+    @pytest.mark.parametrize("mode", MODES)
+    def test_but_every_other_requirement_still_applies(self, mode: str) -> None:
+        for override, expected in (
+            ({ATTR_OBSERVATION_MODE: "NONE"}, CheckId.NO_INDEPENDENT_OBSERVER),
+            ({ATTR_OBSERVATION_RESOURCE_ID: "apt-other"}, CheckId.RESOURCE_MISMATCH),
+            ({ATTR_EFFECT_FIELDS: "patient_id"}, CheckId.FIELD_SET_UNEXPECTED),
+            ({ATTR_EFFECT_STATE_DIGEST: "nothex"}, CheckId.DIGEST_MALFORMED),
+            ({ATTR_OBSERVATION_STATE_DIGEST: OTHER_DIGEST}, CheckId.OUTCOME_CONTRADICTS_DIGESTS),
+            ({ATTR_OBSERVATION_OUTCOME: "ABSENT"}, CheckId.OUTCOME_NOT_MATCHED),
+            ({ATTR_SETTLEMENT: "NOT_CERTIFIED"}, CheckId.SETTLEMENT_NOT_VERIFIED),
+        ):
+            built = payload(recheck_trace(**{ATTR_EFFECT_DISPATCH: mode, **override}))
+            assert verdict(built) == failed(expected), (mode, override)
+
+    @pytest.mark.parametrize("mode", MODES)
+    def test_the_independent_read_is_never_historical(self, mode: str) -> None:
+        """The write may belong to an earlier trace. The observation may not."""
+        spans = [
+            internal_operation_span(),
+            graph_span(**{ATTR_EFFECT_DISPATCH: mode}),
+            *bedrock_spans(),
+        ]
+        assert verdict(payload(spans)) == failed(CheckId.OBSERVATION_ABSENT_FROM_TRACE)
+
+    @pytest.mark.parametrize("mode", MODES)
+    def test_a_write_in_this_trace_contradicts_them(self, mode: str) -> None:
+        spans = [*recheck_trace(**{ATTR_EFFECT_DISPATCH: mode}), write_span()]
+        assert verdict(payload(spans)) == failed(CheckId.DISPATCH_CONTRADICTS_TRANSPORT)
+
+
+class TestTheOrderingBoundaryIsExact:
+    """``read.start >= write.end``, pinned from both sides at one nanosecond."""
+
+    def test_a_read_beginning_exactly_when_the_write_finished_is_valid(self) -> None:
+        assert verdict(read_exactly_at_write_end()) == PASSED
+
+    def test_one_nanosecond_earlier_is_refused(self) -> None:
+        assert verdict(read_before_write()) == failed(CheckId.OBSERVATION_PRECEDES_EFFECT)
+
+    def test_unreadable_timing_is_a_failure_and_not_a_skipped_check(self) -> None:
+        assert verdict(unreadable_timing()) == failed(CheckId.TIMING_UNAVAILABLE)
+
+
+class TestCharacterisedButUnchangedBehaviour:
+    """Contract behaviour Patch C records rather than proposes.
+
+    Neither of these is a defect and neither is being repaired here. Writing them down is what
+    turns a later change into a decision instead of a drift.
+    """
+
+    def test_an_orphan_observation_span_is_not_a_second_claim(self) -> None:
+        """A claim is located by ``careloop.effect.type`` alone.
+
+        A span carrying observation attributes without one is invisible, so contradictory values
+        on it change nothing. This cannot manufacture a PASS -- the located claim still has to be
+        complete and correct -- and mutant B05 is what would notice if the rule ever widened.
+        """
+        assert verdict(orphan_observation_attributes()) == PASSED
+
+    def test_an_unhashable_effect_type_is_a_finding_and_not_a_crash(self) -> None:
+        """``in`` against a frozenset raises on an unhashable value; the isinstance guard stops it.
+
+        Without the guard these would leave ``assess`` as a ``TypeError`` and reach the handler's
+        broad catch as ``INTERNAL_ERROR`` -- infrastructure trouble reported for a trace that is
+        simply mislabelled.
+        """
+        for hostile in ({"a": 1}, ["book_appointment"], 7, 1.5, True):
+            spans = settled_trace(**{ATTR_EFFECT_TYPE: hostile})
+            assert verdict(payload(spans)) == failed(CheckId.EFFECT_TYPE_MISLABELLED), hostile
+
+    def test_an_absent_effect_type_makes_the_span_no_claim_at_all(self) -> None:
+        """A claim is located by the attribute's presence, so ``None`` is not a mislabelled claim.
+
+        It is no claim, and the trace's clinic transport is then unaccounted for -- which is the
+        stronger of the two findings and the correct one.
+        """
+        spans = settled_trace(**{ATTR_EFFECT_TYPE: None})
+        assert verdict(payload(spans)) == failed(CheckId.CLAIM_ABSENT)

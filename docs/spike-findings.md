@@ -4,7 +4,9 @@ Pinned against **`strands-agents==1.51.0`**, Python 3.12.0, Windows.
 
 Sections 1–6 are the four SDK surfaces the CareLoop design depends on, plus the Bedrock model-id
 question. Section 7 is `deepteam==1.0.9`, added in session G for the adversarial evaluation under
-`evals/`. Each was verified by executing code, not by reading signatures.
+`evals/`. Sections 8 and 9 are the AgentCore Evaluations compatibility spike: §8 is the IAM-blocked first
+attempt, kept as evidence, and §9 is the rerun that resolved every question. Each section was
+verified by executing code, not by reading signatures.
 
 ## 1. GraphBuilder — CONFIRMED
 
@@ -354,3 +356,439 @@ genuinely priced per token. A run bounded only in dollars is unbounded in NVIDIA
 `evals/run.py` therefore carries **two** ceilings — `--max-spend` in USD over the Bedrock target
 calls, and `--max-calls` over every provider call the run makes at all — because a ceiling that
 cannot see the resource it is spending is decoration.
+
+## 8. AgentCore Evaluations — Patch A, PARTIAL: one question answered, five blocked
+
+> **Superseded by §9, and kept deliberately.** This is the record of the first, IAM-blocked
+> attempt. Its permission inventory is what unblocked the rerun; its one error — the
+> `bedrock-agentcore-control:` action prefix — is corrected in §9 rather than edited away here.
+
+**Status: the spike could not be completed, and the reason is credentials rather than AWS.** One of
+the six questions (A6) is answered definitively and offline. The other five each require either
+creating a throwaway Lambda and evaluator or reading span content, and the only AWS identity
+reachable from this workstation is authorised for neither. **Nothing here disproves the
+`CareLoopSettlementIntegrity` design, and nothing here licenses recutting it** — an unrun experiment
+is not a negative result, and the distinction matters because A1 is an architecture gate whose
+failure would mean a materially larger telemetry patch.
+
+Region `us-east-1`. `boto3==1.43.68`, `botocore==1.43.68`. No AWS CLI on the workstation; every call
+below was made through boto3.
+
+### What the identity can and cannot do
+
+Probed read-only, by execution. The identity is the benchmark IAM user the model benchmark uses; it
+is a long-lived `AKIA…` key in the untracked `.env`, and it is the only credential on the machine —
+there is no `~/.aws/config`, no `~/.aws/credentials`, and the SSO cache is empty.
+
+| Probe | Result |
+|---|---|
+| `sts:GetCallerIdentity` | allowed — an IAM **user**, not the EC2 instance profile |
+| `logs:DescribeLogGroups` | **allowed** |
+| `logs:DescribeLogStreams`, `logs:FilterLogEvents`, `logs:StartQuery` | `AccessDeniedException` |
+| `lambda:ListFunctions` | `AccessDeniedException` |
+| `iam:ListRoles` | `AccessDenied` |
+| `bedrock-agentcore-control:ListEvaluators` | `AccessDeniedException` |
+| `bedrock-agentcore:Evaluate` | `AccessDeniedException` |
+| `xray:GetTraceSegmentDestination` | `AccessDeniedException` |
+
+So the throwaway Lambda cannot be created, its execution role cannot be created, the throwaway
+evaluator cannot be created, `Evaluate` cannot be called, and span **content** cannot be read. Group
+*metadata* can be, which is the one live thing this session could establish.
+
+### A6 — current SDK and control-plane shape — **ANSWERED**
+
+Read out of the service models shipped in the installed `botocore==1.43.68`, which is what the SDK
+actually sends rather than what a documentation page describes — the same discipline §6 applied to
+the Bedrock model id and §4 to the emitted tool spec.
+
+| | |
+|---|---|
+| Control plane | `bedrock-agentcore-control`, API version **2023-06-05**, `rest-json` |
+| Data plane | `bedrock-agentcore`, API version **2024-02-28**, `rest-json` |
+
+```
+CreateEvaluator   POST   /evaluators/create
+GetEvaluator      GET    /evaluators/{evaluatorId}
+DeleteEvaluator   DELETE /evaluators/{evaluatorId}
+Evaluate          POST   /evaluations/evaluate/{evaluatorId}
+```
+
+All four exist in the current SDK. **No legacy tooling and no `agentcore` CLI is required** — the
+starter toolkit is a convenience over exactly these operations.
+
+`CreateEvaluator` requires `evaluatorName`, `evaluatorConfig` and `level`; `level` is a closed enum
+`TOOL_CALL | TRACE | SESSION`. `evaluatorConfig` is a **union** of `llmAsAJudge` and `codeBased`, and
+`codeBased` is itself a union whose one member is `lambdaConfig`:
+
+```
+evaluatorConfig.codeBased.lambdaConfig.lambdaArn                REQUIRED
+evaluatorConfig.codeBased.lambdaConfig.lambdaTimeoutInSeconds   optional, integer 1–300
+```
+
+Three constraints that change how the design is written, none of which is stated in the prose
+documentation:
+
+- **`evaluatorName` matches `[a-zA-Z][a-zA-Z0-9_]{0,47}`** — letters, digits and underscores only,
+  48 characters maximum. A hyphenated name is rejected at the API. `CareLoopSettlementIntegrity` is
+  27 characters and valid; `careloop-settlement-integrity` would not be.
+- **`evaluationTarget` is a union** — `traceIds` **xor** `spanIds`, never both, each 1–10 items. A
+  trace-level evaluator therefore names at most ten traces per call.
+- **`Span` is a `document` type with no declared members**, and `sessionSpans` is 1–1000 of them. The
+  API layer imposes no span schema at all, so it can neither require `session.id` nor filter by
+  scope. Whatever A1 and A2 turn out to be, they are facts about the *service's* processing, not
+  about request validation — which is why neither can be settled by reading the model.
+
+`EvaluationResultContent` carries `label`, `value`, `explanation`, `errorCode`, `errorMessage`,
+`tokenUsage` and `context`. **`value` is optional in the wire model** and `context.spanContext`
+carries `sessionId`, `traceId`, `spanId`. That is consistent with the N/A-without-`value` design and
+with `session.id` being optional, but consistency is not proof: A5 and A2 are about whether the
+service *coerces* an absent `value` and whether it *accepts* a session-less span set, and only a live
+call can answer either.
+
+### A1, A2, A3, A5 — **BLOCKED, not answered**
+
+All four need a throwaway code-based evaluator, and creating one needs `lambda:CreateFunction`,
+`iam:CreateRole` and `bedrock-agentcore-control:CreateEvaluator`. None is available.
+
+The A2 experiment was built and attempted anyway against `Builtin.Helpfulness`, on a hand-built
+three-span set — a `strands.telemetry.tracer` root plus an `opentelemetry.instrumentation.httpx`
+`POST` and `GET` — carrying **no `session.id` anywhere**, with `evaluationTarget={"traceIds":[…]}`.
+It returned `AccessDeniedException` on `bedrock-agentcore:Evaluate` before any service processing, so
+it establishes the permission state and nothing about session identity.
+
+**A1 remains the gate.** The question is whether a code-based evaluator's Lambda receives supplied
+spans whose scopes are `opentelemetry.instrumentation.httpx` and `botocore` — scopes the service
+documents as *excluded from generic framework classification*. CareLoop's entire independent evidence
+is httpx spans, so a filtered answer means the design must be recut. **That question is still open.**
+
+### A4 — real production HTTP attribute spellings — **BLOCKED**
+
+Reading a real CareLoop span needs `logs:StartQuery` or `logs:FilterLogEvents` on `aws/spans`. Both
+are denied. The synthetic spans above use the old spelling on the reasoning that
+`OTEL_SEMCONV_STABILITY_OPT_IN` carries only the `gen_ai_unredacted_attributes=` token, and that
+variable also selects HTTP semantic-convention stability — but **that is a prediction from the pinned
+configuration, not a measurement, and it is exactly what A4 exists to check.** The evaluator must
+read both spellings until a real span says otherwise.
+
+### What the log-group metadata did establish
+
+Group metadata is readable, and it independently corroborates ADR 0004's completion record from a
+direction the ADR does not itself claim:
+
+| Log group | Retention | Holds data |
+|---|---|---|
+| `aws/spans` | 30 days | yes |
+| `/aws/bedrock-agentcore/runtimes/careloop` | **14 days** | yes |
+| `/aws/application-signals/data` | never expire | yes |
+
+`aws/spans` exists and is non-empty, which is what Transaction Search being enabled and ingesting
+looks like from outside. The CareLoop agent log group carries **exactly the 14-day retention
+`deploy/README.md` prescribes**, which is what the one-time account setup having been run
+deliberately looks like. Neither is a substitute for A4: these are byte counts and retention
+settings, not span contents.
+
+`/aws/application-signals/data` is created by the Transaction Search resource policy and is empty of
+CareLoop metrics — Application Signals remains off, as pinned.
+
+### The exact least-privilege policy this spike needs
+
+Scoped to throwaway names so the grant cannot touch anything CareLoop owns. `iam:PassRole` is
+conditioned on the Lambda service so the role cannot be passed anywhere else.
+
+```json
+{"Version": "2012-10-17", "Statement": [
+  {"Sid": "SpikeLambda", "Effect": "Allow",
+   "Action": ["lambda:CreateFunction", "lambda:GetFunction", "lambda:InvokeFunction",
+              "lambda:DeleteFunction", "lambda:AddPermission", "lambda:RemovePermission",
+              "lambda:GetPolicy"],
+   "Resource": "arn:aws:lambda:us-east-1:<ACCOUNT>:function:careloop-evalspike-*"},
+  {"Sid": "SpikeRole", "Effect": "Allow",
+   "Action": ["iam:CreateRole", "iam:DeleteRole", "iam:GetRole",
+              "iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:ListAttachedRolePolicies"],
+   "Resource": "arn:aws:iam::<ACCOUNT>:role/careloop-evalspike-*"},
+  {"Sid": "SpikePassRole", "Effect": "Allow", "Action": "iam:PassRole",
+   "Resource": "arn:aws:iam::<ACCOUNT>:role/careloop-evalspike-*",
+   "Condition": {"StringEquals": {"iam:PassedToService": "lambda.amazonaws.com"}}},
+  {"Sid": "SpikeEvaluator", "Effect": "Allow",
+   "Action": ["bedrock-agentcore-control:CreateEvaluator",
+              "bedrock-agentcore-control:GetEvaluator",
+              "bedrock-agentcore-control:ListEvaluators",
+              "bedrock-agentcore-control:DeleteEvaluator"],
+   "Resource": "*"},
+  {"Sid": "SpikeEvaluate", "Effect": "Allow", "Action": "bedrock-agentcore:Evaluate",
+   "Resource": "*"},
+  {"Sid": "SpikeReadSpans", "Effect": "Allow",
+   "Action": ["logs:StartQuery", "logs:GetQueryResults", "logs:FilterLogEvents",
+              "logs:DescribeLogStreams", "logs:DescribeLogGroups"],
+   "Resource": ["arn:aws:logs:us-east-1:<ACCOUNT>:log-group:aws/spans:*",
+                "arn:aws:logs:us-east-1:<ACCOUNT>:log-group:/aws/bedrock-agentcore/runtimes/careloop:*"]},
+  {"Sid": "SpikeLambdaLogs", "Effect": "Allow",
+   "Action": ["logs:PutRetentionPolicy", "logs:DeleteLogGroup", "logs:DescribeLogGroups"],
+   "Resource": "arn:aws:logs:us-east-1:<ACCOUNT>:log-group:/aws/lambda/careloop-evalspike-*"}
+]}
+```
+
+`bedrock-agentcore-control:CreateEvaluator` and `bedrock-agentcore:Evaluate` are `Resource: "*"`
+because an evaluator's ARN is minted by the create call and cannot be named in advance, and because
+`Evaluate` authorises against the evaluator ARN — the same shape, and the same reason, as the four
+unavoidable `xray:*` wildcards ADR 0004 records. **Every statement is deletable in one edit when the
+spike ends; none of it belongs on the EC2 instance profile, which must gain nothing.**
+
+`SpikeReadSpans` is read-only over two named groups. `SpikeLambdaLogs` exists because a Lambda log
+group defaults to NEVER EXPIRE and the spike must be able to set retention and then delete it — the
+trap ADR 0004 records for AgentCore log groups, which applies verbatim to Lambda's.
+
+### What was created, and what changed
+
+**Nothing.** No `Create*` call was made against any AWS service — every creation surface answered
+`AccessDenied` to a read-only probe first, so nothing was attempted. Log-group metadata was
+re-listed after the probes and is byte-identical to before: same four groups, same retention, same
+`storedBytes`. EC2 IAM, observability IAM, Transaction Search, CloudWatch retention, AgentCore
+Observability, security groups, production systemd and the CareLoop deployment are all untouched, and
+no code outside this document changed.
+
+Cleanup is therefore trivially proven rather than performed: there is nothing to remove.
+
+### What has to happen before Patch A can be rerun
+
+One thing: an AWS identity carrying the policy above. Everything else is written and ready — the
+probe harness, the synthetic session-less span set, and the diagnostic Lambda's contract (report the
+envelope's `schemaVersion`, `evaluationLevel` and `evaluationTarget`, the span count, the **distinct
+`scope.name` values received**, whether the target trace id is present, and a `label` with no `value`
+for the A5 arm; call nothing, mutate nothing).
+
+Until A1 is measured, the nine-attribute `CareLoopSettlementIntegrity` contract stands as designed
+and unimplemented. It is not approved for implementation and it is not recut.
+
+## 9. AgentCore Evaluations — Patch A rerun: A1–A6 resolved by execution
+
+Temporary least-privilege permissions were provisioned externally onto the existing benchmark
+identity, and the spike was rerun. Region `us-east-1`, `boto3==1.43.68`/`botocore==1.43.68`, no AWS
+CLI. Two throwaway resources were created, and every temporary resource and permission the spike
+used has since been removed — see *Resources and permissions* below. §8's inventory of what
+was needed proved correct except for one action-prefix error, corrected below.
+
+**The correction §8 needs, and it would have silently granted nothing.** §8 wrote
+`bedrock-agentcore-control:CreateEvaluator`. **The IAM action prefix is `bedrock-agentcore:` for
+both planes.** Measured: the control-plane service model declares `signingName: bedrock-agentcore`
+while its `endpointPrefix` is `bedrock-agentcore-control`, and AWS's published evaluations policy
+lists `bedrock-agentcore:CreateEvaluator`. A policy written against the endpoint prefix authorises
+nothing and fails as an ordinary `AccessDeniedException`, which looks exactly like a missing grant.
+
+### A1 — transport spans reach the Lambda — **PASS. The architecture gate is open.**
+
+A **real production CareLoop trace** was read out of `aws/spans` and passed to a throwaway
+TRACE-level code-based evaluator. The Lambda logged what it received:
+
+```
+spanCount 6   tracesInInput 1   targetTraceInSpans [true]
+scopes:
+   opentelemetry.instrumentation.httpx                      2   ← the POST and the GET
+   opentelemetry.instrumentation.botocore.bedrock-runtime   2
+   strands.telemetry.tracer                                 1
+   <none>                                                   1   ← the X-Ray InternalOperation span
+```
+
+**Nothing is filtered.** All six spans arrived, including both httpx spans and both botocore spans.
+The documented exclusion of `httpx`, `botocore` and the other transport scopes applies to the
+service's *generic-framework classification* — how it finds prompts, responses and tool calls for an
+LLM-judge evaluator — and **not** to what a code-based evaluator's Lambda is handed. A code-based
+evaluator receives the supplied span set.
+
+Attributes survive intact, which is the half that actually matters: the delivered `POST` span still
+carries `http.method`, `http.url`, `http.status_code`, `http.response.status_code`, `scope.name`,
+`parentSpanId`, both timestamps and `status`, byte-for-byte as stored.
+
+**Spans are enriched, not passed through verbatim, and an evaluator must read the delivered shape.**
+The service adds, per span: `trace_id`, `span_id`, `parent_span_id` (snake_case aliases beside the
+camelCase originals), `start_time` and `end_time` as ISO strings, `duration_ms`, `events`,
+`span_events`, `source` (observed value `"adot_cw"`), `session_id`, and `langfuse` (observed
+`null` — a third-party vendor slot). None of this is documented. Reading `traceId` or `trace_id`
+both work today; the evaluator should read the camelCase forms, which are the ones AWS's own
+documentation and examples use.
+
+### A2 — no `session.id` — **PASS. Not required.**
+
+The real trace carries no `session.id` anywhere — CareLoop sets none, because the OTel-baggage
+mechanism AWS documents for non-Runtime hosts is not wired and does not need to be. The call
+succeeded with `evaluationTarget={"traceIds":[…]}` and the target resolved (`targetTraceInSpans
+[true]`).
+
+The service **substitutes a placeholder rather than rejecting**, and uses two different ones: the
+delivered spans carry `session_id: "default_session"`, while the result's
+`context.spanContext.sessionId` reads `"unknown"`. Neither is an error and neither needs handling.
+**`session.id` is not mandatory for CareLoop's on-demand design**, and the baggage change §8 held in
+reserve is not needed.
+
+A second call with entirely **synthetic** spans and a fabricated trace id was also accepted, so the
+API's willingness to take a hand-built span set is confirmed rather than assumed. Captured traces
+remain the right input for the eventual settlement proof; this only settles what the substrate
+permits.
+
+### A3 — invocation authorization — **PASS, and the documentation is misleading**
+
+Measured, in this order: `lambda:GetPolicy` on the function returned `ResourceNotFoundException`
+(**no resource-based policy**); no AgentCore service execution role was created; `CreateEvaluator`
+succeeded and went straight to `ACTIVE` **without validating invokability**; `Evaluate` then ran and
+the Lambda executed — two invocations confirmed in its own CloudWatch log stream. `lambda:GetPolicy`
+was re-checked afterwards and still returned `ResourceNotFoundException`, so **the service did not
+create one either**.
+
+So for **on-demand** evaluation, neither of the two mechanisms the documentation points at is
+required. Neither a Lambda resource-based policy for `bedrock-agentcore.amazonaws.com`, nor an
+`AgentCoreEvaluationRole`, existed at any point.
+
+The only Lambda-invoke authority in existence was the **caller's own identity-based
+`lambda:InvokeFunction`** on `careloop-evalspike-*`. That is consistent with on-demand `Evaluate`
+invoking the evaluator's Lambda under the caller's credentials, and it is consistent with the API
+shape: neither `Evaluate` nor `CreateEvaluator` has a role parameter — only
+`CreateOnlineEvaluationConfig` takes `evaluationExecutionRoleArn`. **Stated as the honest limit of
+the measurement:** this session could not revoke its own identity permission, so caller-identity
+invocation is strongly indicated rather than isolated. What *is* isolated is the negative, and it is
+the part the design needed: **no resource policy and no service role are required.**
+
+The practical rule for Patch D/E: give the `Evaluate` caller `lambda:InvokeFunction` on the
+evaluator's function. Do not provision an `AgentCoreEvaluationRole` for the on-demand path. The
+code-based-evaluator documentation's `LambdaInvokeStatement`, attached to a *service execution
+role*, describes the **online** path, where such a role genuinely exists.
+
+### A4 — real HTTP attribute spellings — **PASS, and half of §8's prediction was wrong**
+
+From a real production booking span in `aws/spans`, verbatim:
+
+```
+http.method                 = "POST"                                          old spelling ONLY
+http.url                    = "http://…/clinic/appointments"                  old spelling ONLY
+http.status_code            = 201   ┐
+http.response.status_code   = 201   ┘                                         BOTH spellings
+status.code                 = "UNSET"
+scope.name                  = "opentelemetry.instrumentation.httpx"  version "0.65b0"
+```
+
+`http.request.method` and `url.full` are **absent**. §8 predicted the old spelling throughout, from
+the pinned `OTEL_SEMCONV_STABILITY_OPT_IN`; method and URL match that prediction and **status does
+not** — both spellings are emitted. An evaluator that read only `http.request.method` would match
+nothing.
+
+**`status.code` is `"UNSET"`, not `"OK"`, on successful spans.** This is the sharper finding: the
+draft evaluator contract's success check was written as *2xx and `status.code` not `ERROR`*, which
+survives `UNSET`, but a contract requiring `"OK"` would have failed every real CareLoop trace while
+passing every hand-built fixture. Fixtures must carry `UNSET`.
+
+The read-back's correlation premise is confirmed on real data: the `GET` span's URL is
+`…/clinic/appointments/apt-c98a9981caefc548`, so the confirmation id is present in a span CareLoop
+does not author.
+
+Two structural facts for the eventual evaluator. The four child spans — both Bedrock calls, the
+`POST` and the `GET` — all carry `parentSpanId` equal to `invoke_graph`'s `spanId`, so the trace
+shape is exactly as designed. But **`invoke_graph` is not parentless**: Transaction Search wraps it
+in a synthetic `InternalOperation` span with no `scope`, and `invoke_graph` carries
+`aws.span.kind = LOCAL_ROOT`. An evaluator must not identify the root by absence of `parentSpanId`.
+
+**The production privacy claims recorded in ADR 0004 hold in the raw span data**, checked here
+because the data was in hand: both Bedrock spans carry `aws.auth.account.access_key = [redacted]`;
+no `AKIA`/`ASIA`-shaped value appears anywhere in the trace; `gen_ai.input.messages` and
+`gen_ai.output.messages` are absent; the graph span carries no events. This is an independent
+confirmation from the exported bytes rather than from the exporting process.
+
+### A5 — `NOT_APPLICABLE` with no `value` — **PASS**
+
+The evaluator returned `{"label": "NOT_APPLICABLE", "explanation": …}` with no `value` key. The
+`Evaluate` response came back with:
+
+```
+result keys : ['context', 'evaluatorArn', 'evaluatorId', 'evaluatorName', 'explanation', 'label']
+label       : "NOT_APPLICABLE"
+"value" in result : False
+errorCode   : absent
+```
+
+**No coercion to `0.0`, no default, no error.** The omission survives the round trip, which is what
+the vacuity design depends on: an N/A trace contributes no number to any average, at the schema
+level rather than by convention.
+
+### A6 — current SDK and API shape — **PASS, completed live**
+
+§8's offline reading is confirmed by execution. `CreateEvaluator`, `GetEvaluator`, `Evaluate` and
+`DeleteEvaluator` all succeeded against `bedrock-agentcore-control` (2023-06-05) and
+`bedrock-agentcore` (2024-02-28) in `us-east-1` with the pinned boto3. No `agentcore` CLI and no
+starter toolkit was installed or needed.
+
+```
+create_evaluator(evaluatorName='CareLoopEvalSpike', level='TRACE',
+                 evaluatorConfig={'codeBased': {'lambdaConfig': {
+                     'lambdaArn': …, 'lambdaTimeoutInSeconds': 30}}})
+  → evaluatorId 'CareLoopEvalSpike-<10 chars>', status ACTIVE immediately
+get_evaluator    → level TRACE, status ACTIVE, lockedForModification False, config echoed
+evaluate         → evaluationResults[…]
+delete_evaluator → status DELETING; GetEvaluator then ResourceNotFoundException
+```
+
+Confirmed live: the hyphen restriction is real — `evaluatorName` took `CareLoopEvalSpike` and the
+service appended its own suffix to form `…/evaluator/CareLoopEvalSpike-uj4uzr7xyh`, so ARN-prefix
+scoping works while a hyphenated *name* would not.
+
+**The envelope AWS actually sends is smaller than documented.** Captured from the Lambda's own log:
+
+```json
+{"evaluationInput": {"sessionSpans": [...]},
+ "evaluationLevel": "TRACE",
+ "evaluationTarget": {"traceIds": ["..."]},
+ "schemaVersion": "1.0"}
+```
+
+`evaluatorId` and `evaluatorName` are **documented as envelope fields and are not sent**;
+`evaluationReferenceInputs` is absent when none is supplied rather than present and empty. An
+evaluator must not key on either, and must use `.get()` for `evaluationReferenceInputs`.
+
+No `tokenUsage` appeared on any code-based result, consistent with a code evaluator consuming no
+model tokens.
+
+### Resources and permissions: all temporary state removed
+
+**Nothing from this spike remains.** It was torn down in two halves, by whoever held the authority
+to do it, and each half was verified by a call that asks the service rather than by the deleting
+call reporting success.
+
+Created by the spike and deleted by it:
+
+| Resource | Verification |
+|---|---|
+| Lambda `careloop-evalspike-fn` (python3.12, 128 MB, 30 s, stdlib only) | `GetFunction` → `ResourceNotFoundException` |
+| Evaluator `CareLoopEvalSpike-uj4uzr7xyh` (TRACE, `codeBased`) | `GetEvaluator` → `ResourceNotFoundException` |
+
+Provisioned externally and removed externally, outside this identity's remit:
+
+| Resource | Verification |
+|---|---|
+| IAM role `careloop-evalspike-lambda-role` (and its inline policy) | deleted → `NoSuchEntity` |
+| Log group `/aws/lambda/careloop-evalspike-fn` | deleted → log-group lookup returns `[]` |
+| Managed policy `CareLoopEvalSpikeTemporary` | detached, then deleted → `NoSuchEntity` |
+
+**The benchmark identity is back to what it was.** Its attached managed policies are again
+`CareLoopAgentCoreDeploy` alone and its inline policies `careloop-bench-bedrock` alone. Confirmed
+from this side by re-probing the three surfaces the temporary grant had opened: `lambda:GetFunction`,
+`iam:GetRole` and `bedrock-agentcore:GetEvaluator` all answer `AccessDenied` again — the same
+refusals §8 recorded, which is the shape of a grant that has genuinely gone rather than one that was
+merely stopped being used. The spike log-group prefix returns `[]`.
+
+**Production is untouched.** The four pre-existing log groups are byte-identical to the pre-spike
+listing — `aws/spans` 20114 bytes / 30 days, `/aws/bedrock-agentcore/runtimes/careloop` 17545 bytes
+/ 14 days, and the other two unchanged — so nothing this spike did wrote a span, moved a retention
+setting or disturbed the trace data ADR 0004 rests on. No EC2 IAM, observability IAM, Transaction
+Search setting, retention policy, security group, systemd unit or CareLoop deployment was changed at
+all. `aws/spans` was read, never written.
+
+### What this changes in the SettlementIntegrity design
+
+Nothing structural. The nine-attribute contract stands as designed and unimplemented. Four
+adjustments are now known and belong to Patch B rather than to a redesign:
+
+1. Fixtures and the span accessor must use `http.method` / `http.url` (old spelling only) and accept
+   either status spelling.
+2. `status.code` on a successful span is `UNSET`. Success is *2xx and not `ERROR`*, never *is `OK`*.
+3. The root is identified by `gen_ai.operation.name == "invoke_graph"` or
+   `aws.span.kind == "LOCAL_ROOT"`, never by absence of a parent.
+4. The Lambda reads the **delivered** span shape, tolerating the injected `session_id`, `source`,
+   `langfuse`, snake_case aliases and ISO time fields, and must not require `evaluatorId` or
+   `evaluatorName` in its envelope.

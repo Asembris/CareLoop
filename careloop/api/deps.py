@@ -16,21 +16,24 @@ would sit in front of this, not replace it.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Annotated, Final
 
 from fastapi import Depends, Header, HTTPException, Request, status
 
-from careloop.api.runs import RunRegistry
+from careloop.api.runs import RunAlreadyInFlight, RunRegistry
 from careloop.events.inbound import InboundEvent
 from careloop.events.simulator import EventSimulator
-from careloop.graph.context import RunContext
+from careloop.graph.context import RunContext, latest_delivery
 from careloop.graph.runner import RunResult, context_for, run_case
 from careloop.graph.witness import NO_WITNESS, Witness
 from careloop.state.case import Case, CaseState
 from careloop.state.store import CaseStore
 from careloop.tools.clinic import ClinicClient
+
+logger = logging.getLogger(__name__)
 
 #: Who is recording a decision. An audit identity, never a credential — see the module docstring.
 #:
@@ -170,6 +173,72 @@ class ApiDeps:
         holds, and the lifespan does not have to know which shape it got.
         """
         await self.runs.drain()
+
+    def resume_unsettled(self) -> tuple[str, ...]:
+        """Schedule a run for every case this world abandoned mid-effect. Returns their ids.
+
+        **The recovery trigger, and the smallest one that works.** A process that died between
+        dispatching an external effect and recording its result left the case ``EXECUTING`` with a
+        durably prepared action; one whose reconciliation could not reach the provider left it
+        ``WAITING_EXTERNAL``. Both now route to reconciliation — but only when something runs the
+        graph, and until this existed nothing ever would: ``POST /api/events`` refuses anything that
+        is not ``DONE``, ``approve`` and ``reject`` need an approval the execute node never raises,
+        and a re-check needs ``AWAITING_HUMAN``. The case was correct, recoverable, and unreachable.
+
+        **Anything in these two states at startup is orphaned by definition.** This process has no
+        runs yet, so nothing here can be in flight; a case claiming to be mid-effect is claiming it
+        about a process that is gone. That is what makes the sweep safe without a lease, a claim
+        table or a heartbeat — and where a *second* process starts beside a live one, the case
+        version's compare-and-set is what rejects the loser, which
+        ``tests/test_saga_concurrency.py`` measures rather than assumes.
+
+        **It schedules and decides nothing**, which is the whole of what this layer is allowed to
+        do. Whether the action may be re-issued is
+        :func:`careloop.graph.recovery.may_replay`'s answer, read inside the node from a declared
+        provider contract; what is re-issued is the identity the case froze. Nothing here reads a
+        tool name, an argument or a key.
+
+        A case with no durable delivery is skipped rather than raising: it cannot be carried forward
+        under any event, and a startup that failed because one row was odd would take the whole
+        process down for a case nobody can run anyway.
+        """
+        scheduled: list[str] = []
+        for state in (CaseState.EXECUTING, CaseState.WAITING_EXTERNAL):
+            for case in self.store.list_by_state(state):
+                delivery = latest_delivery(case)
+                if delivery is None:
+                    logger.warning(
+                        "case %s is %s with no recorded delivery; it cannot be resumed",
+                        case.case_id,
+                        state,
+                    )
+                    continue
+                try:
+                    inbound = self.events.get(delivery.event_id)
+                except KeyError:
+                    logger.warning(
+                        "case %s names event %s, which this process does not have",
+                        case.case_id,
+                        delivery.event_id,
+                    )
+                    continue
+                case_id = case.case_id
+
+                # Bound as defaults rather than captured, because the thunk is invoked by an
+                # ``asyncio`` task that starts after this loop has moved on — late binding would
+                # resume every case under the last one's event.
+                def start(event: InboundEvent = inbound, target: str = case_id):
+                    return self.graph_runner(self.store, event, target)
+
+                try:
+                    self.runs.start(case_id, start)
+                except RunAlreadyInFlight:
+                    # Not reachable from a startup sweep, which runs before anything is scheduled.
+                    # Reachable if this is ever called on a live process, and skipping is right
+                    # there too: something is already working on this case.
+                    continue
+                scheduled.append(case_id)
+        return tuple(scheduled)
 
 
 def deps(

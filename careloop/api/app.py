@@ -9,6 +9,7 @@ the dashboard will not call is an endpoint nobody will maintain and nobody will 
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -52,6 +53,8 @@ from careloop.state.case import Case
 from careloop.state.machine import IllegalTransition
 from careloop.state.store import CaseNotFound, CaseStore
 from careloop.tools.clinic import ClinicClient
+
+logger = logging.getLogger(__name__)
 
 API_PREFIX = "/api"
 
@@ -318,14 +321,32 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        """Let in-flight runs finish before the process goes away.
+        """Pick up what the last process abandoned, then let this one's runs finish.
 
-        A run killed mid-flight leaves a case in whatever state its last committed node put it in —
-        recoverable, because the store is the truth and the next run dispatches on it, but a graph
-        that was two nodes from ``DONE`` would need a human to notice. Draining is cheap and the
-        bound on how long it can take is the SDK's own execution timeout. Every world drains, for
-        the same reason: they are separate stores, not separate importances.
+        **Startup.** A process that died between dispatching an external effect and recording its
+        result left the case ``EXECUTING`` with a durably prepared action, and nothing else in the
+        system will ever pick it up: no route reaches those states, and a run scheduled by hand had
+        nowhere to go until reconciliation existed. Anything in one of those states *now* is
+        orphaned by definition, because this process has scheduled nothing yet. See
+        :meth:`careloop.api.deps.ApiDeps.resume_unsettled` for why that is the whole safety argument
+        and why no lease is needed.
+
+        This is a *trigger*, not a policy: it starts runs and decides nothing about them. What may
+        be re-issued is a declared provider contract read inside the node, and what is re-issued is
+        the identity the case already froze.
+
+        **Shutdown.** A run killed mid-flight leaves a case in whatever state its last committed
+        node put it in. That was described here as "recoverable, because the store is the truth and
+        the next run dispatches on it" — which was **false** for exactly the two states a
+        mid-effect kill produces, since ``dispatch`` had no edge for either and the case sat there
+        for good. It is true now, and the startup sweep above is what makes it true rather than a
+        hope about somebody noticing. Draining is still cheap and still bounded by the SDK's own
+        execution timeout, and every world drains, because they are separate stores rather than
+        separate importances.
         """
+        resumed = bound.resume_unsettled()
+        if resumed:
+            logger.info("resuming %d case(s) abandoned mid-effect: %s", len(resumed), resumed)
         yield
         await bound.drain()
 

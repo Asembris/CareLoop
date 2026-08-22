@@ -60,13 +60,18 @@ class TestEverySessionMethodIsSerialised:
     #: from making the progress it is waiting for. It takes its snapshot under the lock instead,
     #: which is the part that races an eviction.
     #:
-    #: The other three end a forgotten world's clinic **over HTTP**. A lock held across a network
+    #: Three of them end a forgotten world's clinic **over HTTP**. A lock held across a network
     #: round trip stalls every other visitor's request for as long as Demo World takes to answer,
     #: and a Demo World that is not answering would make one arriving visitor's mint block every
     #: page on the site. ``mint`` is the outer half of a pair: the registry mutation is ``_mint``,
     #: which is guarded, and the ending happens after it returns.
+    #:
+    #: ``resume_unsettled`` is ``drain``'s shape at the other end of the process's life: it takes
+    #: its snapshot under the lock and then sweeps each world's *store* outside it. Holding the
+    #: registry lock across a scan of every world's cases would block an arriving visitor for as
+    #: long as the slowest store takes, which is the stall the snapshot pattern exists to avoid.
     NOT_HELD: ClassVar[frozenset[str]] = frozenset(
-        {"drain", "mint", "_end_forgotten", "_end_or_orphan"}
+        {"drain", "mint", "resume_unsettled", "_end_forgotten", "_end_or_orphan"}
     )
 
     def test_the_lists_cover_every_method_there_is(self) -> None:

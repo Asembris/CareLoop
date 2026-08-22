@@ -45,6 +45,15 @@ cannot be certified" rather than "this did not work", and the case goes to a per
 :data:`careloop.state.machine.TRANSITIONS` refuses ``VERIFYING → PLANNING`` outright, so that is a
 property of the state machine rather than of this module remembering.
 
+**Two nodes tell a witness what already happened, and neither can be told anything back.**
+``execute`` claims what became of the external effect and ``verify`` claims what an independent
+read established and what was concluded from it — both **after** the domain has decided, and both
+through :mod:`careloop.graph.witness`, whose two seam functions return ``None`` and never raise. No
+line in this module asks whether a witness is present, whether it succeeded, or whether telemetry
+is enabled; the default records nothing at all, and a run under it is byte-for-byte the run under
+one that records everything. That is invariant-shaped rather than polite: a node that could read a
+witness is a node an observability outage could steer.
+
 **A caregiver may send a parked case back to ``verify``, and to nowhere else.**
 :func:`careloop.graph.runner.request_recheck` moves ``AWAITING_HUMAN → VERIFYING`` so ``dispatch``
 routes into this node again — no new edge, no new node, and pointedly not back to ``plan`` or
@@ -82,6 +91,7 @@ from careloop.graph.verify import (
     rehydrate,
     verify_action,
 )
+from careloop.graph.witness import EffectDispatch, witness_effect, witness_observation
 from careloop.policy.gate import PolicyDenied
 from careloop.policy.hook import fire_before_tool_call, tool_use_id
 from careloop.policy.verdicts import Decision, ReasonCode, Verdict
@@ -97,6 +107,7 @@ from careloop.state.machine import append_event, transition
 from careloop.tools.executor import ExecutionResult
 from careloop.tools.idempotency import args_digest, idempotency_key
 from careloop.tools.registry import REGISTRY
+from careloop.tools.results import ActionResult
 
 
 def _agent_result(text: str) -> AgentResult:
@@ -410,6 +421,14 @@ class ExecuteNode(DeterministicNode):
     boundary refusal means the two enforcement points disagreed, which is a fault in CareLoop
     rather than a planner that needs another go. ``EXECUTING`` has no edge back to ``PLANNING``
     either, and that is the state machine agreeing.
+
+    **Two of the three exits claim what became of the effect, and the third deliberately does not.**
+    The duplicate branch claims ``SUPPRESSED`` and the dispatch claims ``PERFORMED``, each on the
+    first line at which the fact is established rather than at a convenient one. A call that
+    *raised* — a clinic that could not be reached, or one that refused — claims **nothing**: a
+    trace then carries an HTTP write that CareLoop's own evidence does not account for, which is
+    exactly what an outside reader should report, and shaping this method's exception handling to
+    produce a nicer telemetry story would be telemetry deciding how the domain fails.
     """
 
     async def run(self) -> str:
@@ -440,6 +459,16 @@ class ExecuteNode(DeterministicNode):
 
         recorded = case.action_for(key)
         if recorded is not None:
+            # Claimed the moment the fact is established, which is here: this branch is taken
+            # before the BeforeToolCall hook and before the gated toolset, and it returns, so no
+            # HTTP can leave the process for this effect in this run. Nothing below can turn that
+            # into a dispatch.
+            witness_effect(
+                self.context.witness,
+                action_type=proposal.tool_name,
+                dispatch=EffectDispatch.SUPPRESSED,
+                args=proposal.args,
+            )
             case = append_event(
                 case,
                 kind=TimelineKind.DUPLICATE_SUPPRESSED,
@@ -480,6 +509,18 @@ class ExecuteNode(DeterministicNode):
                 proposal,
                 f"the gated tool refused the call: {denied.decision}",
             )
+
+        # The call returned, so the effect really was dispatched — that is the fact being claimed,
+        # and this is the first line at which it is known. **Before the record and before the
+        # commit**, deliberately: if the conditional write below loses a race the external effect
+        # still happened, and a claim emitted only after persistence would leave a trace carrying
+        # a real external write that CareLoop's own telemetry disowns.
+        witness_effect(
+            self.context.witness,
+            action_type=proposal.tool_name,
+            dispatch=EffectDispatch.PERFORMED,
+            args=proposal.args,
+        )
 
         case = _record_action(case, proposal, key, result, self.context.now())
         case = transition(
@@ -589,14 +630,30 @@ class VerifyNode(DeterministicNode):
     :func:`careloop.graph.runner.request_recheck`, and everything below then does exactly what it
     does on a first pass: the same target derivation, the same read-back, the same comparison, the
     same two outcomes. Nothing is handed a target and nothing takes a different path — which is why
-    a re-check cannot certify anything a first pass could not. One thing does differ, and only one:
-    a re-check that has **no independent observer bound** fails closed rather than falling back to
-    the closed-loop checks. See :meth:`_nothing_was_observed`.
+    a re-check cannot certify anything a first pass could not. Two things differ, and only two: a
+    re-check that has **no independent observer bound** fails closed rather than falling back to the
+    closed-loop checks (see :meth:`_nothing_was_observed`), and a re-check is the one entry into
+    this node that must also account for the effect itself, because the execute node is not on that
+    run's path.
+
+    **What this node claims, and from where.** After the outcome is committed it records what the
+    independent read established, the identifier it was keyed on, the state the world returned, and
+    the settlement that follows — every one of them read from a decision already made. On a
+    re-check it additionally claims ``NOT_IN_THIS_TRACE`` for the effect, projected from
+    ``proposal.args`` through the same function ``execute`` uses. **Not** from the recorded result
+    and **not** from what the clinic just returned: the two joint-state digests are evidence only
+    while they have independent sources, and a re-check that derived the authorised state from the
+    observed one would be comparing a value against itself.
     """
 
     async def run(self) -> str:
         case = self.context.current_case()
         base = case.version
+        # Read once, before anything moves, and threaded down rather than re-derived. It answers
+        # two questions this node asks — whether a re-check that read nothing may certify, and
+        # whether this run is the one that has to account for the effect at all — and two
+        # derivations of one fact is the shape of defect this repository has closed three times.
+        entered_from = entered_verifying_from(case)
 
         proposal = latest_proposal(case)
         if proposal is None:
@@ -624,7 +681,7 @@ class VerifyNode(DeterministicNode):
             return "verify: no action recorded"
 
         result = rehydrate(record.action_type, record.result)
-        verification = self._verify(case, proposal, record, result)
+        verification, observed = self._verify(proposal, record, result, entered_from=entered_from)
 
         if verification.passed:
             case = append_event(
@@ -664,9 +721,41 @@ class VerifyNode(DeterministicNode):
             case = _park_with_nothing_certifiable(case, proposal, key, self.context.now())
 
         self.context.commit(case, expected_version=base)
+
+        # **After the commit**, because settlement is the one claim whose fact *is* the durable
+        # conclusion. DONE or AWAITING_HUMAN has been written before telemetry is allowed to say
+        # VERIFIED or NOT_CERTIFIED, so the witness observes a decision rather than anticipating
+        # one.
+        if entered_from is CaseState.AWAITING_HUMAN:
+            # A caregiver's re-check never reaches the execute node, so this run is the only one
+            # that can account for the effect — and the effect it accounts for is the one that was
+            # *authorised*, which is why this re-projects `proposal.args` through exactly the
+            # projection the execute node uses. Deriving it from the record, from what the clinic
+            # just returned, or from the observation claim would make the two joint-state digests
+            # share a source, and their equality is the whole evidence.
+            witness_effect(
+                self.context.witness,
+                action_type=proposal.tool_name,
+                dispatch=EffectDispatch.NOT_IN_THIS_TRACE,
+                args=proposal.args,
+            )
+        witness_observation(
+            self.context.witness,
+            action_type=record.action_type,
+            verification=verification,
+            result=result,
+            observed=observed,
+        )
         return f"verify: {'passed' if verification.passed else 'failed'}"
 
-    def _verify(self, case: Case, proposal: Proposal, record: ActionRecord, result) -> Verification:
+    def _verify(
+        self,
+        proposal: Proposal,
+        record: ActionRecord,
+        result,
+        *,
+        entered_from: CaseState | None,
+    ) -> tuple[Verification, ActionResult | None]:
         """Verify the recorded effect, reading the external system back where there is one.
 
         A read-back failure is a *verification* failure, not an exception out of the node. Every
@@ -684,30 +773,43 @@ class VerifyNode(DeterministicNode):
         **A re-check that reads nothing certifies nothing**, and that branch is first. See
         :meth:`_nothing_was_observed` for the hazard it closes and why it is scoped to this one
         episode rather than to ``NOT_OBSERVED`` everywhere.
+
+        **The external record is returned beside the verdict**, rather than being read and dropped.
+        It is the one object in the run that carries what the *world* holds, and something outside
+        this process cannot check CareLoop's claim without it. Returned rather than re-fetched: a
+        second read would be a second observation, and this node performs exactly one. ``None``
+        whenever no observation was obtained — a run with no observer bound, and a read that was
+        attempted and failed — because a state nobody saw is not a state to report.
         """
         readback = self.context.readbacks.get(record.action_type)
-        if readback is None and entered_verifying_from(case) is CaseState.AWAITING_HUMAN:
-            return self._nothing_was_observed(record)
+        if readback is None and entered_from is CaseState.AWAITING_HUMAN:
+            return self._nothing_was_observed(record), None
 
         observed = None
         if readback is not None:
             try:
                 observed = readback(result)
             except ReadBackFailed as unreadable:
-                return Verification(
-                    passed=False,
-                    diagnostic=str(unreadable),
-                    externally_observed=True,
-                    outcome=unreadable.outcome,
+                return (
+                    Verification(
+                        passed=False,
+                        diagnostic=str(unreadable),
+                        externally_observed=True,
+                        outcome=unreadable.outcome,
+                    ),
+                    None,
                 )
 
-        return verify_action(
-            case_id=self.context.case_id,
-            action_type=proposal.tool_name,
-            args=proposal.args,
-            record=record,
-            result=result,
-            observed=observed,
+        return (
+            verify_action(
+                case_id=self.context.case_id,
+                action_type=proposal.tool_name,
+                args=proposal.args,
+                record=record,
+                result=result,
+                observed=observed,
+            ),
+            observed,
         )
 
     def _nothing_was_observed(self, record: ActionRecord) -> Verification:

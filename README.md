@@ -1,22 +1,40 @@
-<img src="docs/careloop-mark.svg" alt="" width="64">
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/careloop-mark-animated-dark.svg">
+  <img src="docs/careloop-mark-animated.svg" alt="" width="84">
+</picture>
 
 # CareLoop
 
-**An autonomous administrative agent for family caregivers — one that acts, but never beyond its
-authority.**
+*An autonomous back office for family caregivers.*<br>
+**It acts — but never beyond its authority.**
+
+<img src="docs/readme-hero.svg" width="100%" alt="CareLoop's flow: an untrusted email and PDFs reach two LLM agents that propose one next action; a deterministic policy gate refuses one proposal and lets the other out to an external clinic; a separate read-back then confirms it before the case is verified.">
+
+**The model proposes. Deterministic code authorises. A separate read of an external system
+confirms what happened.**
+
+[![Live demo](https://img.shields.io/badge/Live%20demo-315e52?style=for-the-badge)](https://d2heuwvhvrdyig.cloudfront.net)
+[![Guided tour](https://img.shields.io/badge/Guided%20tour-975529?style=for-the-badge)](docs/judges.md)
+[![Architecture](https://img.shields.io/badge/Architecture-55554f?style=for-the-badge)](docs/architecture.md)
+[![Security evaluation](https://img.shields.io/badge/Security%20evaluation-55554f?style=for-the-badge)](docs/security-evaluation.md)
+[![AgentCore proof](https://img.shields.io/badge/AgentCore%20proof-55554f?style=for-the-badge)](docs/agentcore-evaluations-proof.md)
+
+<sub>Live, nothing to install, nothing to sign into.</sub>
 
 [![CI](https://github.com/Asembris/CareLoop/actions/workflows/ci.yml/badge.svg)](https://github.com/Asembris/CareLoop/actions/workflows/ci.yml)
-[![unauthorized actions 0 / 320](https://img.shields.io/badge/unauthorized%20actions-0%20%2F%20320-2f7d4f)](docs/security-evaluation.md)
-[![license Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
-[![python 3.12](https://img.shields.io/badge/python-3.12-blue)](pyproject.toml)
+[![unauthorized actions 0 / 320](https://img.shields.io/badge/unauthorized%20actions-0%20%2F%20320-315e52)](docs/security-evaluation.md)
+[![python 3.12](https://img.shields.io/badge/python-3.12-55554f)](pyproject.toml)
+[![built on Strands Agents](https://img.shields.io/badge/built%20on-Strands%20Agents-55554f)](https://github.com/strands-agents/sdk-python)
+[![AWS AgentCore Evaluations](https://img.shields.io/badge/AWS-AgentCore%20Evaluations-55554f)](docs/agentcore-evaluations-proof.md)
+[![license Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-55554f)](LICENSE)
 
-### ▶ Try it — <https://d2heuwvhvrdyig.cloudfront.net>
-
-Live, nothing to install, nothing to sign into. **Three minutes, guided:**
-[**docs/judges.md**](docs/judges.md) — press one button and watch a case run; press another and
-watch a poisoned document fail to get anywhere.
+</div>
 
 ![The CareLoop dashboard with one case awaiting a caregiver decision](frontend/reference/screenshots/home-needs-you-light.png)
+
+<sub>The dashboard, screenshotted from the running application.</sub>
 
 ## The problem
 

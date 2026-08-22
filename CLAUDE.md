@@ -218,8 +218,12 @@ careloop/
   api/         FastAPI read surface + approve/reject/deliver; projections and withholding;
                the demo control surface, mounted only when create_app is asked for it
 demoworld/     A synthetic clinic in its own process. Never imports careloop.
+evaluators/    The AgentCore code evaluator. Standard library only, imports no careloop, not in
+               the wheel; the Lambda is packaged from these five modules and nothing else.
 scripts/       generate_documents.py (renders the fixture PDFs), resume_demo.py, demo_serve.py,
-               export_diagram.py (renders docs/architecture.{png,pdf} from the SVG)
+               export_diagram.py (renders docs/architecture.{png,pdf} from the SVG),
+               observability.py + witness_span.py (the deployment-layer telemetry seam),
+               evaluations_deploy.py + evaluations_prove.py (the AWS evaluator and its proof)
 tests/
 docs/
 ```
@@ -1002,6 +1006,75 @@ ordinary redeploy, and covers nothing else. With Demo World no longer evicting, 
 permanent rather than self-healing**: this session changed the shape of that failure, and the next
 person needs to know it. Closing it wants a bulk `DELETE /demo/sessions` swept at startup, which
 hands any anonymous caller the ability to wipe every visitor's clinic and deserves its own decision.
+
+**Settlement evidence is a one-way seam, and the evaluator that reads it imports nothing of
+CareLoop's.** The domain emits typed claims through `careloop/graph/witness.py`, a protocol with no
+OpenTelemetry anywhere behind it; `scripts/witness_span.py` is the only place a claim becomes a span
+attribute, and `tests/test_witness_seam.py` sweeps the package to keep it that way. Telemetry has no
+authority and must be structurally unable to acquire any: nothing under `careloop/` imports the
+adapter, nothing branches on which witness a run holds, and a witness failure cannot reach a
+business outcome. The attribute *names* are spelled in the adapter and nowhere else, which is why
+`careloop/` contains no string literal beginning `careloop.effect`.
+
+**Nine attributes, and there is no tenth.** `careloop.effect.{type,dispatch,fields,state_digest}`,
+`careloop.observation.{mode,outcome,resource_id,state_digest}`, `careloop.settlement`.
+`careloop.effect.action_key` was dropped during the design and must not return under that or any
+other name: correlation is carried by `observation.resource_id` against the clinic read's **own
+URL**, which is evidence CareLoop does not author. An identifier CareLoop minted and then checked
+against itself would prove nothing that was not already assumed. The two optional attributes are
+*omitted* rather than emitted empty — an absent `observation.state_digest` says no external state was
+observed, and an empty string would be a malformed digest.
+
+**`evaluators/` is a separate package on purpose, and the separation is the property.** Standard
+library only — no `careloop`, no `evals`, no `boto3`, no OpenTelemetry, no network, no clock. It
+declares its own `OBSERVABLE_EFFECT_TYPES` and `EXPECTED_FIELDS` rather than importing CareLoop's,
+because an evaluator that imported them would be checking CareLoop against itself — the same
+category error as verifying a booking by re-reading its own receipt. It is not in the wheel and the
+Lambda is packaged from that directory alone. Its result vocabulary is closed and **never
+interpolated**: every explanation is a fixed sentence selected by an enum member, for invariant 6's
+reason applied to a surface whose consumer is a person rather than a model.
+
+`FIELD_SET_UNEXPECTED` is ordered **before** the digest checks and that ordering is load-bearing: two
+digests over an empty joint state are trivially equal, so digest equality proves nothing until the
+field set is pinned to what the external system actually holds. 73 designated semantic mutants,
+35/35 CRITICAL, 12/12 HIGH and 25/25 MEDIUM killed, one justified equivalent.
+
+**It has been run in AWS against real production traces, and that is what the claim rests on.**
+`CareLoopSettlementIntegrity` is a `TRACE`-level code-based AgentCore evaluator backed by
+`careloop-settlement-evaluator` (Lambda, `python3.12`, 128 MB, packaged from the five
+`evaluators/` modules and nothing else). Six real traces, six measured results: performed,
+suppressed and caregiver-re-check settlements `PASS`; an externally diverged booking `FAIL`s with
+`STATE_DIGESTS_DIFFER`; a vanished booking `FAIL`s with `OBSERVATION_NOT_SUCCESSFUL`; a trace with no
+observable effect returns `NOT_APPLICABLE` **with no `value` key**. The nine attributes were measured
+arriving intact through AgentCore delivery — exactly nine, nested under `attributes`, no tenth. Full
+record in [`docs/agentcore-evaluations-proof.md`](docs/agentcore-evaluations-proof.md);
+`scripts/evaluations_deploy.py` recreates the AWS side idempotently and
+`scripts/evaluations_prove.py` reproduces a result.
+
+**Three things about that proof must not be overstated, and the docs say so in these words.**
+On-demand `Evaluate` requires `evaluationInput.sessionSpans`, so **the operator supplies the spans**
+— AWS does not fetch the trace, and the payload SHA-256 is recorded for every row precisely because
+of that. **AWS never queries the clinic**: the independent read is CareLoop's own, and what the
+evaluator checks is whether the instrumentation-authored transport in the trace corroborates the
+claim CareLoop wrote beside it. And this is not a proof that CareLoop cannot lie. Nothing here is
+continuous — there is no online evaluation configuration, no AgentCore service role and no Lambda
+resource-based policy, and `lambda:GetPolicy` answered `ResourceNotFoundException` both before
+`CreateEvaluator` and after six successful `Evaluate` calls.
+
+**The proof tool reads spans with its own accessors, never `evaluators.spans`.** A transport
+cross-check computed with the evaluator's own reader would agree with it by construction, and a
+defect in an accessor would move both sides together. It also never modifies a span — no repair, no
+defaulting, no synthesised attribute, no normalised status spelling — and it refuses rather than
+guesses when a literal matches more than one trace, because choosing between candidate traces is
+deciding the thing the evidence exists to establish.
+
+**`book_appointment.reason` is unstable at the punctuation level, and Patch E measured the cost.**
+Reproposals alternated between `"…for cardiology review"` and `"…for cardiology review."`, which
+moves the argument digest, moves the idempotency key and defeats duplicate suppression at both
+layers — reproduced in production, where each miss sent a second booking that only Demo World's slot
+rule refused, ending the case `FAILED` on `ClinicRefused`. This is the session-Q hazard observed
+live rather than inferred, and it is why the suppressed and diverged rows each needed retries.
+
 
 ## Commands
 

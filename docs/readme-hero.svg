@@ -1,0 +1,267 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 340" width="1000" height="340"
+     role="img" aria-labelledby="careloop-hero-title careloop-hero-desc">
+  <title id="careloop-hero-title">CareLoop: the model proposes, deterministic code authorises, a separate read confirms</title>
+  <desc id="careloop-hero-desc">An inbound email and two PDFs arrive as UNTRUSTED data. Inside CareLoop, two LLM agents propose one next action and hold no authority. Two proposals reach a deterministic policy gate: a send_email to an unknown recipient is refused, and a book_appointment is allowed through and leaves as a POST to an external clinic. Verification then performs a separate GET back to that clinic, and only that independent read-back reaches VERIFIED. Zero of 320 adversarial attempts produced an unauthorised external effect.</desc>
+  <!--
+    Hand authored, deliberately, on the same terms as docs/architecture.svg: this is text, so
+    diff it, grep it, edit it. It is not exported from a design tool and depends on nothing
+    external.
+
+    ONE SELF CONTAINED LIGHT PALETTE, painting its own plate, exactly as architecture.svg does
+    and for the reason stated there: an SVG served through GitHub's image pipeline cannot be
+    relied on to see the reader's theme, and an asset that inverts unpredictably is worse than
+    one that always looks the same. The plate is #fbfaf7 with an explicit #e2ded6 border and
+    rx 8, so on GitHub's dark canvas it reads as a deliberate card rather than a bare white
+    rectangle, and on GitHub's light canvas the border is what separates paper from page.
+
+    Every colour is inherited rather than invented. The three zone tints and their strokes are
+    lifted verbatim from architecture.svg's legend, so a judge who scrolls from here to the
+    diagram meets one trust vocabulary:
+
+      UNTRUSTED   #fbeae6 on #cf8d7f          work and effects   #315e52 solid
+      TRUSTED     #e9f1ed on #7fa596          read-back          #b4622f dashed 7 4
+      external    #f2f1ee on #b9b5ac          refusal            #9c4b39
+      paper #fbfaf7   ink #22221f   muted #55554f / #6b6b66   verified #3a714f
+
+    WHY 1000 UNITS WIDE, WHICH IS THE LOAD BEARING DECISION
+
+    Measured on the real GitHub DOM: the README column is 823px at a 1280 viewport and 309px at
+    375. A width="100%" hero therefore renders at 823/vbWidth and 309/vbWidth, so the viewBox
+    width IS the type scale and nothing else is. At 1280 units a 22 unit label lands at 5.3 CSS
+    px on a phone; at 1000 units the same label lands at 6.8 and a 30 unit one at 9.3. So:
+
+      >= 28 units   load bearing        POLICY GATE, DENY, ALLOW, VERIFIED, the evidence number
+      21 to 26      supporting          zone labels, tool names, POST, GET
+      below 21      does not exist anywhere in this file
+
+    THE FIVE THINGS THIS COMPOSITION ASSERTS
+
+    1. The gate is a WALL, not a station. Every other element is a rounded chip; the gate is a
+       full height double rule with a single notch, because it is the only thing here that is
+       not a participant.
+    2. Two proposals leave the agent and ONE crosses. The refused one stops dead against the
+       wall; the authorised one passes through the notch. That single frame is the whole claim.
+    3. The read-back returns on a PHYSICALLY DIFFERENT LINE, below the wall, dashed and copper.
+       Not back into the chip it came from, which would be re-reading CareLoop's own receipt,
+       and that is the one thing the real verification refuses to do.
+    4. The wall stops above the return line on purpose. The policy gate governs proposed tool
+       calls; the read-back is deliberately not a registry tool, is never proposed, and so is
+       not a thing the gate has an opinion about.
+    5. The CareLoop node IS the mark, so the logo and the architecture are the same object.
+
+    MOTION: CSS ONLY, NO SMIL ANYWHERE
+
+    CSS keyframes are permitted here because the raw asset is served under `default-src
+    'none'; style-src 'unsafe-inline'` - measured on GitHub's own response headers, not
+    assumed. SMIL is avoided on purpose: there is no SMIL equivalent of the reduced-motion
+    media query, so an asset that mixes the two can only ever honour that preference
+    partially. Everything below is CSS, so the rule at the end of the style block is total.
+
+    Only three properties are animated - opacity, transform and stroke-dashoffset. No
+    offset-path, no animated geometry attributes, no filters. That is the subset that is
+    reliable in every renderer that draws SVG as an image.
+
+    TWO LAYERS, AND THE SPLIT IS THE POINT
+
+    The STRUCTURE - plate, header, the three zone cards, the gate, the evidence strip -
+    assembles ONCE over 1.65s and then never leaves. It does not loop, because a looping
+    build has to un-build itself every cycle.
+
+    The NARRATION - the two proposals, the two verdicts, the effect leaving, the read-back
+    coming home, VERIFIED - loops on a 7.0s cycle that starts after the build:
+
+      0.00 - 0.80   both proposals extend towards the gate, together
+      0.80 - 1.50   the gate decides. The refused line has already stopped dead against the
+                    upper block; DENY and ALLOW resolve. The longest single beat.
+      1.50 - 2.25   the authorised effect crosses the notch and reaches the clinic
+      2.25 - 3.15   the independent read-back returns, on its own line, below the wall
+      3.15 - 3.65   VERIFIED settles
+      3.65 - 6.65   REST. 3.0 seconds of a 7.0 second loop, completely still.
+      6.65 - 7.00   the narration fades out and restarts. The structure never moves, so
+                    there is no cut to hide.
+
+    Exactly one thing moves per beat, except the first, where the two proposals move together
+    because their simultaneity is what the gate is about to resolve. Nothing here pulses,
+    breathes, glitches, spins or scales beyond 1.06. The gate itself never opens or closes:
+    it is always there, which is the whole claim.
+
+    Arrowheads are separate triangles rather than markers, because an SVG marker ignores
+    stroke-dasharray and would sit at the destination while its line was still travelling.
+
+    FALLBACK: every animated property's AUTHORED state is the finished frame. Nothing carries
+    opacity="0" and every dashed path is authored at stroke-dashoffset 0. With the style block
+    stripped, or under prefers-reduced-motion, this file renders the complete diagram.
+
+    Caption and the full reasoning: docs/architecture.md
+  -->
+  <defs>
+    <marker id="hArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#315e52"/>
+    </marker>
+    <!-- The read-back is revealed by a right-to-left wipe rather than by stroke-dashoffset,
+         because it has to STAY dashed: dashed copper is architecture.svg's notation for the
+         independent read-back, and a dasharray spent on the reveal is a dasharray that cannot
+         also carry that meaning. Authored at full width, so with animation off it reveals
+         everything. -->
+    <clipPath id="hBackReveal">
+      <rect class="h-wipe" x="438" y="204" width="464" height="64"/>
+    </clipPath>
+  </defs>
+
+  <style>
+    .h-serif { font-family: Georgia, "Times New Roman", Times, serif; }
+    .h-sans { font-family: system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+    .h-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+
+    /* ---- the structure: assembles once, then stays ---- */
+    .h-b1, .h-b2, .h-b3, .h-b4, .h-b5 { animation: h-appear 360ms ease-out 1 both; }
+    .h-b1 { animation-delay: 250ms; }
+    .h-b2 { animation-delay: 560ms; }
+    .h-b3 { animation-delay: 720ms; }
+    .h-b4 { animation-delay: 1050ms; }
+    .h-b5 { animation-delay: 1300ms; }
+    @keyframes h-appear { from { opacity: 0; } to { opacity: 1; } }
+
+    /* ---- the narration: one 7.0s cycle, beginning after the build ---- */
+    .h-loop { animation: h-cycle 7000ms linear 1650ms infinite backwards; }
+    @keyframes h-cycle { 0%, 95% { opacity: 1; } 100% { opacity: 0; } }
+
+    .h-line, .h-verdict, .h-effect, .h-back, .h-seal, .h-label, .h-tip {
+      animation-duration: 7000ms; animation-delay: 1650ms;
+      animation-iteration-count: infinite; animation-timing-function: linear;
+      /* backwards, so the 0% frame - not the authored finished frame - is what shows
+         during the 1650ms the structure is still assembling. */
+      animation-fill-mode: backwards;
+    }
+    .h-path { stroke-dasharray: 100; stroke-dashoffset: 0; }
+
+    .h-label { animation-name: h-label; }
+    .h-line { animation-name: h-propose; animation-timing-function: cubic-bezier(.4,.5,.3,1); }
+    .h-verdict { animation-name: h-verdict; }
+    .h-effect { animation-name: h-effect; }
+    .h-tip { animation-name: h-tip; }
+    .h-back { animation-name: h-backlbl; }
+    .h-wipe { transform-box: fill-box; transform-origin: 100% 50%;
+              animation: h-wipe 7000ms cubic-bezier(.4,.5,.3,1) 1650ms infinite backwards; }
+    .h-seal { transform-box: fill-box; transform-origin: center; animation-name: h-seal;
+              animation-timing-function: cubic-bezier(.34,1.16,.5,1); }
+
+    @keyframes h-label   { 0% { opacity: 0; } 4%, 100% { opacity: 1; } }
+    @keyframes h-propose { 0% { stroke-dashoffset: 100; } 11.43%, 100% { stroke-dashoffset: 0; } }
+    @keyframes h-verdict { 0%, 11.43% { opacity: 0; } 21.43%, 100% { opacity: 1; } }
+    @keyframes h-backlbl { 0%, 36% { opacity: 0; } 45%, 100% { opacity: 1; } }
+    @keyframes h-effect  { 0%, 21.43% { opacity: 0; stroke-dashoffset: 100; }
+                           32.14%, 100% { opacity: 1; stroke-dashoffset: 0; } }
+    @keyframes h-tip     { 0%, 29% { opacity: 0; } 32.14%, 100% { opacity: 1; } }
+    @keyframes h-wipe    { 0%, 32.14% { transform: scaleX(0); } 45%, 100% { transform: scaleX(1); } }
+    @keyframes h-seal {
+      0%, 45% { opacity: 0; transform: scale(.94); }
+      50% { opacity: 1; transform: scale(1.06); }
+      52.14%, 100% { opacity: 1; transform: scale(1); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, ::before, ::after { animation: none !important; }
+    }
+  </style>
+
+  <!-- ===================== plate ===================== -->
+  <rect x="0.75" y="0.75" width="998.5" height="338.5" rx="8" fill="#fbfaf7" stroke="#e2ded6" stroke-width="1.5"/>
+
+  <!-- ===================== header ===================== -->
+  <g transform="translate(28,12) scale(0.5)">
+    <circle cx="18.5" cy="11.5" r="5.4" fill="#315e52"/>
+    <circle cx="45.5" cy="15" r="4.3" fill="#a6b09d"/>
+    <path d="M32 55.5c11.5-7.2 24.5-14.7 24.5-24.2 0-8-6.8-11.3-12-7.9-2.5 1.6-3.9 3.7-4.3 6"
+      stroke="#a6b09d" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <path d="M32 55.5C20 48 7.5 40.5 7.5 30.5c0-8.5 7.5-12 13-8.5 2.6 1.7 4.1 3.9 4.5 6.5"
+      stroke="#315e52" stroke-width="6.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  </g>
+  <text class="h-serif" x="72" y="38" font-size="30" fill="#22221f">CareLoop</text>
+  <text class="h-mono" x="972" y="36" font-size="22" fill="#6b6b66" text-anchor="end"
+        letter-spacing="1">PROPOSES · AUTHORISES · CONFIRMS</text>
+  <line x1="28" y1="54" x2="972" y2="54" stroke="#e6e2da" stroke-width="1.5"/>
+
+  <!-- ===================== structure: the three zones and the gate ===================== -->
+  <g class="h-b1">
+    <rect x="28" y="88" width="150" height="126" rx="10" fill="#fbeae6" stroke="#cf8d7f"/>
+    <text class="h-mono" x="40" y="110" font-size="22" fill="#9c4b39" letter-spacing="0.8">UNTRUSTED</text>
+    <text class="h-sans" x="40" y="148" font-size="23" fill="#22221f">an email</text>
+    <text class="h-sans" x="40" y="176" font-size="23" fill="#22221f">and 2 PDFs</text>
+  </g>
+
+  <path class="h-b2" d="M 184 151 L 212 151" stroke="#315e52" stroke-width="2.5" marker-end="url(#hArrow)"/>
+
+  <g class="h-b3">
+    <rect x="222" y="88" width="224" height="126" rx="10" fill="#e9f1ed" stroke="#7fa596"/>
+    <text class="h-mono" x="234" y="110" font-size="22" fill="#2f5c50" letter-spacing="0.8">TRUSTED</text>
+    <g transform="translate(317,118) scale(0.53)">
+      <circle cx="18.5" cy="11.5" r="5.4" fill="#315e52"/>
+      <circle cx="45.5" cy="15" r="4.3" fill="#a6b09d"/>
+      <path d="M32 55.5c11.5-7.2 24.5-14.7 24.5-24.2 0-8-6.8-11.3-12-7.9-2.5 1.6-3.9 3.7-4.3 6"
+        stroke="#a6b09d" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      <path d="M32 55.5C20 48 7.5 40.5 7.5 30.5c0-8.5 7.5-12 13-8.5 2.6 1.7 4.1 3.9 4.5 6.5"
+        stroke="#315e52" stroke-width="6.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    </g>
+    <text class="h-sans" x="334" y="176" font-size="22" fill="#22221f" text-anchor="middle">two agents propose</text>
+    <text class="h-sans" x="334" y="198" font-size="22" fill="#22221f" text-anchor="middle">one next action</text>
+  </g>
+
+  <g class="h-b4">
+    <text class="h-mono" x="706" y="80" font-size="23" font-weight="600" fill="#22221f"
+          text-anchor="middle" letter-spacing="1.4">POLICY GATE</text>
+    <g fill="#22221f">
+      <rect x="694" y="84" width="22" height="54" rx="3"/>
+      <rect x="694" y="166" width="22" height="52" rx="3"/>
+    </g>
+    <text class="h-mono" x="706" y="232" font-size="22" fill="#6b6b66" text-anchor="middle">rules.yaml</text>
+  </g>
+
+  <g class="h-b5">
+    <rect x="812" y="88" width="160" height="126" rx="10" fill="#f2f1ee" stroke="#b9b5ac"/>
+    <text class="h-mono" x="824" y="110" font-size="22" fill="#55554f" letter-spacing="0.8">EXTERNAL</text>
+    <text class="h-sans" x="824" y="148" font-size="23" fill="#22221f">the clinic</text>
+    <text class="h-mono" x="824" y="178" font-size="21" fill="#6b6b66">Demo World</text>
+  </g>
+
+  <!-- ===================== narration: proposals, verdicts, effect, read-back ===================== -->
+  <g class="h-loop">
+    <!-- the refused proposal. Its line ends flush against the upper block: it stops dead. -->
+    <text class="h-mono h-label" x="456" y="100" font-size="22" fill="#55554f">send_email</text>
+    <path class="h-path h-line" pathLength="100" d="M 456 112 L 690 112"
+          stroke="#9c4b39" stroke-width="2.5"/>
+    <text class="h-mono h-verdict" x="688" y="140" font-size="23" font-weight="600" fill="#9c4b39"
+          text-anchor="end">✕ DENY</text>
+
+    <!-- the authorised proposal, in two segments: up to the gate, then through the notch -->
+    <text class="h-mono h-label" x="456" y="176" font-size="22" fill="#55554f">book_appointment</text>
+    <path class="h-path h-line" pathLength="100" d="M 456 152 L 690 152"
+          stroke="#315e52" stroke-width="2.5"/>
+    <text class="h-mono h-verdict" x="726" y="140" font-size="23" font-weight="600" fill="#2f5c50">ALLOW</text>
+
+    <g class="h-effect">
+      <path class="h-path" pathLength="100" d="M 718 152 L 792 152"
+            stroke="#315e52" stroke-width="2.5"/>
+      <text class="h-mono" x="726" y="176" font-size="22" fill="#55554f">POST</text>
+    </g>
+    <path class="h-tip" d="M 792 144.5 L 806 152 L 792 159.5 Z" fill="#315e52"/>
+
+    <!-- the independent read-back: a different line, below the wall, and it stays dashed -->
+    <g clip-path="url(#hBackReveal)">
+      <path d="M 892 214 L 892 250 L 460 250" fill="none"
+            stroke="#b4622f" stroke-width="2.5" stroke-dasharray="7 4"/>
+      <path d="M 460 243 L 446 250 L 460 257 Z" fill="#b4622f"/>
+    </g>
+    <text class="h-mono h-back" x="670" y="274" font-size="22" fill="#b4622f" text-anchor="middle">GET · independent read-back</text>
+
+    <g class="h-seal">
+      <rect x="290" y="234" width="152" height="32" rx="3" fill="#ffffff" stroke="#3a714f" stroke-width="1.5"/>
+      <text class="h-mono" x="366" y="256" font-size="22" font-weight="600" fill="#3a714f"
+            text-anchor="middle">✓ VERIFIED</text>
+    </g>
+  </g>
+
+  <!-- ===================== evidence ===================== -->
+  <line x1="28" y1="290" x2="972" y2="290" stroke="#e6e2da" stroke-width="1.5"/>
+  <text class="h-mono" x="500" y="322" font-size="22" fill="#55554f" text-anchor="middle" letter-spacing="0.6"><tspan font-size="28" font-weight="600" fill="#2f5c50">0 / 320</tspan> UNAUTHORIZED EFFECTS · INDEPENDENT READ-BACK · LIVE ON AWS</text>
+</svg>

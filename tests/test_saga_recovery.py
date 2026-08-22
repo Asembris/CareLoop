@@ -55,10 +55,10 @@ from saga_helpers import (
 from careloop.graph.context import unsettled_preparation
 from careloop.graph.recovery import (
     RECOVERY_CLASS,
+    DispatchRefused,
+    DispatchUnavailable,
     RecoveryClass,
-    ReplayRefused,
-    ReplayUnavailable,
-    replay,
+    dispatch_prepared,
 )
 from careloop.graph.runner import context_for, run_case
 from careloop.graph.verify import ObservationOutcome
@@ -557,15 +557,15 @@ class TestTheReplaySeamTranslatesTransportAndNothingElse:
         def dispatch():
             raise ClinicUnavailable("nobody answered")
 
-        with pytest.raises(ReplayUnavailable):
-            replay(dispatch)
+        with pytest.raises(DispatchUnavailable):
+            dispatch_prepared(dispatch)
 
     def test_a_refusal_becomes_replay_refused(self) -> None:
         def dispatch():
             raise ClinicRefused(operation="book_appointment", status_code=409)
 
-        with pytest.raises(ReplayRefused):
-            replay(dispatch)
+        with pytest.raises(DispatchRefused):
+            dispatch_prepared(dispatch)
 
     def test_a_policy_denial_passes_through_untouched(self) -> None:
         """The authority layer refusing is the caller's to handle, not transport to translate."""
@@ -575,7 +575,7 @@ class TestTheReplaySeamTranslatesTransportAndNothingElse:
             raise PolicyDenied("refused")
 
         with pytest.raises(PolicyDenied):
-            replay(dispatch)
+            dispatch_prepared(dispatch)
 
     def test_an_internal_fault_passes_through_untouched(self) -> None:
         """CareLoop being wrong about its identity fails loudly rather than reading as unknown."""
@@ -585,12 +585,12 @@ class TestTheReplaySeamTranslatesTransportAndNothingElse:
             raise IdempotencyKeyCollision("two calls, one key")
 
         with pytest.raises(IdempotencyKeyCollision):
-            replay(dispatch)
+            dispatch_prepared(dispatch)
 
     def test_a_successful_dispatch_is_returned_verbatim(self) -> None:
         sentinel = object()
 
-        assert replay(lambda: sentinel) is sentinel
+        assert dispatch_prepared(lambda: sentinel) is sentinel
 
 
 class TestAnInconsistentCaseFailsClosed:

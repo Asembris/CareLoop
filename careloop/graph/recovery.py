@@ -134,32 +134,48 @@ def may_replay(action_type: str, *, observers: Collection[str]) -> bool:
     return action_type in observers
 
 
-class ReplayFailed(Exception):
-    """Base for a replay that did not produce a provider result.
+class DispatchFailed(Exception):
+    """Base for a dispatch that did not produce a provider result.
 
-    Neither member says the original write did or did not land — that is precisely what a
-    reconciliation failed to establish — and nothing downstream may read either as though it did.
+    Neither member says the write did or did not land — that is precisely what was not established
+    — and nothing downstream may read either as though it did.
     """
 
 
-class ReplayUnavailable(ReplayFailed):
+class DispatchUnavailable(DispatchFailed):
     """Nobody answered. The outcome is unknown and re-issuing the same key is still safe.
+
+    **The ambiguous outcome, and the reason this is not a failure.** A request whose response never
+    came back is compatible with the provider having committed and with it never having seen the
+    request at all — measured against a real clinic, an appointment can already exist while CareLoop
+    holds nothing. Treating it as failure would file a real external effect under "did not happen";
+    treating it as success would certify a booking nobody has seen.
 
     The one condition under which waiting is the correct behaviour rather than stopping, and the
     only producer of ``WAITING_EXTERNAL``.
     """
 
 
-class ReplayRefused(ReplayFailed):
-    """The provider answered and declined. A definite answer that establishes nothing.
+class DispatchRefused(DispatchFailed):
+    """The provider answered and declined.
 
-    Its sharpest instance is a key already recorded against different arguments — an identity
-    contradiction no number of retries resolves, and one a person has to look at.
+    **What that establishes depends on when it happens**, which is why the two nodes handle it
+    differently rather than sharing a branch. On a first attempt the clinic is saying it did not
+    make this booking — an unknown slot, a slot somebody else holds — and the case fails, which is
+    the behaviour that predates the saga and is unchanged by it. During a *reconciliation* the
+    outcome was already unknown before the request was issued, and a refusal does not settle it:
+    its sharpest instance is a key already recorded against different arguments, an identity
+    contradiction no number of retries resolves and one a person has to look at.
     """
 
 
-def replay(dispatch: Callable[[], ExecutionResult]) -> ExecutionResult:
-    """Re-issue one prepared action, translating transport failure into recovery vocabulary.
+def dispatch_prepared(dispatch: Callable[[], ExecutionResult]) -> ExecutionResult:
+    """Issue one prepared action, translating transport failure into recovery vocabulary.
+
+    **Both nodes that can send an effect go through here**, the first attempt and the
+    reconciliation alike, because the transport failures are the same failures either way and a
+    second translation would be a second answer. What differs is what each node *does* with the
+    result, and that difference lives in the nodes where it can be read.
 
     **This is where HTTP stops on the recovery path**, exactly as
     :func:`careloop.graph.context._clinic_readback` is where it stops on the observation path, and
@@ -180,12 +196,12 @@ def replay(dispatch: Callable[[], ExecutionResult]) -> ExecutionResult:
     try:
         return dispatch()
     except ClinicUnavailable as unreachable:
-        raise ReplayUnavailable(
+        raise DispatchUnavailable(
             "the external system could not be reached, so nothing was established about the "
             "prepared action"
         ) from unreachable
     except ClinicRefused as refused:
-        raise ReplayRefused(
+        raise DispatchRefused(
             "the external system answered and declined the replay, so nothing was established "
             "about the prepared action"
         ) from refused
@@ -193,12 +209,12 @@ def replay(dispatch: Callable[[], ExecutionResult]) -> ExecutionResult:
 
 __all__ = [
     "RECOVERY_CLASS",
+    "DispatchFailed",
+    "DispatchRefused",
+    "DispatchUnavailable",
     "RecoveryClass",
-    "ReplayFailed",
-    "ReplayRefused",
-    "ReplayUnavailable",
     "UnclassifiedActionType",
     "check_recovery_classes_cover_the_registry",
+    "dispatch_prepared",
     "may_replay",
-    "replay",
 ]

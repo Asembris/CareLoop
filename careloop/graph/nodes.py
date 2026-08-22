@@ -86,7 +86,12 @@ from careloop.graph.context import (
     unsettled_preparation,
 )
 from careloop.graph.extract import record_document, validate_and_promote
-from careloop.graph.recovery import ReplayRefused, ReplayUnavailable, may_replay, replay
+from careloop.graph.recovery import (
+    DispatchRefused,
+    DispatchUnavailable,
+    dispatch_prepared,
+    may_replay,
+)
 from careloop.graph.verify import (
     ObservationOutcome,
     ReadBackFailed,
@@ -565,7 +570,9 @@ class ExecuteNode(DeterministicNode):
             return self._refused(case, base, proposal, "the BeforeToolCall hook cancelled the call")
 
         try:
-            result = self.context.tools.call(proposal.tool_name, proposal.args)
+            result = dispatch_prepared(
+                lambda: self.context.tools.call(proposal.tool_name, proposal.args)
+            )
         except PolicyDenied as denied:
             return self._refused(
                 case,
@@ -573,6 +580,19 @@ class ExecuteNode(DeterministicNode):
                 proposal,
                 f"the gated tool refused the call: {denied.decision}",
             )
+        except DispatchUnavailable:
+            # **Nobody answered, and that is not a failure.** The request may have reached the
+            # provider and committed, or may never have arrived; CareLoop cannot tell from here, and
+            # the appointment can already exist while this process holds nothing. Reproduced against
+            # a real clinic before this branch existed: the exception left the node, ``run_case``
+            # marked the case ``FAILED`` — terminal, unrecoverable — and the clinic held the
+            # booking, with the case's own ``ACTION_PREPARED`` entry naming the action nobody would
+            # ever look for again.
+            #
+            # So the outcome is recorded as unknown rather than as absent, and the case goes
+            # wherever an unknown outcome goes for this action type. That is the same question
+            # ``ReconcileNode`` asks after a crash, and it is answered by the same function.
+            return _stop_with_the_outcome_unestablished(self, case, base, proposal, key)
 
         # The call returned, so the effect really was dispatched — that is the fact being claimed,
         # and this is the first line at which it is known. **Before the record and before the
@@ -732,6 +752,24 @@ class ReconcileNode(DeterministicNode):
         case = self.context.current_case()
         base = case.version
 
+        # **Somebody else may have finished this between the edge and here, and that is not a
+        # fault.** The dispatch edge selected this case while it was mid-effect; a second worker —
+        # another process's startup sweep, an operator running a recovery by hand — can settle it in
+        # the gap before this line reads the store. What it leaves behind is a case that has moved
+        # on, which is the correct outcome rather than an inconsistency, and the guard below would
+        # otherwise read "no unsettled preparation" as one.
+        #
+        # Reproduced before this branch existed: worker A reconciles to ``VERIFYING`` and worker B,
+        # arriving a microsecond later, re-reads the case fresh, finds the preparation settled, and
+        # commits ``VERIFYING -> FAILED`` — *successfully*, because reading fresh is exactly what
+        # stops the compare-and-set from catching it. A correctly progressing case terminated by the
+        # worker that had nothing left to do.
+        #
+        # Writing nothing is the whole response. The run ends here, ``run_case`` sees a case at a
+        # state with no satisfied outgoing edge, and the winner carries on undisturbed.
+        if case.state not in (CaseState.EXECUTING, CaseState.WAITING_EXTERNAL):
+            return f"reconcile: case is {case.state}; another run settled it"
+
         prepared = unsettled_preparation(case)
         if prepared is None:
             return self._fail(
@@ -791,25 +829,23 @@ class ReconcileNode(DeterministicNode):
             return self._park(case, base, prepared, "the BeforeToolCall hook cancelled the replay")
 
         try:
-            result = replay(lambda: self.context.tools.call(proposal.tool_name, proposal.args))
+            result = dispatch_prepared(
+                lambda: self.context.tools.call(proposal.tool_name, proposal.args)
+            )
         except PolicyDenied:
             # Not a fault, and emphatically not proof that nothing happened: an effect may already
             # exist. A refusal here means the replay may not be issued, which leaves the outcome
             # exactly as unknown as it was.
             return self._park(case, base, prepared, "the gated tool refused the replay")
-        except ReplayUnavailable:
-            # Nobody answered. The only branch where waiting is the right behaviour, and the only
-            # producer of WAITING_EXTERNAL.
-            case = transition(
-                case,
-                CaseState.WAITING_EXTERNAL,
-                reason=f"the external system did not answer about {prepared.tool_name}",
-                actor="system",
-                now=self.context.now(),
+        except DispatchUnavailable:
+            # Nobody answered, so the outcome is exactly as unknown as it was before this run. The
+            # same fork the execute node reaches when a first attempt's response is lost, answered
+            # by the same function — there is one place that decides what an unestablished outcome
+            # does, and neither node is it.
+            return _stop_with_the_outcome_unestablished(
+                self, case, base, proposal, prepared.idempotency_key
             )
-            self.context.commit(case, expected_version=base)
-            return f"reconcile: {prepared.tool_name} could not be reached"
-        except ReplayRefused:
+        except DispatchRefused:
             # The provider answered and declined. A definite answer that establishes nothing about
             # whether the original write landed — and the sharpest instance, a key already recorded
             # against different arguments, is an identity contradiction no retry can resolve.
@@ -1499,6 +1535,56 @@ def _park_with_nothing_certifiable(case: Case, proposal: Proposal, key: str, now
         actor="system",
         now=now,
     )
+
+
+def _stop_with_the_outcome_unestablished(
+    node: DeterministicNode, case: Case, base: int, proposal: Proposal, key: str
+) -> str:
+    """Stop a case whose dispatch established nothing, in whichever way is honest for the action.
+
+    **One question, asked in two places.** ``ExecuteNode`` reaches it when a first attempt's
+    response never came back; ``ReconcileNode`` reaches the same fork after a crash. The situation
+    is identical — an action was durably prepared, something may or may not have happened, and
+    nobody can say which — so the answer is identical, and it lives here rather than being written
+    twice with a chance to drift.
+
+    Two outcomes, and which applies is a fact about the **provider**:
+
+    ``WAITING_EXTERNAL``
+        The action's declared recovery class permits re-issuing the frozen identity and this run has
+        an independent observer for it. CareLoop can settle this itself once something answers, so
+        waiting is true rather than a euphemism, and the case is picked up by the next run —
+        ``careloop.api.deps.ApiDeps.resume_unsettled`` sweeps exactly this state at startup.
+
+    ``AWAITING_HUMAN``
+        It does not, or this run has no observer. CareLoop will never resolve it alone, so a state
+        that implied it was waiting would be a lie about who the case is waiting for. It parks with
+        ``EXTERNAL_OUTCOME_NOT_ESTABLISHED`` and **no** ``Approval``: the action was already
+        authorised, and what is missing is knowledge rather than permission.
+
+    ``key`` is the identity already frozen on the case's ``ACTION_PREPARED`` entry, threaded in from
+    the caller that derived it, so the handoff names the same action the preparation does by
+    construction rather than by a second derivation.
+    """
+    prepared = Preparation(
+        tool_name=proposal.tool_name, idempotency_key=key, args_digest=args_digest(proposal.args)
+    )
+    if may_replay(proposal.tool_name, observers=node.context.readbacks):
+        case = transition(
+            case,
+            CaseState.WAITING_EXTERNAL,
+            reason=f"the external system did not answer about {proposal.tool_name}",
+            actor="system",
+            now=node.context.now(),
+        )
+        node.context.commit(case, expected_version=base)
+        return f"{node.id}: {proposal.tool_name} could not be reached"
+
+    case = _park_with_nothing_established(
+        case, prepared, "no safe way to establish the outcome", node.context.now()
+    )
+    node.context.commit(case, expected_version=base)
+    return f"{node.node_id}: {proposal.tool_name} could not be established"
 
 
 def _park_with_nothing_established(case: Case, prepared: Preparation, detail: str, now) -> Case:

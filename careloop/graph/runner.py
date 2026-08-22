@@ -47,7 +47,7 @@ from careloop.graph.context import RunContext, recheck_target
 from careloop.graph.trusted import trusted_facts
 from careloop.state.case import ApprovalStatus, Case, CaseState, TimelineKind
 from careloop.state.machine import append_event, transition
-from careloop.state.store import CaseStore
+from careloop.state.store import CaseStore, VersionConflict
 
 
 class NoSuchApproval(Exception):
@@ -296,6 +296,22 @@ async def run_case(
 
     try:
         result = await graph.invoke_async(f"run case {context.case_id}")
+    except VersionConflict:
+        # **Losing a race is not a failure of the case, and calling it one destroys a good case.**
+        #
+        # Every node reads a version and commits against it, so a second writer working the same
+        # case rejects one of them at the database. That writer is not broken — the case is simply
+        # *ahead* of what this run read, and the winner has already moved it somewhere correct.
+        # Falling through to ``_fail`` below would then read the case fresh, find it in whatever
+        # state the winner left it, see that it is not at rest, and commit ``-> FAILED`` on top: a
+        # correctly progressing case terminated on behalf of the run that lost.
+        #
+        # Unreachable while one process ran one case at a time — the API refuses a second in-flight
+        # run per case — and reachable the moment anything sweeps for abandoned work, which is what
+        # ``EXECUTING`` recovery is for. The exception still leaves this function, because *this
+        # run* genuinely did not complete and its caller should know; what does not happen is a
+        # write.
+        raise
     except Exception as failure:
         # Node failures are fail-fast in the SDK and re-raised to here. Mark the case before
         # letting the exception out, so a crashed run leaves a case that says so rather than one
@@ -318,14 +334,28 @@ async def run_case(
 
 
 def _fail(context: RunContext, reason: str) -> None:
-    """Record that a run ended without the case resting, unless it already rested."""
+    """Record that a run ended without the case resting, unless it already rested.
+
+    **Two guards, and the second is not redundant.** ``is_at_rest`` covers a case the run itself
+    finished; the ``VersionConflict`` below covers a case *somebody else* moved between the read on
+    the line above and the write on the line after it. The first is a check-then-act and the second
+    is what makes it safe, exactly as :meth:`careloop.state.sqlite_store.SqliteCaseStore.save`'s
+    guarded ``UPDATE`` is what makes its own ``SELECT`` safe rather than a race.
+
+    Both point the same way: a run that lost may not write. A failure recorded here would be this
+    run's opinion about a case another run has already moved on, and the caller still gets the
+    original exception either way.
+    """
     case = context.current_case()
     if case.is_at_rest:
         return
-    context.commit(
-        transition(case, CaseState.FAILED, reason=reason, actor="system", now=context.now()),
-        expected_version=case.version,
-    )
+    try:
+        context.commit(
+            transition(case, CaseState.FAILED, reason=reason, actor="system", now=context.now()),
+            expected_version=case.version,
+        )
+    except VersionConflict:
+        return
 
 
 def approve(

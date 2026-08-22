@@ -277,6 +277,26 @@ class SessionWorlds:
         """
         return tuple(self._orphaned)
 
+    def resume_unsettled(self) -> tuple[str, ...]:
+        """Schedule recovery for every world's abandoned actions. Returns the case ids.
+
+        The registry-shaped counterpart of :meth:`careloop.api.deps.ApiDeps.resume_unsettled`, so
+        the lifespan asks one question and does not have to know which shape it got — the same
+        arrangement :meth:`drain` already uses.
+
+        **At startup this finds nothing, and that is correct rather than a stub.** An isolated app
+        holds no worlds until a visitor mints one, and every session store is
+        ``SqliteCaseStore(":memory:")``, so there is nothing durable for a restart to inherit and no
+        case that could have survived the process that abandoned it. The method is right; the
+        registry is empty. If a world were ever restored from disk, this would already sweep it.
+        """
+        resumed: list[str] = []
+        with self._lock:
+            worlds = list(self._worlds.values())
+        for world in worlds:
+            resumed.extend(world.resume_unsettled())
+        return tuple(resumed)
+
     async def drain(self) -> None:
         """Wait for every world's runs to finish, then end every world's clinic. Orderly shutdown.
 

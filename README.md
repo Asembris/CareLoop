@@ -188,7 +188,30 @@ One page of caption, including what each zone means and why there are exactly tw
 ## Honest limits
 
 - Approval expiry is unmodelled — a case can sit in `AWAITING_HUMAN` indefinitely.
-- `WAITING_EXTERNAL` is reserved: it is in the state machine and has no producer.
+- **`WAITING_EXTERNAL` means one thing and CareLoop will not leave it on its own.** It is entered
+  only when a dispatch of a durably prepared action got no answer at all, and it is exited by the
+  next run of that case — which today means process startup, since there is no scheduler. A case
+  that lands there while the process stays up waits until the next restart. That is a *scheduling*
+  gap rather than a correctness one: the identity is frozen, the state is honest, and the next run
+  converges. It was previously reserved with no producer at all.
+- **Only `book_appointment` can be autonomously recovered after an ambiguous outcome**, because it
+  is the only effect with a measured durable idempotency contract and an independent read-back.
+  `send_email`, `upload_document` and `grant_portal_access` park for a person with
+  `EXTERNAL_OUTCOME_NOT_ESTABLISHED` instead — an email that may or may not have been sent is not
+  something an agent may decide to send again. There is no CareLoop-wide exactly-once claim, and
+  the at-most-one-appointment guarantee is Demo World's, not CareLoop's.
+- **A first-attempt refusal from the clinic still ends the case `FAILED`.** An unknown slot or a
+  slot somebody else holds is the clinic *answering* that it did not make the booking, which is the
+  behaviour that predates the saga and is unchanged by it. What changed is the *ambiguous* case: a
+  dispatch that got no answer now waits instead of failing.
+- **Demo World's idempotency is in-process.** It survives a CareLoop crash, which is the whole
+  scenario, and does not survive Demo World restarting or a `POST /demo/reset`. A `404` on a
+  read-back is authoritative about the world the `X-Demo-Session` header named and about nothing
+  wider, so absence is never used as a licence to re-dispatch.
+- **The deployed multi-visitor demo cannot demonstrate crash recovery**, because each session's
+  store is `SqliteCaseStore(":memory:")` — a restart destroys the cases along with the process.
+  The durable claim lives in single-store mode (`scripts/demo_serve.py --db demo.sqlite3`) and in
+  `tests/test_saga_chaos.py`, which kills a real child process over a real socket.
 - `book_appointment`'s `reason` is planner-authored free text. It carries no trust key, no content
   constraint and no human review before an autonomous booking, and document evidence can influence
   it. Verification compares it against the clinic's record, which is fidelity rather than

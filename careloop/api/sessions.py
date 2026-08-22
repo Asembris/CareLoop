@@ -66,6 +66,7 @@ from typing import Final, cast
 
 from careloop.api.deps import ApiDeps
 from careloop.events.simulator import EventSimulator
+from careloop.graph.witness import NO_WITNESS, Witness
 from careloop.tools.clinic import CLINIC_SESSION_HEADER, ClinicUnavailable
 
 LOGGER: Final[logging.Logger] = logging.getLogger(__name__)
@@ -398,6 +399,7 @@ def demo_session_worlds(
     *,
     clinic_url: str = "",
     events: EventSimulator | None = None,
+    witness: Witness = NO_WITNESS,
     limit: int = DEFAULT_SESSION_LIMIT,
     idle_seconds: float = DEFAULT_SESSION_IDLE_SECONDS,
 ) -> SessionWorlds:
@@ -422,13 +424,19 @@ def demo_session_worlds(
 
     The event simulator *is* shared, and that is not an oversight. Its fixtures are read-only
     documents, so there is nothing there for one visitor to change under another.
+
+    The ``witness`` is shared for a stronger reason than convenience: it is stateless and holds
+    nothing, and what a claim lands on is whichever span the *run* is executing inside, so a
+    per-world instance would differ from a shared one in nothing but count. It is a sink either
+    way — a visitor's case, its policy verdicts and its bookings are identical whether one is
+    supplied or not.
     """
     # Imported here rather than at module scope: this function is the composition root for the
     # isolated demo, and the registry above must stay usable without dragging a store, a transport
     # and a clinic client into every import of it.
     import httpx
 
-    from careloop.api.deps import clinic_context_factory, default_context_factory
+    from careloop.api.deps import clinic_context_factory, simulated_context_factory
     from careloop.state.sqlite_store import SqliteCaseStore
     from careloop.tools.clinic import DEFAULT_TIMEOUT, ClinicClient
 
@@ -447,7 +455,9 @@ def demo_session_worlds(
             store=SqliteCaseStore(":memory:"),
             events=shared_events,
             context_factory=(
-                clinic_context_factory(clinic) if clinic is not None else default_context_factory
+                clinic_context_factory(clinic, witness)
+                if clinic is not None
+                else simulated_context_factory(witness)
             ),
             clinic=clinic,
         )

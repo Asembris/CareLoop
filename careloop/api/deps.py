@@ -27,6 +27,7 @@ from careloop.events.inbound import InboundEvent
 from careloop.events.simulator import EventSimulator
 from careloop.graph.context import RunContext
 from careloop.graph.runner import RunResult, context_for, run_case
+from careloop.graph.witness import NO_WITNESS, Witness
 from careloop.state.case import Case, CaseState
 from careloop.state.store import CaseStore
 from careloop.tools.clinic import ClinicClient
@@ -49,16 +50,37 @@ def default_context_factory(store: CaseStore, inbound: InboundEvent, case_id: st
     return context_for(store, inbound, case_id=case_id)
 
 
-def clinic_context_factory(clinic: ClinicClient) -> ContextFactory:
+def simulated_context_factory(witness: Witness = NO_WITNESS) -> ContextFactory:
+    """:func:`default_context_factory`, with somewhere for a run to record what it did.
+
+    Exists so the no-clinic path can be given a witness at all. Behaviourally identical to
+    :func:`default_context_factory` when it is not, which ``tests/test_witness_span.py`` asserts
+    rather than leaves implied — two ways of building the same thing is one more than necessary,
+    and the second must not quietly become different.
+    """
+
+    def build(store: CaseStore, inbound: InboundEvent, case_id: str) -> RunContext:
+        return context_for(store, inbound, case_id=case_id, witness=witness)
+
+    return build
+
+
+def clinic_context_factory(clinic: ClinicClient, witness: Witness = NO_WITNESS) -> ContextFactory:
     """A factory binding every run to a real external clinic.
 
     One collaborator turns on both the executor whose bookings are performed over HTTP and the
     read-back verification observes them with — see
     :class:`careloop.graph.context.RunContext`, which refuses to be given one without the other.
+
+    ``witness`` is where a run records a bounded statement of what it did, and it is a **sink**:
+    the routes, the graph and the policy layer are identical whichever one arrives, and the default
+    records nothing. It is threaded here rather than through ``create_app`` because a witness is
+    something a run is bound to, exactly like the clinic and the agents — and the API layer, which
+    decides nothing, should not grow a parameter for it.
     """
 
     def build(store: CaseStore, inbound: InboundEvent, case_id: str) -> RunContext:
-        return context_for(store, inbound, case_id=case_id, clinic=clinic)
+        return context_for(store, inbound, case_id=case_id, clinic=clinic, witness=witness)
 
     return build
 
@@ -256,4 +278,5 @@ __all__ = [
     "deps",
     "local_graph_runner",
     "sections_from",
+    "simulated_context_factory",
 ]

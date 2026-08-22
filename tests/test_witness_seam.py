@@ -32,6 +32,7 @@ import pytest
 from careloop.graph.verify import (
     INDEPENDENTLY_OBSERVABLE,
     OBSERVABLE_STATE,
+    ObservableEffect,
     ObservationOutcome,
     Verification,
     _verify_booking,
@@ -826,6 +827,38 @@ class TestTheDeclaredExternalState:
     def test_the_resource_identifier_is_the_one_the_read_back_is_keyed_on(self) -> None:
         assert OBSERVABLE_STATE[BOOKING].resource_id_field == "confirmation_id"
         assert hasattr(booked(), OBSERVABLE_STATE[BOOKING].resource_id_field)
+
+    def test_the_projection_reads_the_declaration_and_not_the_registry(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """**Which of the two field sets the digest follows**, proven by making them differ.
+
+        The registry says what CareLoop may *send*; ``OBSERVABLE_STATE`` says what the external
+        system *holds*. They coincide for a booking today, so swapping one source for the other in
+        production code changes nothing and no ordinary test could notice. Narrowing the
+        declaration here makes them disagree, and the emitted field list and digest have to follow
+        the declaration -- which is what makes the two digests comparable at all when a future
+        argument is sent but not externally held.
+        """
+        import careloop.graph.witness as witness_module
+        from careloop.tools.registry import REGISTRY
+
+        narrowed = ObservableEffect(
+            state_fields=("patient_id", "provider_id"), resource_id_field="confirmation_id"
+        )
+        assert frozenset(narrowed.state_fields) != REGISTRY.get(BOOKING).arg_names
+
+        monkeypatch.setattr(witness_module, "OBSERVABLE_STATE", {BOOKING: narrowed})
+        claim = _effect_claim(
+            action_type=BOOKING, dispatch=EffectDispatch.PERFORMED, args=AUTHORISED
+        )
+
+        assert claim is not None
+        assert claim.fields == "patient_id,provider_id"
+        assert claim.state_digest == digest_mapping(
+            {"patient_id": AUTHORISED["patient_id"], "provider_id": AUTHORISED["provider_id"]}
+        )
+        assert claim.state_digest != digest_mapping(AUTHORISED)
 
     def test_the_import_time_check_refuses_a_state_universe_that_drifted(self) -> None:
         """Vacuity proof for the guard: it has to fail on the thing it exists to catch."""

@@ -167,16 +167,19 @@ class TestOnlyTheRunnerWritesTheReCheckTransition:
 
         assert transitions_to_verifying(runner) == ["request_recheck"]
 
-    def test_the_nodes_writes_are_both_post_effect(self) -> None:
-        """The other legitimate entries, named so a third would be visible.
+    def test_the_nodes_writes_are_all_post_effect(self) -> None:
+        """The other legitimate entries, counted so a further one would be visible.
 
-        Both are :class:`careloop.graph.nodes.ExecuteNode` moving on after an effect was recorded
-        or a duplicate of one was suppressed. That is what keeps "every entry into ``VERIFYING`` is
-        post-effect" true with three sources rather than two.
+        Four, all inside a node's ``run``. Two are :class:`careloop.graph.nodes.ExecuteNode` moving
+        on after an effect was recorded or a duplicate of one was suppressed. Two are
+        :class:`careloop.graph.nodes.ReconcileNode` doing the same for an effect a crash left
+        unrecorded — one after a replay produced a result, one for a result that was recorded
+        without its transition landing. All four hold an ``ActionRecord`` by the time they run, so
+        "every entry into ``VERIFYING`` is post-effect" is unchanged by there being more of them.
         """
         nodes = (package_root() / "graph" / "nodes.py").read_text(encoding="utf-8")
 
-        assert transitions_to_verifying(nodes) == ["run", "run"]
+        assert transitions_to_verifying(nodes) == ["run", "run", "run", "run"]
 
     def test_the_matcher_finds_what_it_claims_to(self) -> None:
         """Vacuity: a matcher that found nothing would make every assertion above pass."""

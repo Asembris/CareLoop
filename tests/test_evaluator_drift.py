@@ -24,8 +24,12 @@ import inspect
 
 import pytest
 
-from careloop.graph.verify import INDEPENDENTLY_OBSERVABLE, _verify_booking
+from careloop.graph.verify import INDEPENDENTLY_OBSERVABLE, OBSERVABLE_STATE, _verify_booking
 from careloop.graph.verify import ObservationOutcome as CareLoopOutcome
+from careloop.graph.witness import FIELD_SEPARATOR as CARELOOP_FIELD_SEPARATOR
+from careloop.graph.witness import EffectDispatch as CareLoopDispatch
+from careloop.graph.witness import ObservationMode as CareLoopMode
+from careloop.graph.witness import Settlement as CareLoopSettlement
 from careloop.tools.registry import REGISTRY
 from careloop.tools.results import AppointmentBooked
 from demoworld import CLINIC_PREFIX, create_clinic_app
@@ -34,8 +38,12 @@ from evaluators.contract import (
     CLINIC_READ_METHOD,
     CLINIC_WRITE_METHOD,
     EXPECTED_FIELDS,
+    FIELD_SEPARATOR,
     OBSERVABLE_EFFECT_TYPES,
+    Dispatch,
+    ObservationMode,
     ObservationOutcome,
+    Settlement,
 )
 
 
@@ -199,6 +207,61 @@ class TestTheSharedObservationVocabulary:
 
     def test_the_vocabulary_is_not_empty(self) -> None:
         assert len(list(ObservationOutcome)) == 5
+
+
+class TestTheClaimVocabulariesTheApplicationNowEmits:
+    """The three vocabularies Patch D gave CareLoop, against the evaluator's own copies.
+
+    ``ObservationOutcome`` above is a vocabulary CareLoop already had and the evaluator restated.
+    These three are the reverse: the evaluator declared them first, and the application now owns a
+    copy because it has to *emit* them. The drift risk is the same in both directions and worse
+    here -- an application member the evaluator does not recognise resolves to ``None`` in
+    ``_member`` and is refused as *absent*, so a rename would be reported as a missing claim rather
+    than as an unknown one.
+
+    **Equalities, not containments.** A value the evaluator accepts and CareLoop never emits is
+    dead vocabulary, and a value CareLoop emits and the evaluator does not accept is a trace that
+    fails for a reason nobody chose.
+    """
+
+    def test_the_dispatch_vocabulary_agrees(self) -> None:
+        assert {member.value for member in Dispatch} == {
+            member.value for member in CareLoopDispatch
+        }
+
+    def test_the_observation_mode_vocabulary_agrees(self) -> None:
+        assert {member.value for member in ObservationMode} == {
+            member.value for member in CareLoopMode
+        }
+
+    def test_the_settlement_vocabulary_agrees(self) -> None:
+        assert {member.value for member in Settlement} == {
+            member.value for member in CareLoopSettlement
+        }
+
+    def test_none_of_them_is_empty(self) -> None:
+        assert len(list(CareLoopDispatch)) == 3
+        assert len(list(CareLoopMode)) == 2
+        assert len(list(CareLoopSettlement)) == 2
+
+    def test_the_field_separator_is_one_character_agreed_by_both(self) -> None:
+        assert CARELOOP_FIELD_SEPARATOR == FIELD_SEPARATOR
+
+    def test_the_field_string_the_application_renders_is_the_one_the_evaluator_expects(
+        self,
+    ) -> None:
+        """The end-to-end anchor: what production joins must equal what the evaluator splits."""
+        rendered = CARELOOP_FIELD_SEPARATOR.join(OBSERVABLE_STATE["book_appointment"].state_fields)
+        assert rendered == FIELD_SEPARATOR.join(EXPECTED_FIELDS)
+        assert tuple(rendered.split(FIELD_SEPARATOR)) == EXPECTED_FIELDS
+
+    def test_the_declared_external_state_is_the_evaluators_expected_field_set(self) -> None:
+        assert OBSERVABLE_STATE["book_appointment"].state_fields == EXPECTED_FIELDS
+
+    def test_the_declared_state_covers_exactly_what_the_evaluator_thinks_is_observable(
+        self,
+    ) -> None:
+        assert frozenset(OBSERVABLE_STATE) == OBSERVABLE_EFFECT_TYPES
 
 
 class TestTheEvaluatorStillImportsNothingFromTheApplication:

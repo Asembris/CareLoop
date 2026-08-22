@@ -66,6 +66,25 @@ def _digest(payload: object) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def digest_mapping(values: Mapping[str, str]) -> str:
+    """SHA-256 over the canonical JSON encoding of an already-canonical string mapping.
+
+    The same encoding rule :func:`args_digest` and :func:`idempotency_key` use, exposed so that a
+    second consumer cannot grow a second answer to *"what are the canonical bytes of this
+    mapping?"*. One rule, three callers.
+
+    Deliberately **not** ``args_digest`` under another name. That function digests a tool's
+    *argument map*, which is what the registry says CareLoop may send; a joint-state digest is
+    taken over what an external system *holds*. The two coincide for a booking today and are
+    different questions, so a caller that means the second must not reach for the first.
+
+    ``values`` are expected to be canonical already — :func:`careloop.provenance.canonical
+    .canonical_value` output — so nothing is reduced here and no value can be silently normalised
+    on the way in.
+    """
+    return _digest(dict(values))
+
+
 def args_digest(args: Mapping[str, object]) -> str:
     """Digest of ``args`` alone, for records that identify arguments without storing them.
 
@@ -85,4 +104,10 @@ def idempotency_key(case_id: str, action_type: str, args: Mapping[str, object]) 
     return _digest({"case_id": case_id, "action_type": action_type, "args": canonical_args(args)})
 
 
-__all__ = ["UncanonicalizableArgument", "args_digest", "canonical_args", "idempotency_key"]
+__all__ = [
+    "UncanonicalizableArgument",
+    "args_digest",
+    "canonical_args",
+    "digest_mapping",
+    "idempotency_key",
+]

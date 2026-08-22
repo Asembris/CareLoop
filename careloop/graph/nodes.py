@@ -413,6 +413,19 @@ class ExecuteNode(DeterministicNode):
     own ledger is an in-run optimisation behind that, not the source of truth; open decision 7
     closes here, and invariant 8 is why.
 
+    **Then the durable intent, in the same commit as the state change.** An action that is *not* a
+    duplicate gets an ``ACTION_PREPARED`` entry naming the tool, the idempotency key and the
+    argument digest, written into the same ``save`` that moves the case to ``EXECUTING``. That entry
+    is the whole basis of crash recovery: it freezes the identity of the authorised action before
+    anything can reach the outside world, so a process that dies mid-effect leaves behind the exact
+    key a later one must reuse rather than a case that has to guess. It claims nothing about the
+    provider — see :class:`careloop.graph.context.Preparation`.
+
+    **The order of those two is load-bearing.** Suppression is settled first, so a logical action
+    the case already holds a result for never acquires a preparation. A stale preparation on a
+    completed action would be an unsettled intent for :class:`ReconcileNode` to find, and it would
+    dispatch an effect that had already happened.
+
     **Then the hook, then the backstop.** The ``BeforeToolCall`` event is fired against the run's
     registry, and the gated toolset checks again inside the call. Both ask the same gate, which
     caches on a key carrying the case version, so the two layers cost one evaluation.
@@ -443,18 +456,13 @@ class ExecuteNode(DeterministicNode):
         if approval_check is not None:
             return self._fail(case, base, approval_check)
 
-        case = transition(
-            case,
-            CaseState.EXECUTING,
-            reason=f"dispatching {proposal.tool_name}",
-            actor="system",
-            now=self.context.now(),
-        )
-        # Committed before the call so both enforcement points judge the state the case is
-        # actually in. The gate reads the store, not this local copy.
-        self.context.commit(case, expected_version=base)
-        base = case.version
-
+        # **Derived before anything moves, because it is what the next two decisions are about.**
+        # The key is a pure function of the case, the tool and the canonical arguments, so it can be
+        # taken here as well as anywhere — and taking it here is what lets duplicate suppression be
+        # resolved *before* a preparation is written. A completed logical action must never acquire
+        # a preparation: ``ACTION_PREPARED`` means "about to be attempted", and writing one for an
+        # effect that already happened would leave a stale intent on the trail for a recovery to
+        # find and act on.
         key = idempotency_key(self.context.case_id, proposal.tool_name, proposal.args)
 
         recorded = case.action_for(key)
@@ -481,6 +489,19 @@ class ExecuteNode(DeterministicNode):
                 payload={"tool_name": proposal.tool_name, "idempotency_key": key},
                 now=self.context.now(),
             )
+            # **Both transitions in one commit, and no preparation between them.** The state machine
+            # has no ``READY_TO_EXECUTE -> VERIFYING`` edge and must not grow one — ``EXECUTING`` is
+            # where an effect is dispatched from, and a route that skipped it would be a second way
+            # to reach verification. Passing through it without a separate commit is what keeps the
+            # suppression atomic: there is no instant at which this case is durably ``EXECUTING``
+            # with nothing prepared, which is exactly the shape ``ReconcileNode`` fails closed on.
+            case = transition(
+                case,
+                CaseState.EXECUTING,
+                reason=f"dispatching {proposal.tool_name}",
+                actor="system",
+                now=self.context.now(),
+            )
             case = transition(
                 case,
                 CaseState.VERIFYING,
@@ -490,6 +511,46 @@ class ExecuteNode(DeterministicNode):
             )
             self.context.commit(case, expected_version=base)
             return f"execute: {proposal.tool_name} suppressed as a duplicate"
+
+        # **The durable intent and the state change are one commit.** Everything above has settled
+        # that this action has not happened; this is the last line before anything could reach the
+        # outside world, and what it writes down is *which* action is about to be attempted. A
+        # process that dies at any point after this finds the identity waiting for it; one that dies
+        # before it finds a case that never left ``READY_TO_EXECUTE``, which dispatch routes today.
+        #
+        # Two writes, one ``save``: ``SqliteCaseStore.save`` puts the case document and its new
+        # timeline rows in one ``BEGIN IMMEDIATE`` ... ``COMMIT``, so "the case is EXECUTING" and
+        # "an attempt is prepared" cannot come apart. Splitting them would create exactly the state
+        # this whole patch exists to abolish.
+        case = append_event(
+            case,
+            kind=TimelineKind.ACTION_PREPARED,
+            actor="system",
+            summary=f"{proposal.tool_name} prepared for dispatch",
+            diagnostic=(
+                f"the authorised arguments for {proposal.tool_name} key to {key}; that identity is "
+                f"frozen here, before any request can leave this process, so a later run can reuse "
+                f"it rather than derive a new one. This records what is about to be attempted and "
+                f"says nothing about whether it reached anything."
+            ),
+            payload={
+                "tool_name": proposal.tool_name,
+                "idempotency_key": key,
+                "args_digest": args_digest(proposal.args),
+            },
+            now=self.context.now(),
+        )
+        case = transition(
+            case,
+            CaseState.EXECUTING,
+            reason=f"dispatching {proposal.tool_name}",
+            actor="system",
+            now=self.context.now(),
+        )
+        # Committed before the call so both enforcement points judge the state the case is
+        # actually in. The gate reads the store, not this local copy.
+        self.context.commit(case, expected_version=base)
+        base = case.version
 
         cancelled = await fire_before_tool_call(
             self.context.hooks,

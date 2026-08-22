@@ -82,6 +82,28 @@ class TimelineKind(StrEnum):
     or that new work arrived.
     """
 
+    ACTION_PREPARED = "ACTION_PREPARED"
+    """The exact previously-authorised logical action is durably frozen and eligible for dispatch.
+
+    **It does not say that any provider request left the process**, and nothing may read it as
+    though it did. It says that CareLoop has written down, before anything could reach the outside
+    world, *which* action it is about to attempt: the tool, the digest of the arguments policy
+    allowed, and the idempotency key those arguments derive. That is the durable intent, and it is
+    what lets a later process reuse the identity of an attempt it never saw rather than inventing
+    one.
+
+    Written by :class:`careloop.graph.nodes.ExecuteNode` alone, in the **same commit** as
+    ``READY_TO_EXECUTE -> EXECUTING``, so "the case is EXECUTING" and "an attempt is durably
+    prepared" are one statement rather than two that can disagree. It is written only for an
+    action the case does **not** already hold an :class:`ActionRecord` for — duplicate suppression
+    is resolved first, so a completed logical action never acquires a stale preparation.
+
+    The pair with :attr:`ACTION_EXECUTED` is what carries the whole saga: this says *which action*,
+    that says *what came of it*, and an action is unsettled exactly while the first exists without
+    the second. Nothing stores that difference; it is computed by
+    :func:`careloop.graph.context.unsettled_preparation`, so there is no phase field to go stale.
+    """
+
     ACTION_EXECUTED = "ACTION_EXECUTED"
     DUPLICATE_SUPPRESSED = "DUPLICATE_SUPPRESSED"
     VERIFICATION_PASSED = "VERIFICATION_PASSED"

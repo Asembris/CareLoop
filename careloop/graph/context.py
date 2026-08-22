@@ -147,6 +147,68 @@ def proposal_for(case: Case, tool_name: str, digest: str) -> Proposal | None:
     return None
 
 
+class Preparation(BaseModel):
+    """One durably frozen logical action identity, read back from the timeline.
+
+    The subject of the whole recovery path. It is what ``ACTION_PREPARED`` records: the tool, the
+    idempotency key the authorised arguments derive, and the digest of those arguments — written
+    before anything could reach the outside world, so a later process can reuse the identity of an
+    attempt it never saw rather than invent one.
+
+    **It asserts nothing about the provider.** A preparation is compatible with every one of "the
+    request was never made", "it was made and never arrived", "it arrived and was not committed",
+    "it was committed and the response was lost", and "the response arrived and was not recorded".
+    Deciding which requires reading the external system; that is
+    :class:`careloop.graph.nodes.ReconcileNode`'s job and not this model's.
+
+    A read model, never persisted — the same arrangement as :class:`Proposal`, :class:`Handoff`,
+    :class:`Delivery` and :class:`RecheckTarget`, and for the same reason: the timeline already
+    records it, append-only and in order, and a second copy on ``Case`` would be a second answer to
+    a question the trail already answers.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    tool_name: str
+    idempotency_key: str
+    args_digest: str
+
+
+def unsettled_preparation(case: Case) -> Preparation | None:
+    """The newest prepared action on ``case`` whose outcome is not durably known, or ``None``.
+
+    **Unsettled is computed, never stored**, and that is the point of the design. A prepared action
+    is settled exactly when the case holds an :class:`~careloop.state.case.ActionRecord` under its
+    key, so the unsettled set is ``{prepared keys} - {recorded keys}`` and there is no phase field
+    anywhere that could go stale, be edited, or disagree with the trail it summarises.
+
+    **The newest preparation is inspected and the scan then stops**, rather than searching backwards
+    for the newest *unsettled* one. Earlier preparations are settled by construction —
+    ``ExecuteNode`` prepares only from ``READY_TO_EXECUTE``, and an unsettled preparation leaves the
+    case in a state with no path back there that raises no approval — so the two readings coincide
+    today. They are not equally safe if that ever changes: stopping answers ``None``, which
+    :class:`careloop.graph.nodes.ReconcileNode` treats as an inconsistency and fails closed on,
+    while searching would hand a recovery an *older* action and re-dispatch an episode that had
+    already been left behind. Fail closed, and never resurrect.
+
+    ``None`` is the correct and expected answer for every case persisted before ``ACTION_PREPARED``
+    existed: no attempt was ever recorded, which is true rather than a gap to be papered over. It
+    is also the answer for an ordinary finished case, whose preparations are all settled.
+    """
+    for event in reversed(case.timeline):
+        if event.kind is not TimelineKind.ACTION_PREPARED:
+            continue
+        key = event.payload["idempotency_key"]
+        if case.action_for(key) is not None:
+            return None
+        return Preparation(
+            tool_name=event.payload["tool_name"],
+            idempotency_key=key,
+            args_digest=event.payload["args_digest"],
+        )
+    return None
+
+
 class Handoff(BaseModel):
     """A case CareLoop has stopped on and handed to a person.
 
@@ -710,6 +772,7 @@ __all__ = [
     "ConflictingExecutors",
     "Delivery",
     "Handoff",
+    "Preparation",
     "Proposal",
     "RecheckTarget",
     "RunContext",
@@ -723,4 +786,5 @@ __all__ = [
     "prior_denials",
     "proposal_for",
     "recheck_target",
+    "unsettled_preparation",
 ]

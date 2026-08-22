@@ -355,7 +355,21 @@ class TestANormalBookingClaimsThatItWasPerformed:
 
 
 class TestPerformedIsNotClaimedUntilTheCallHasReturned:
-    """M5. A dispatch that raised is not a dispatch that happened."""
+    """M5. A dispatch that raised is not a dispatch that happened.
+
+    **The claim half is unchanged and the lifecycle half is not**, and the difference is the saga.
+    A call that never returned still claims nothing at all: CareLoop does not know what became of
+    the effect, and ``PERFORMED``, ``SUPPRESSED`` and ``NOT_IN_THIS_TRACE`` are three positive
+    statements it is in no position to make. That was this class's point and it still is.
+
+    What the case *does* afterwards changed. It used to end ``FAILED`` — terminal, unrecoverable —
+    on the reasoning that an integration that is down is a fault. Measured against a real clinic,
+    that filed a real external effect under "did not happen": the write can already have landed and
+    only the answer be lost, which is precisely the outcome nobody can tell apart from a request
+    that never arrived. So the case now waits in ``WAITING_EXTERNAL`` under the identity it froze
+    before dispatching, and a later run reconciles it. See ``tests/test_saga_chaos.py``, where the
+    write really does land and the answer really is lost.
+    """
 
     class RefusesToBook(ClinicClient):
         def book(self, args, idempotency_key: str) -> AppointmentBooked:  # type: ignore[override]
@@ -364,19 +378,20 @@ class TestPerformedIsNotClaimedUntilTheCallHasReturned:
     def test_a_booking_that_never_returned_claims_nothing_at_all(self) -> None:
         with clinic_server() as (base_url, _world):
             witness = RecordingWitness()
-            with pytest.raises(ClinicUnavailable):
-                run_booking(self.RefusesToBook(base_url), witness)
+            run_booking(self.RefusesToBook(base_url), witness)
         assert witness.effects == []
         assert witness.observations == []
 
-    def test_the_case_still_fails_closed(self) -> None:
-        """The lifecycle is unchanged; only the absence of a claim is new."""
+    def test_the_case_waits_rather_than_failing(self) -> None:
+        """The lifecycle half, and the one the saga moved. ``FAILED`` closed a door too early."""
         with clinic_server() as (base_url, _world):
             store = InMemoryCaseStore()
             open_case(store, REFERRAL_EVENT, case_id=CASE_ID, now=FIXED_NOW)
-            with pytest.raises(ClinicUnavailable):
-                run_booking(self.RefusesToBook(base_url), RecordingWitness(), store=store)
-            assert store.get(CASE_ID).state is CaseState.FAILED
+            run_booking(self.RefusesToBook(base_url), RecordingWitness(), store=store)
+            case = store.get(CASE_ID)
+            assert case.state is CaseState.WAITING_EXTERNAL
+            assert case.failure_reason is None
+            assert case.actions == ()
 
 
 # =================================================================================================

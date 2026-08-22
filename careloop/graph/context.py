@@ -675,6 +675,27 @@ class RunContext:
     """
 
     def __post_init__(self) -> None:
+        #: Whether this run has already told the witness what became of the effect.
+        #:
+        #: **Telemetry only, and structurally so.** It is set at the two ``witness_effect`` call
+        #: sites and read at one more, and nothing else may touch it —
+        #: ``tests/test_saga_telemetry.py`` sweeps for that. No lifecycle, no verdict, no policy and
+        #: no dispatch consults it, so an observability change cannot steer a case; that is the same
+        #: rule :class:`~careloop.graph.witness.NullWitness` exists to make unaskable, applied to
+        #: the one fact a trace-scoped claim genuinely needs.
+        #:
+        #: It is run-scoped because the question is run-scoped. *"Did the write happen in this
+        #: trace?"* is not something the durable trail can answer — a case that entered
+        #: ``VERIFYING`` from ``EXECUTING`` looks identical whether the execute node ran a
+        #: microsecond ago or in a process that died last night — and
+        #: :attr:`careloop.graph.witness.EffectDispatch.NOT_IN_THIS_TRACE` is a claim about *this
+        #: trace*. Reading a durable state as a proxy for it is what made a resumed verification
+        #: emit no effect claim at all.
+        #:
+        #: One-way, and only ever set to ``True``. A flag that could be cleared would be a flag a
+        #: later edit could use to suppress a claim.
+        self.effect_claimed: bool = False
+
         if self.clinic is not None and self.executor is not None:
             raise ConflictingExecutors(
                 "a run is bound to a clinic or to an executor, never to both: the clinic builds "

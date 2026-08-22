@@ -485,6 +485,7 @@ class ExecuteNode(DeterministicNode):
                 dispatch=EffectDispatch.SUPPRESSED,
                 args=proposal.args,
             )
+            self.context.effect_claimed = True
             case = append_event(
                 case,
                 kind=TimelineKind.DUPLICATE_SUPPRESSED,
@@ -605,6 +606,7 @@ class ExecuteNode(DeterministicNode):
             dispatch=EffectDispatch.PERFORMED,
             args=proposal.args,
         )
+        self.context.effect_claimed = True
 
         case = _record_action(case, proposal, key, result, self.context.now())
         case = transition(
@@ -860,6 +862,7 @@ class ReconcileNode(DeterministicNode):
             dispatch=EffectDispatch.PERFORMED,
             args=proposal.args,
         )
+        self.context.effect_claimed = True
 
         case = _record_action(case, proposal, prepared.idempotency_key, result, self.context.now())
         case = transition(
@@ -1004,19 +1007,35 @@ class VerifyNode(DeterministicNode):
         # conclusion. DONE or AWAITING_HUMAN has been written before telemetry is allowed to say
         # VERIFIED or NOT_CERTIFIED, so the witness observes a decision rather than anticipating
         # one.
-        if entered_from is CaseState.AWAITING_HUMAN:
-            # A caregiver's re-check never reaches the execute node, so this run is the only one
-            # that can account for the effect — and the effect it accounts for is the one that was
-            # *authorised*, which is why this re-projects `proposal.args` through exactly the
-            # projection the execute node uses. Deriving it from the record, from what the clinic
-            # just returned, or from the observation claim would make the two joint-state digests
-            # share a source, and their equality is the whole evidence.
+        if not self.context.effect_claimed:
+            # **This run reached verification without anything having accounted for the effect**, so
+            # the write belongs to an earlier trace and this is the only run that can say so. Two
+            # shapes arrive here and they are the same fact: a caregiver's re-check, which never
+            # reaches the execute node, and a verification resumed after a process died between the
+            # ``VERIFYING`` commit and the read — the crash window that is *structurally* the
+            # narrowest in the whole lifecycle and, until this condition was widened, the one that
+            # produced a correct trace the settlement evaluator refused.
+            #
+            # **Asked of the run rather than of the case, because the question is about the trace.**
+            # This tested ``entered_from is AWAITING_HUMAN``, which is a durable fact standing in
+            # for a run-scoped one: a case that entered ``VERIFYING`` from ``EXECUTING`` looks
+            # identical whether the execute node ran a moment ago or in a process that is gone, so
+            # the proxy was right for the re-check and silently wrong for the resume. Measured
+            # against the frozen evaluator before the change: the resumed run reached ``DONE``
+            # correctly, emitted five attributes instead of nine, and was judged ``FAIL``.
+            #
+            # The effect it accounts for is the one that was *authorised*, which is why this
+            # re-projects ``proposal.args`` through exactly the projection the execute node uses.
+            # Deriving it from the record, from what the clinic just returned, or from the
+            # observation claim would make the two joint-state digests share a source, and their
+            # equality is the whole evidence.
             witness_effect(
                 self.context.witness,
                 action_type=proposal.tool_name,
                 dispatch=EffectDispatch.NOT_IN_THIS_TRACE,
                 args=proposal.args,
             )
+            self.context.effect_claimed = True
         witness_observation(
             self.context.witness,
             action_type=record.action_type,

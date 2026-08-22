@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64"
+     role="img" aria-labelledby="careloop-animated-mark-title">
+  <title id="careloop-animated-mark-title">CareLoop</title>
+  <!--
+    The CareLoop mark, animated, for the repository landing section.
+
+    Geometry is copied verbatim from docs/careloop-mark.svg, which is copied verbatim from
+    frontend/src/components/brand/CareLoopMark.tsx. That file remains the source of truth and
+    this one is a sibling, never a replacement: docs/careloop-mark.svg is still the canonical
+    document mark, and site/assets/ still carries its own copy of the same shape.
+
+    Light-theme literals, because nothing outside the app resolves a var():
+
+      brand-forest  #315e52   the caregiver, the larger figure
+      brand-sage    #a6b09d   the person cared for
+
+    The dark twin is docs/careloop-mark-animated-dark.svg and differs only in those two
+    colours, which are the .dark values already shipped in tokens.css.
+
+    WHAT MOVES, AND WHY IT MOVES THAT WAY
+
+    The static mark's own comment says: "Two figures whose bodies sweep into one shared point.
+    Their paths converge without meeting, leaving the loop open at the top - the gap a human
+    decision fills." The animation dramatises the first half of that sentence and nothing else.
+
+      0.20 - 1.20s  the forest body draws OUTWARD from the shared point at (32, 55.5)
+      0.32 - 1.30s  the sage body follows, 120ms behind
+                    both paths begin with "M32 55.5", so drawing from the path start is
+                    literally drawing the convergence
+      1.30 - 1.70s  the forest head settles up, 0.86 -> 1.04 -> 1.00, once
+      1.42 - 1.82s  the sage head does the same
+      1.82s onward  rest, permanently. Nothing else moves, ever.
+
+    WHAT DELIBERATELY DOES NOT MOVE, AND WHY
+
+    An earlier draft traced a thin copper arc across the gap between the two stroke tips, to
+    mark it. Rendered at 84px it was wrong in every state: on white it reads as a skin-toned
+    smudge in the heart's cleft, on #0d1117 as a brown smear, and with this style block
+    stripped it loses its opacity and becomes a solid copper bar. The "gap" is not a void
+    between two floating ends - it is the notch that makes the silhouette a heart, and drawing
+    across it damages the strongest thing the mark has. It was removed on the evidence, not
+    redesigned.
+
+    There is also NO looping element. A looping draw has to un-draw itself every cycle, and the
+    only ways to hide that are a hard cut or a fade-to-nothing - a logo blinking in peripheral
+    vision. The hero directly below this already loops; a second loop above the fold is motion
+    overload. So this plays once on load, in 1.8s, and then rests.
+
+    FALLBACK: every animated property's AUTHORED state is the finished mark - dashoffset 0,
+    heads at full opacity and scale. Verified by rendering this file with the style block
+    removed: the complete mark. Also verified under a real browser-level reduced-motion setting
+    (Chromium's force-prefers-reduced-motion flag), where the finished mark is present at 250ms with
+    no animation at all. The animation only ever subtracts from a valid resting state.
+
+    No SMIL, so the reduced-motion rule below is total rather than partial. No webfonts and no
+    external references: the raw asset is served under `default-src 'none'; style-src
+    'unsafe-inline'`, which permits this style block and nothing beyond it.
+  -->
+  <style>
+    .cl-body { stroke-dasharray: 100; stroke-dashoffset: 0; }
+    .cl-forest { animation: cl-draw 1000ms cubic-bezier(.32,.72,.36,1) 200ms 1 both; }
+    .cl-sage { animation: cl-draw 980ms cubic-bezier(.32,.72,.36,1) 320ms 1 both; }
+
+    .cl-head { transform-box: fill-box; transform-origin: center;
+               animation: cl-settle 400ms cubic-bezier(.34,1.16,.5,1) 1300ms 1 both; }
+    .cl-head-sage { animation-delay: 1420ms; }
+
+    @keyframes cl-draw { from { stroke-dashoffset: 100; } to { stroke-dashoffset: 0; } }
+    @keyframes cl-settle {
+      0% { opacity: 0; transform: scale(.86); }
+      70% { opacity: 1; transform: scale(1.04); }
+      100% { opacity: 1; transform: scale(1); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, ::before, ::after { animation: none !important; }
+    }
+  </style>
+
+  <circle class="cl-head cl-head-forest" cx="18.5" cy="11.5" r="5.4" fill="#315e52"/>
+  <circle class="cl-head cl-head-sage" cx="45.5" cy="15" r="4.3" fill="#a6b09d"/>
+
+  <path class="cl-body cl-sage" pathLength="100"
+    d="M32 55.5c11.5-7.2 24.5-14.7 24.5-24.2 0-8-6.8-11.3-12-7.9-2.5 1.6-3.9 3.7-4.3 6"
+    stroke="#a6b09d" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path class="cl-body cl-forest" pathLength="100"
+    d="M32 55.5C20 48 7.5 40.5 7.5 30.5c0-8.5 7.5-12 13-8.5 2.6 1.7 4.1 3.9 4.5 6.5"
+    stroke="#315e52" stroke-width="6.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>

@@ -68,10 +68,21 @@ def names_used(source: str) -> set[str]:
     return found
 
 
-def _enclosing_class(tree: ast.AST) -> dict[ast.AST, str]:
+def _enclosing(tree: ast.AST) -> dict[ast.AST, str]:
+    """Map every node to the class that contains it, or to the top-level function if there is none.
+
+    Classes first, so a method reports its class rather than its own name; module-level functions
+    then fill in for the writers that deliberately live outside a node — a shared decision one
+    function makes for two callers is the strongest form of "one writer", and a matcher that could
+    only see classes would report it as ``module`` and hide which one.
+    """
     enclosing: dict[ast.AST, str] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
+            for child in ast.walk(node):
+                enclosing.setdefault(child, node.name)
+    for node in getattr(tree, "body", []):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             for child in ast.walk(node):
                 enclosing.setdefault(child, node.name)
     return enclosing
@@ -80,7 +91,7 @@ def _enclosing_class(tree: ast.AST) -> dict[ast.AST, str]:
 def transitions_to(source: str, state: str) -> list[str]:
     """Every ``transition(..., CaseState.<state>, ...)`` call, by enclosing class name."""
     tree = ast.parse(source)
-    enclosing = _enclosing_class(tree)
+    enclosing = _enclosing(tree)
 
     found: list[str] = []
     for node in ast.walk(tree):
@@ -144,11 +155,16 @@ class TestOnlyReconciliationReClaimsAnAttempt:
             "ReconcileNode",
         ]
 
-    def test_reconciliation_is_the_only_writer_of_waiting_external(self) -> None:
+    def test_one_function_writes_waiting_external_and_two_nodes_reach_it(self) -> None:
         """One producer, so the state means one thing.
 
-        It had none at all until this patch, which is what let four legal edges out of it rot —
+        It had none at all before the saga, which is what let four legal edges out of it rot —
         including the one to ``PLANNING`` that would have replanned on top of a dispatched effect.
+
+        The writer is a module-level function rather than a node, because two nodes reach one
+        fork: ``ExecuteNode`` when a first attempt's response never comes back, and
+        ``ReconcileNode`` when a crash left the outcome unknown. The situation is identical in
+        both, so writing the decision twice would be two chances to answer it differently.
         """
         nodes = (package_root() / "graph" / "nodes.py").read_text(encoding="utf-8")
         writers = {
@@ -158,7 +174,21 @@ class TestOnlyReconciliationReClaimsAnAttempt:
         }
 
         assert writers == {"graph/nodes.py"}
-        assert transitions_to(nodes, "WAITING_EXTERNAL") == ["ReconcileNode"]
+        assert transitions_to(nodes, "WAITING_EXTERNAL") == ["_stop_with_the_outcome_unestablished"]
+
+    def test_both_nodes_route_an_unestablished_outcome_to_that_one_function(self) -> None:
+        """The counterpart: the shared decision really is shared, not merely available."""
+        nodes = (package_root() / "graph" / "nodes.py").read_text(encoding="utf-8")
+        tree = ast.parse(nodes)
+        enclosing = _enclosing(tree)
+        callers = {
+            enclosing.get(node)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and getattr(node.func, "id", "") == "_stop_with_the_outcome_unestablished"
+        }
+
+        assert callers == {"ExecuteNode", "ReconcileNode"}
 
     def test_the_matcher_finds_what_it_claims_to(self) -> None:
         """Vacuity: a matcher that found nothing would make every assertion above pass."""
@@ -170,6 +200,8 @@ class TestOnlyReconciliationReClaimsAnAttempt:
 
         assert transitions_to(source, "EXECUTING") == ["N"]
         assert transitions_to(source, "WAITING_EXTERNAL") == []
+        module_level = "def f():\n    transition(case, CaseState.WAITING_EXTERNAL)\n"
+        assert transitions_to(module_level, "WAITING_EXTERNAL") == ["f"]
 
 
 class TestRecoveryNeverAsksAModelAnything:

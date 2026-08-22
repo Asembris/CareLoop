@@ -40,6 +40,7 @@ from saga_helpers import (
     ExplodingTriage,
     booking_key,
     executing_with_a_prepared_action,
+    ready_to_execute,
 )
 
 from careloop.graph.runner import context_for, run_case
@@ -191,6 +192,119 @@ class TestALosingWriterDoesNotTerminateTheCase:
         store.close()
 
 
+class TestALateWorkerDoesNotUndoTheOneThatWon:
+    """The second interleaving, and the one two real threads found rather than a review.
+
+    The dispatch edge selects a case while it is mid-effect. Between that condition and the node
+    body there is a gap, and a second worker can settle the case inside it — legitimately and
+    completely. The late arrival then re-reads the store, finds the preparation settled, and
+    concludes the case is inconsistent.
+
+    **The compare-and-set does not catch this one**, which is what makes it worth its own class.
+    Reading fresh is exactly what makes the write legal: the loser is not committing against a stale
+    version, it is committing a considered verdict about a case it has misread. Reproduced before
+    the guard existed::
+
+        A says: reconcile: book_appointment reconciled
+        after A: VERIFYING
+        B says: reconcile: failed, reconciliation found no prepared action ...
+        after B: FAILED
+
+    A healthy, verified-in-a-moment case terminated by the worker with nothing left to do.
+    """
+
+    def _both_workers(self, store, clinic):
+        """One node body each, so the interleaving is chosen rather than hoped for."""
+        from careloop.graph.nodes import ReconcileNode
+
+        def node():
+            return ReconcileNode(
+                "reconcile",
+                context_for(
+                    store,
+                    SAGA_EVENT,
+                    case_id=CASE_ID,
+                    triage=ExplodingTriage(),
+                    planner=ExplodingPlanner(),
+                    clinic=clinic,
+                    now=lambda: FIXED_NOW,
+                ),
+            )
+
+        winner = asyncio.run(node().run())
+        latecomer = asyncio.run(node().run())
+        return winner, latecomer
+
+    def test_the_latecomer_leaves_a_verifying_case_alone(
+        self, clinic: ClinicClient, tmp_path
+    ) -> None:
+        store = SqliteCaseStore(tmp_path / "cases.sqlite3")
+        executing_with_a_prepared_action(store)
+        try:
+            settled = store.get(CASE_ID)
+            self._both_workers(store, clinic)
+
+            case = store.get(CASE_ID)
+            assert case.state is CaseState.VERIFYING
+            assert case.failure_reason is None
+            assert len(case.actions) == 1
+            assert case.version > settled.version
+        finally:
+            store.close()
+
+    def test_the_latecomer_writes_nothing_at_all(self, clinic: ClinicClient, tmp_path) -> None:
+        """Not merely "not FAILED". The version does not move for the second worker."""
+        store = SqliteCaseStore(tmp_path / "cases.sqlite3")
+        executing_with_a_prepared_action(store)
+        try:
+            self._both_workers(store, clinic)
+            after_both = store.get(CASE_ID).version
+
+            self._both_workers(store, clinic)
+
+            assert store.get(CASE_ID).version == after_both
+        finally:
+            store.close()
+
+    def test_the_latecomer_issues_no_second_write(
+        self, clinic: ClinicClient, clinic_state: Clinic, tmp_path
+    ) -> None:
+        """It stops before ``may_replay`` is even consulted, so no request can leave."""
+        store = SqliteCaseStore(tmp_path / "cases.sqlite3")
+        executing_with_a_prepared_action(store)
+        try:
+            self._both_workers(store, clinic)
+
+            assert len(clinic_state.appointments()) == 1
+            assert len(clinic_state.available()) == 2
+        finally:
+            store.close()
+
+    def test_a_genuinely_inconsistent_case_still_fails(
+        self, clinic: ClinicClient, tmp_path
+    ) -> None:
+        """Vacuity. The guard reads the *state*, so a real inconsistency is untouched by it.
+
+        A case still sitting in ``EXECUTING`` with nothing prepared has not been settled by anybody;
+        it is a case whose own trail contradicts itself, and it still ends ``FAILED``.
+        """
+        from careloop.state.machine import transition
+
+        store = SqliteCaseStore(tmp_path / "cases.sqlite3")
+        case = ready_to_execute(store)
+        base = case.version
+        store.save(
+            transition(case, CaseState.EXECUTING, reason="setup", actor="test", now=FIXED_NOW),
+            expected_version=base,
+        )
+        try:
+            run_one(store, clinic=clinic)
+
+            assert store.get(CASE_ID).state is CaseState.FAILED
+        finally:
+            store.close()
+
+
 class TestTwoRealWorkersProduceOneOfEverything:
     """Two threads, one SQLite file, one clinic, one appointment."""
 
@@ -269,7 +383,10 @@ class TestTwoRealWorkersProduceOneOfEverything:
 
         reader = SqliteCaseStore(path)
         try:
-            assert reader.get(CASE_ID).state in (CaseState.DONE, CaseState.VERIFYING)
+            final = reader.get(CASE_ID)
+            assert final.state in (CaseState.DONE, CaseState.VERIFYING), (
+                f"{final.state}: {final.failure_reason}; {[e.summary for e in final.timeline[-6:]]}"
+            )
         finally:
             reader.close()
 

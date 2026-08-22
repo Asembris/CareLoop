@@ -292,12 +292,56 @@ class TestTheGraphShape:
         assert out_of_gate == {"execute", "plan"}
 
     def test_dispatch_can_resume_into_every_non_terminal_stage(self) -> None:
+        """``reconcile`` joined when the saga gave ``EXECUTING`` and ``WAITING_EXTERNAL`` a route.
+
+        Both states previously satisfied no outgoing condition at all, so a case abandoned
+        mid-effect ran ``("dispatch",)``, reported ``COMPLETED``, and stayed where it was.
+        """
         graph = build_graph(context_for(opened_case()))
         out_of_dispatch = {
             edge.to_node.node_id for edge in graph.edges if edge.from_node.node_id == "dispatch"
         }
 
-        assert out_of_dispatch == {"triage", "evidence", "plan", "execute", "verify"}
+        assert out_of_dispatch == {
+            "triage",
+            "evidence",
+            "plan",
+            "execute",
+            "reconcile",
+            "verify",
+        }
+
+    def test_reconciliation_reaches_verification_and_nothing_else(self) -> None:
+        """One exit, for the one ending that produced a result to check.
+
+        Its other three endings — ``WAITING_EXTERNAL``, ``AWAITING_HUMAN`` and ``FAILED`` — satisfy
+        no outgoing condition and end the run, exactly as the gate's parking does. In particular
+        there is no edge back to ``dispatch``: a case left waiting is re-attempted by a later run,
+        not by another lap of this one, so reconciliation adds no cycle for
+        ``MAX_NODE_EXECUTIONS`` to have to bound.
+        """
+        graph = build_graph(context_for(opened_case()))
+        out_of_reconcile = {
+            edge.to_node.node_id for edge in graph.edges if edge.from_node.node_id == "reconcile"
+        }
+
+        assert out_of_reconcile == {"verify"}
+
+    def test_nothing_reaches_reconciliation_except_dispatch(self) -> None:
+        """One route in. A second would be a second set of conditions to get wrong."""
+        graph = build_graph(context_for(opened_case()))
+
+        assert {
+            edge.from_node.node_id for edge in graph.edges if edge.to_node.node_id == "reconcile"
+        } == {"dispatch"}
+
+    def test_reconciliation_cannot_reach_the_planner_or_the_executor(self) -> None:
+        """The two edges that would reopen a second external effect, absent by assertion."""
+        graph = build_graph(context_for(opened_case()))
+        edges = {(edge.from_node.node_id, edge.to_node.node_id) for edge in graph.edges}
+
+        assert ("reconcile", "plan") not in edges
+        assert ("reconcile", "execute") not in edges
 
     def test_every_proposal_is_gated_and_the_planner_cannot_opt_out(self) -> None:
         """The plan → gate edge asks whether there is a proposal, never whether to check one.

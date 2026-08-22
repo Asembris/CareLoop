@@ -72,6 +72,7 @@ from strands.telemetry.metrics import EventLoopMetrics
 
 from careloop.agents.invoke import RECOVERABLE_PROPOSAL_FAILURES
 from careloop.graph.context import (
+    Preparation,
     Proposal,
     Refusal,
     RunContext,
@@ -82,8 +83,10 @@ from careloop.graph.context import (
     latest_proposal,
     policy_fingerprint,
     refusals_at,
+    unsettled_preparation,
 )
 from careloop.graph.extract import record_document, validate_and_promote
+from careloop.graph.recovery import ReplayRefused, ReplayUnavailable, may_replay, replay
 from careloop.graph.verify import (
     ObservationOutcome,
     ReadBackFailed,
@@ -667,6 +670,184 @@ class ExecuteNode(DeterministicNode):
         )
         self.context.commit(case, expected_version=base)
         return f"execute: {proposal.tool_name} refused at the tool boundary"
+
+
+class ReconcileNode(DeterministicNode):
+    """Find out what became of a durably prepared action nobody recorded the result of.
+
+    ``EXECUTING`` → ``VERIFYING`` / ``WAITING_EXTERNAL`` / ``AWAITING_HUMAN`` / ``FAILED``, and
+    ``WAITING_EXTERNAL`` → ``EXECUTING`` on the way back in.
+
+    **The recovery entry point, and the only one.** ``dispatch`` routes here for a case a previous
+    process abandoned mid-effect: ``EXECUTING`` with an ``ACTION_PREPARED`` entry and no
+    ``ActionRecord`` under its key. Before this node existed such a case had no outgoing edge at
+    all — measured, it ran ``("dispatch",)``, returned ``Status.COMPLETED``, committed nothing, and
+    sat in ``EXECUTING`` forever while the dashboard showed it as working.
+
+    **Nothing here asks a model anything.** No planner, no triage, no proposal, no new arguments and
+    no new identity. Everything it acts on was durably written before anything could leave the
+    process: the tool and the arguments from the ``PLAN_PROPOSED`` entry, the idempotency key from
+    the ``ACTION_PREPARED`` entry. ``tests/test_reconcile_writers.py`` sweeps this module to keep it
+    that way.
+
+    **Two identities, and they must agree before anything moves.** The stored key is read from the
+    preparation and the same key is re-derived from the durable proposal. Persisting alone would
+    lose drift detection; recomputing alone would lose crash-auditability; requiring agreement loses
+    neither, and a disagreement is *the finding* rather than something to resolve by preferring one.
+    That is :func:`careloop.graph.context.recheck_target`'s consistency clause applied to the
+    problem it was written for.
+
+    **Replay is licensed by the provider's write contract and never by an observation.**
+    :func:`careloop.graph.recovery.may_replay` reads a declared class and the run's observers, and
+    it is consulted *before* anything is read. A negative read is not a licence: ``ABSENT`` says the
+    provider does not hold the effect now, in the world this client addressed, which is a different
+    statement from "the write never landed and may be repeated".
+
+    **What a replay is.** The same tool, the same arguments, the same key, through the same gated
+    toolset and the same ``BeforeToolCall`` hook the first attempt went through — so the policy
+    engine judges it again, with identical inputs, and reaches the identical verdict. Against a
+    provider that keys writes durably this is a lookup that also repairs: if the original landed it
+    returns the original, and if it did not it makes the booking that should have existed. Either
+    way exactly one external effect exists afterwards, and that guarantee is the *provider's*.
+
+    **The case is ``EXECUTING`` while that happens, and that is not incidental.** The shipped rules
+    permit an external effect from ``PLANNING``, ``READY_TO_EXECUTE`` and ``EXECUTING`` and refuse
+    it everywhere else, so a replay issued from ``WAITING_EXTERNAL`` would be denied. Re-claiming
+    the attempt first is what lets the whole recovery run without widening a single rule.
+
+    **Three ways of not knowing, and all of them stop.** A provider that answered and declined, an
+    action type that may never be re-attempted, and a run with no channel to the provider all park
+    the case for a person with ``EXTERNAL_OUTCOME_NOT_ESTABLISHED`` and **no** ``Approval``. A
+    provider that did not answer at all is the one case where waiting is the correct behaviour, and
+    it is the only producer of ``WAITING_EXTERNAL``.
+
+    **It claims an effect only when one really was dispatched in this trace.** A replay that returns
+    is a genuine ``POST``, so it claims ``PERFORMED`` on the line after the call, exactly as
+    ``execute`` does and for the same reason. Every other branch claims **nothing**: CareLoop does
+    not know what became of the effect, and ``SUPPRESSED`` and ``NOT_IN_THIS_TRACE`` are both
+    positive statements it is in no position to make.
+    """
+
+    async def run(self) -> str:
+        case = self.context.current_case()
+        base = case.version
+
+        prepared = unsettled_preparation(case)
+        if prepared is None:
+            return self._fail(
+                case,
+                base,
+                "reconciliation found no prepared action for a case that was mid-effect",
+            )
+
+        proposal = latest_proposal(case)
+        if proposal is None:
+            return self._fail(case, base, "reconciliation was reached with no proposal")
+
+        derived = idempotency_key(self.context.case_id, proposal.tool_name, proposal.args)
+        if derived != prepared.idempotency_key or proposal.tool_name != prepared.tool_name:
+            return self._fail(
+                case,
+                base,
+                "the prepared action and the current proposal are different actions",
+            )
+
+        # Structurally unreachable while ``_record_action`` and the transition to ``VERIFYING``
+        # share one commit, which they do. Kept because "unreachable" is a property of today's
+        # writers, and this is what converges a case whose result was recorded without its
+        # transition landing.
+        if case.action_for(prepared.idempotency_key) is not None:
+            case = transition(
+                case,
+                CaseState.VERIFYING,
+                reason=f"{prepared.tool_name} was already recorded",
+                actor="system",
+                now=self.context.now(),
+            )
+            self.context.commit(case, expected_version=base)
+            return f"reconcile: {prepared.tool_name} was already recorded"
+
+        if not may_replay(prepared.tool_name, observers=self.context.readbacks):
+            return self._park(case, base, prepared, "no safe way to establish the outcome")
+
+        if case.state is CaseState.WAITING_EXTERNAL:
+            case = transition(
+                case,
+                CaseState.EXECUTING,
+                reason=f"re-claiming the prepared {prepared.tool_name}",
+                actor="system",
+                now=self.context.now(),
+            )
+            self.context.commit(case, expected_version=base)
+            base = case.version
+
+        cancelled = await fire_before_tool_call(
+            self.context.hooks,
+            proposal.tool_name,
+            proposal.args,
+            tool_use_id=tool_use_id(prepared.idempotency_key),
+        )
+        if cancelled is not None:
+            return self._park(case, base, prepared, "the BeforeToolCall hook cancelled the replay")
+
+        try:
+            result = replay(lambda: self.context.tools.call(proposal.tool_name, proposal.args))
+        except PolicyDenied:
+            # Not a fault, and emphatically not proof that nothing happened: an effect may already
+            # exist. A refusal here means the replay may not be issued, which leaves the outcome
+            # exactly as unknown as it was.
+            return self._park(case, base, prepared, "the gated tool refused the replay")
+        except ReplayUnavailable:
+            # Nobody answered. The only branch where waiting is the right behaviour, and the only
+            # producer of WAITING_EXTERNAL.
+            case = transition(
+                case,
+                CaseState.WAITING_EXTERNAL,
+                reason=f"the external system did not answer about {prepared.tool_name}",
+                actor="system",
+                now=self.context.now(),
+            )
+            self.context.commit(case, expected_version=base)
+            return f"reconcile: {prepared.tool_name} could not be reached"
+        except ReplayRefused:
+            # The provider answered and declined. A definite answer that establishes nothing about
+            # whether the original write landed — and the sharpest instance, a key already recorded
+            # against different arguments, is an identity contradiction no retry can resolve.
+            return self._park(case, base, prepared, "the external system refused the replay")
+
+        # A real request left this process and returned, which is the fact being claimed, on the
+        # first line at which it is known and before the record and the commit — exactly as the
+        # execute node does, and for the same reason.
+        witness_effect(
+            self.context.witness,
+            action_type=proposal.tool_name,
+            dispatch=EffectDispatch.PERFORMED,
+            args=proposal.args,
+        )
+
+        case = _record_action(case, proposal, prepared.idempotency_key, result, self.context.now())
+        case = transition(
+            case,
+            CaseState.VERIFYING,
+            reason=f"{prepared.tool_name} reconciled under its prepared identity",
+            actor="system",
+            now=self.context.now(),
+        )
+        self.context.commit(case, expected_version=base)
+        return f"reconcile: {prepared.tool_name} reconciled"
+
+    def _fail(self, case: Case, base: int, reason: str) -> str:
+        case = transition(
+            case, CaseState.FAILED, reason=reason, actor="system", now=self.context.now()
+        )
+        self.context.commit(case, expected_version=base)
+        return f"reconcile: failed, {reason}"
+
+    def _park(self, case: Case, base: int, prepared: Preparation, detail: str) -> str:
+        """Hand the case to a person with the outcome still unknown."""
+        case = _park_with_nothing_established(case, prepared, detail, self.context.now())
+        self.context.commit(case, expected_version=base)
+        return f"reconcile: {prepared.tool_name} could not be established"
 
 
 class VerifyNode(DeterministicNode):
@@ -1315,6 +1496,68 @@ def _park_with_nothing_certifiable(case: Case, proposal: Proposal, key: str, now
         case,
         CaseState.AWAITING_HUMAN,
         reason=f"{proposal.tool_name} could not be confirmed and needs a person",
+        actor="system",
+        now=now,
+    )
+
+
+def _park_with_nothing_established(case: Case, prepared: Preparation, detail: str, now) -> Case:
+    """Stop with the outcome of a dispatched action unknown, and hand the case to a person.
+
+    ``EXECUTING`` → ``AWAITING_HUMAN``. **No approval is raised**, for the reason the two sibling
+    parkings raise none and then one of its own: there is nothing a decision could authorise,
+    because the action was already authorised and already dispatched. What is missing is not
+    permission but knowledge, and no answer a caregiver posts supplies it.
+
+    **The third handoff, and it means a third thing.** ``NO_SAFE_ACTION_AVAILABLE`` says every
+    available action was refused and nothing was done. ``EXTERNAL_STATE_NOT_CONFIRMED`` says
+    something *was* done, its result was recorded, and an independent read could not confirm it.
+    This says something *may* have been done and CareLoop cannot find out — it holds no result at
+    all. The three share a state and a timeline kind because all three mean "a person is needed
+    now", and they are told apart by their reason code, which is what a reason code is for.
+
+    Reusing ``EXTERNAL_STATE_NOT_CONFIRMED`` would send a caregiver on the wrong errand. Its text
+    says "an action already carried out", and here whether it was carried out is the open question:
+    the instruction that follows from this is *check whether an appointment exists*, not *check
+    whether the appointment is right*.
+
+    **Not replanned, for the reason a failed verification is not replanned**, and with less slack:
+    there, at least, an ``ActionRecord`` existed and duplicate suppression could catch an identical
+    reproposal. Here there is none, so a reproposal would suppress nothing, and
+    ``book_appointment.reason`` is free text that keys differently on a full stop. The state machine
+    refuses ``EXECUTING → PLANNING`` outright, so this is a property of the machine rather than of
+    this function remembering.
+
+    **``prepared`` carries the identity**, which is why it is passed rather than re-derived: it is
+    the same object :class:`ReconcileNode` proved agrees with the current proposal, so "the action
+    this handoff is about" and "the action that could not be established" are one thing by
+    construction. ``detail`` says which of the ways of not knowing occurred and stays in the
+    diagnostic, which the API withholds — the payload carries the closed vocabulary only.
+    """
+    case = append_event(
+        case,
+        kind=TimelineKind.MANUAL_HANDOFF_REQUIRED,
+        actor="system",
+        summary=f"whether {prepared.tool_name} happened could not be established",
+        diagnostic=(
+            f"{prepared.tool_name} was prepared for this case under idempotency key "
+            f"{prepared.idempotency_key} and dispatched, and reconciliation could not establish "
+            f"what became of it: {detail}. CareLoop holds no result for this action and will not "
+            f"guess — the effect may exist in the external system or may not, and re-attempting it "
+            f"is not something an agent may decide. No approval is raised: the action was already "
+            f"authorised, and what is missing is knowledge rather than permission."
+        ),
+        payload={
+            "tool_name": prepared.tool_name,
+            "reason_code": str(ReasonCode.EXTERNAL_OUTCOME_NOT_ESTABLISHED),
+            "idempotency_key": prepared.idempotency_key,
+        },
+        now=now,
+    )
+    return transition(
+        case,
+        CaseState.AWAITING_HUMAN,
+        reason=f"whether {prepared.tool_name} happened is not known and needs a person",
         actor="system",
         now=now,
     )

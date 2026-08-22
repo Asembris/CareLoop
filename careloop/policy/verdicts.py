@@ -156,6 +156,40 @@ class ReasonCode(StrEnum):
     exception name into the product vocabulary.
     """
 
+    EXTERNAL_OUTCOME_NOT_ESTABLISHED = "EXTERNAL_OUTCOME_NOT_ESTABLISHED"
+    """Whether an authorised effect happened at all is not known, and cannot be settled here.
+
+    The tenth code, and the fourth that parks a *case* rather than refusing a call — so like the
+    three above no rule carries it and the engine never emits it. The graph writes it onto the
+    ``MANUAL_HANDOFF_REQUIRED`` entry :func:`careloop.graph.nodes._park_with_nothing_established`
+    appends, when reconciliation of a durably prepared action cannot determine what became of it and
+    the action may not be re-attempted.
+
+    **This is not ``EXTERNAL_STATE_NOT_CONFIRMED`` and the difference is what a caregiver does
+    next.** That code means CareLoop holds a receipt — an effect was carried out, its result was
+    recorded, and an independent read could not confirm that the world matches it. The instruction
+    it implies is *check whether the appointment is right*. This one means CareLoop holds no receipt
+    at all: an action was frozen, dispatched, and the process died or the provider went silent, so
+    the honest statement is that nobody knows whether anything happened. The instruction it implies
+    is *check whether an appointment exists*. Those are different errands, and a caregiver handed
+    the wrong one wastes the trip.
+
+    Reusing the other code would also put a false claim in an append-only trail, which is the
+    argument every park code here has had to make. ``EXTERNAL_STATE_NOT_CONFIRMED``'s own text says
+    "an action already carried out", and on this path whether it was carried out is precisely the
+    open question.
+
+    **One code for every way of not knowing**, for the reason ``EXTERNAL_STATE_NOT_CONFIRMED`` is
+    one code for three evidence states. A provider that answered and refused, an action type that
+    may never be autonomously re-attempted, a run with no channel to the provider, and a replay the
+    policy engine declined are four different facts; what they share is that CareLoop cannot
+    establish the outcome and will not guess, and that is the whole of what a caregiver or a
+    lifecycle can act on.
+
+    ``_NOT_ESTABLISHED`` rather than ``_UNKNOWN`` because it says what failed — an attempt to find
+    out — where "unknown" reads as though nobody tried. Something did try, and reported nothing.
+    """
+
 
 #: The only strings that ever reach the model.
 #:
@@ -208,6 +242,15 @@ REASON_TEXT: Final[Mapping[ReasonCode, str]] = {
     ReasonCode.NO_VALID_PROPOSAL_PRODUCED: (
         "No valid next action could be formed here. CareLoop has stopped without doing anything "
         "and the case needs manual handling."
+    ),
+    # Says that the outcome is unknown and stops. It deliberately does not say the action happened
+    # — that is the open question — and it deliberately does not say it did not, which is the error
+    # that would invite a second attempt. Like the two codes above it points at the caregiver, and
+    # like the one above it gives the planner no directive: an effect may already exist, so there is
+    # nothing safe for a model to propose about it.
+    ReasonCode.EXTERNAL_OUTCOME_NOT_ESTABLISHED: (
+        "Whether an action CareLoop was authorised to carry out actually happened could not be "
+        "established. A caregiver has been asked to check before anything further is done."
     ),
 }
 

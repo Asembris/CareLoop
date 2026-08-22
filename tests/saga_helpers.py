@@ -53,7 +53,7 @@ def booking_key(case_id: str = CASE_ID, args: dict[str, str] | None = None) -> s
     return idempotency_key(case_id, "book_appointment", args or BOOKING_ARGS)
 
 
-def _controlled(key: str, value: str) -> Fact:
+def controlled_fact(key: str, value: str) -> Fact:
     """A fact validation promoted, as the evidence node leaves it.
 
     ``CONTROLLED`` rather than ``TRUSTED`` because that is what ``allow-booking-on-validated-slot``
@@ -76,8 +76,8 @@ def _controlled(key: str, value: str) -> Fact:
 #: seeds. Without these two the shipped rules refuse the booking at the tool boundary, and a saga
 #: test built on a refused booking would be proving recovery over an effect that never happens.
 VALIDATED_BOOKING_FACTS: tuple[Fact, ...] = (
-    _controlled("patient_id", PATIENT),
-    _controlled("slot_start", SLOT),
+    controlled_fact("patient_id", PATIENT),
+    controlled_fact("slot_start", SLOT),
 )
 
 
@@ -240,6 +240,7 @@ __all__ = [
     "ExplodingPlanner",
     "ExplodingTriage",
     "booking_key",
+    "controlled_fact",
     "count",
     "executing_with_a_prepared_action",
     "kinds",

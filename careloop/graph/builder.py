@@ -43,6 +43,11 @@ needs a terminal node — and ``plan`` reaches ``AWAITING_HUMAN`` too, when the 
 retry produced no proposal to gate. That is the only outcome of ``plan`` that is not a proposal, and
 it is why ``plan → gate`` carries a condition; see the edge itself.
 
+**A case abandoned mid-effect resumes through ``reconcile``.** ``dispatch`` routes ``EXECUTING``
+and ``WAITING_EXTERNAL`` there — a durably prepared action whose result nobody recorded — and that
+node re-issues the frozen identity, or stops. Neither state had an outgoing edge before it existed,
+so a case that crashed mid-effect ran ``("dispatch",)`` and sat where it was for good.
+
 **There was a second cycle, ``verify → plan``, and it was a defect rather than a feature.** A failed
 verification returned the case to the planner. Every entry into ``VERIFYING`` is post-effect, so
 what that actually did was replan on top of an action already carried out: an identical reproposal
@@ -68,6 +73,7 @@ from careloop.graph.nodes import (
     ExecuteNode,
     GateNode,
     PlanNode,
+    ReconcileNode,
     TriageNode,
     VerifyNode,
 )
@@ -75,9 +81,10 @@ from careloop.state.case import CaseState
 
 #: Node executions one run may use.
 #:
-#: A happy path is seven (dispatch, triage, evidence, plan, gate, execute, verify) and a resume
-#: after approval is three. Each refused proposal costs two more, so this leaves room for roughly
-#: eight replans before the bound fires. Generous rather than tight: the bound is a runaway
+#: A happy path is seven (dispatch, triage, evidence, plan, gate, execute, verify), a resume
+#: after approval is three, and a crash recovery is three (dispatch, reconcile, verify). Each
+#: refused proposal costs two more, so this leaves room for roughly eight replans before the
+#: bound fires. Generous rather than tight: the bound is a runaway
 #: detector, and a case that failed because a legitimate replan ran out of room would be a bug
 #: reported as a policy outcome.
 #:
@@ -86,6 +93,11 @@ from careloop.state.case import CaseState
 #: and ``run_case`` marked it ``FAILED``, so a domain outcome was being decided by a budget. Nothing
 #: reaches it on that path now — a verification failure parks the case in seven nodes — and the only
 #: cycle left is the gate's replan, which is what this was sized for.
+#:
+#: **Reconciliation adds no cycle.** ``outgoing(reconcile)`` is the one edge to ``verify``; its
+#: other three endings satisfy no condition and stop the run. A case left in ``WAITING_EXTERNAL``
+#: is re-attempted by a *later run*, not by another lap of this one, so nothing here counts
+#: retries and invariant 5 needs nothing new.
 MAX_NODE_EXECUTIONS: Final[int] = 24
 
 #: Wall-clock ceiling for one run, in seconds. Offline on the mock this is milliseconds of work;
@@ -102,10 +114,24 @@ EVIDENCE: Final[str] = "evidence"
 PLAN: Final[str] = "plan"
 GATE: Final[str] = "gate"
 EXECUTE: Final[str] = "execute"
+RECONCILE: Final[str] = "reconcile"
 VERIFY: Final[str] = "verify"
 
 #: Every node id, in the order a case meets them.
-NODE_IDS: Final[tuple[str, ...]] = (DISPATCH, TRIAGE, EVIDENCE, PLAN, GATE, EXECUTE, VERIFY)
+#:
+#: ``reconcile`` sits between ``execute`` and ``verify`` because that is where a case meets it: it
+#: is the recovery entry for an effect ``execute`` prepared and did not get to record, and what it
+#: hands on is a result for ``verify`` to check. A happy path never touches it.
+NODE_IDS: Final[tuple[str, ...]] = (
+    DISPATCH,
+    TRIAGE,
+    EVIDENCE,
+    PLAN,
+    GATE,
+    EXECUTE,
+    RECONCILE,
+    VERIFY,
+)
 
 
 def build_graph(
@@ -124,6 +150,7 @@ def build_graph(
     builder.add_node(PlanNode(PLAN, context), PLAN)
     builder.add_node(GateNode(GATE, context), GATE)
     builder.add_node(ExecuteNode(EXECUTE, context), EXECUTE)
+    builder.add_node(ReconcileNode(RECONCILE, context), RECONCILE)
     builder.add_node(VerifyNode(VERIFY, context), VERIFY)
 
     # Dispatch routes to wherever the case already is. This is what makes a case parked for a
@@ -140,6 +167,22 @@ def build_graph(
     # verify self-edge — would have been a second way into the same node with its own conditions to
     # get wrong.
     builder.add_edge(DISPATCH, VERIFY, when_case_is(context, CaseState.VERIFYING))
+    # **The recovery route, and the whole of it.** A case abandoned mid-effect is EXECUTING with a
+    # durably prepared action and no recorded result; one whose reconciliation could not reach the
+    # provider is WAITING_EXTERNAL with the same prepared action. Both mean "an authorised action
+    # was dispatched and nobody knows what became of it", so both go to the same node — and neither
+    # goes anywhere else. Before this edge existed, either state satisfied no outgoing condition
+    # at all: the run ran ("dispatch",), reported COMPLETED, and left the case stuck for good.
+    #
+    # Pointedly **not** to `plan` and **not** to `execute`. To `plan` is the session-Q defect, which
+    # TRANSITIONS now refuses outright. To `execute` would put a second route into the node that
+    # dispatches effects, with its own conditions to get wrong, and the point of reconciliation is
+    # that it consults a durable record *before* deciding whether a dispatch may happen at all.
+    builder.add_edge(
+        DISPATCH,
+        RECONCILE,
+        when_case_is(context, CaseState.EXECUTING, CaseState.WAITING_EXTERNAL),
+    )
 
     builder.add_edge(TRIAGE, EVIDENCE, when_case_is(context, CaseState.GATHERING_EVIDENCE))
     builder.add_edge(EVIDENCE, PLAN, when_case_is(context, CaseState.PLANNING))
@@ -168,6 +211,11 @@ def build_graph(
     builder.add_edge(GATE, PLAN, when_case_is(context, CaseState.PLANNING))
 
     builder.add_edge(EXECUTE, VERIFY, when_case_is(context, CaseState.VERIFYING))
+    # A reconciliation that established the outcome has recorded a result and moved the case to
+    # VERIFYING, so what follows is an ordinary verification — the same node, the same independent
+    # read, the same two outcomes. Its other three endings (WAITING_EXTERNAL, AWAITING_HUMAN,
+    # FAILED) satisfy no outgoing condition and end the run, exactly as the gate's parking does.
+    builder.add_edge(RECONCILE, VERIFY, when_case_is(context, CaseState.VERIFYING))
     # **Nothing leaves verify.** There was a verify -> plan edge here, and removing it is half of
     # what stops a failed verification becoming a second external effect; the other half is
     # TRANSITIONS refusing VERIFYING -> PLANNING, so a node that tried to route around this edge
@@ -197,6 +245,7 @@ __all__ = [
     "NODE_IDS",
     "NODE_TIMEOUT",
     "PLAN",
+    "RECONCILE",
     "TRIAGE",
     "VERIFY",
     "build_graph",

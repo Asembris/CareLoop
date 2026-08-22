@@ -4,9 +4,11 @@ Pinned against **`strands-agents==1.51.0`**, Python 3.12.0, Windows.
 
 Sections 1–6 are the four SDK surfaces the CareLoop design depends on, plus the Bedrock model-id
 question. Section 7 is `deepteam==1.0.9`, added in session G for the adversarial evaluation under
-`evals/`. Sections 8 and 9 are the AgentCore Evaluations compatibility spike: §8 is the IAM-blocked first
-attempt, kept as evidence, and §9 is the rerun that resolved every question. Each section was
-verified by executing code, not by reading signatures.
+`evals/`. Sections 8 to 10 are AgentCore Evaluations: §8 is the IAM-blocked first attempt, kept as
+evidence, §9 is the rerun that resolved every compatibility question, and §10 is what the deployed
+evaluator then measured against real production traces — the full record is in
+[`agentcore-evaluations-proof.md`](agentcore-evaluations-proof.md). Each section was verified by
+executing code, not by reading signatures.
 
 ## 1. GraphBuilder — CONFIRMED
 
@@ -792,3 +794,41 @@ adjustments are now known and belong to Patch B rather than to a redesign:
 4. The Lambda reads the **delivered** span shape, tolerating the injected `session_id`, `source`,
    `langfuse`, snake_case aliases and ISO time fields, and must not require `evaluatorId` or
    `evaluatorName` in its envelope.
+
+## 10. AgentCore Evaluations — Patch E: the evaluator ran in AWS on production traces
+
+Patch A measured the substrate. Patch E deployed the real evaluator and judged six real production
+traces with it. The evidence lives in
+[`agentcore-evaluations-proof.md`](agentcore-evaluations-proof.md); three things belong here
+because they close questions this document left open.
+
+**The `careloop.*` attributes survive delivery.** §9's A1 proved that `http.*` attributes reach a
+code-based evaluator intact on `httpx` spans. It did not test CareLoop's own custom attributes on
+the graph span, which is what the whole SettlementIntegrity design rests on. Measured now, from a
+temporary shape-only diagnostic evaluator run against a real trace: **exactly nine**
+`careloop.*` attributes arrive, nested under `attributes`, on the `strands.telemetry.tracer` span.
+No `careloop.effect.action_key`, and no tenth attribute of any spelling — the sweep was by prefix.
+
+**The timestamp field names, which §9 recorded as unmeasured.** Patch B's
+`START_NANOS_KEYS` / `END_NANOS_KEYS` were a candidate list because §9 recorded that "both original
+timestamps arrive byte-for-byte as stored" without naming the fields. Every delivered span carries
+**all four**: `startTimeUnixNano` and `endTimeUnixNano` as `int`, `start_time` and `end_time` as
+ISO `str`. The first candidate in each tuple is the one that arrives, so the evaluator's
+nanoseconds-first path is what real data exercises and the ISO fallback is genuinely present
+beneath it. No evaluator change was made or needed.
+
+**The action prefix §8 got wrong is the one that works.** §9 corrected
+`bedrock-agentcore-control:CreateEvaluator` to `bedrock-agentcore:CreateEvaluator` from the service
+model; Patch E used the corrected form to create a Lambda-backed evaluator and call `Evaluate` six
+times, so the correction is now confirmed by execution rather than by reading. §8's block is left
+as written, for the reason its own banner gives.
+
+**A3 holds after use, not just before it.** `lambda:GetPolicy` on the evaluator's function returned
+`ResourceNotFoundException` before `CreateEvaluator` and again after six successful `Evaluate`
+calls, and no AgentCore service role was created at any point. Stated with §9's narrowness: this is
+the **on-demand** path, and it does not generalise to online evaluation.
+
+One correction to how §9 reads. `Evaluate` requires `evaluationInput.sessionSpans`, so the
+on-demand path is **caller-supplied**: AWS does not fetch the trace from CloudWatch. §9 is not
+wrong about this — it passed spans in too — but the distinction matters enough for a claim that it
+is spelled out in the proof document rather than left implicit.

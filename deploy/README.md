@@ -149,6 +149,32 @@ curl -fsS https://<distribution>.cloudfront.net/api/health      # {"status":"ok"
 
 If any of those fails, swap to the commented `ExecStart` and restart; the demo is unaffected.
 
+### Evaluations
+
+A deterministic code evaluator runs in AWS Lambda under Bedrock AgentCore Evaluations and judges
+whether CareLoop's settlement claim agrees with the transport evidence in the same production
+trace. It is **on demand only** — nothing evaluates continuously, and no online evaluation
+configuration exists.
+
+| Resource | Note |
+|---|---|
+| `careloop-settlement-evaluator` | Lambda, `python3.12`, 128 MB, 30 s. Packaged from `evaluators/` alone: no dependencies, no env vars, no VPC |
+| `careloop-settlement-evaluator-role` | trusts Lambda only; may write its own log stream and nothing else |
+| `/aws/lambda/careloop-settlement-evaluator` | 14-day retention |
+| `CareLoopSettlementIntegrity-…` | the AgentCore evaluator, `level=TRACE` |
+
+```bash
+python scripts/evaluations_deploy.py        # idempotent: creates or updates, then asserts the shape
+```
+
+It refuses to proceed if the log group is missing or would keep records forever, if the function
+has grown environment variables, or if a Lambda resource-based policy has appeared — the on-demand
+path needs none, and one turning up is a changed AWS contract rather than something to work around.
+
+The running CareLoop application has no part in this: it never calls `Evaluate`, never invokes the
+function, and gains no permission from it. The measured results are in
+[`../docs/agentcore-evaluations-proof.md`](../docs/agentcore-evaluations-proof.md).
+
 ## Deploying
 
 From a checkout, with SSH access to the instance:

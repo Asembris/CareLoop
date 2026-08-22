@@ -35,6 +35,7 @@ from careloop.graph.verify import (
     ObservationUnavailable,
     ReadBack,
 )
+from careloop.graph.witness import NO_WITNESS, Witness
 from careloop.policy.gate import PolicyGate
 from careloop.policy.gated import GatedToolSet
 from careloop.policy.hook import PolicyHook, policy_registry
@@ -594,6 +595,21 @@ class RunContext:
 
     Present so the layered-enforcement claim is testable rather than asserted: with this ``False``
     the ``BeforeToolCall`` hook is absent and the gated toolset must still refuse the same calls.
+    """
+
+    witness: Witness = NO_WITNESS
+    """Where a bounded statement of what already happened is recorded. A **sink**, never an input.
+
+    The one collaborator on this object that nothing in the graph may consult. Every other field
+    here changes what a run *does*; this one changes only what a run *says about itself* afterwards,
+    and the default records nothing at all. A deployment supplies
+    ``scripts.witness_span.SpanAttributeWitness``; every test and every local run keeps
+    :data:`~careloop.graph.witness.NO_WITNESS`, so importing CareLoop never requires a telemetry
+    stack.
+
+    It is a :class:`~careloop.graph.witness.NullWitness` rather than ``None`` on purpose: with a
+    real object always present, no node can be written to ask whether telemetry is enabled, and
+    "is anybody listening" stops being a question the domain is able to branch on.
     """
 
     def __post_init__(self) -> None:

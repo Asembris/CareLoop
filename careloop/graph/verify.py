@@ -41,6 +41,7 @@ case could reach ``DONE`` without anything having been checked, so it fails on i
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final
 
@@ -229,6 +230,24 @@ def _verify_email(args: Mapping[str, str], result: ActionResult) -> list[str]:
     return _mismatches(result, args, {"to": "to", "subject": "subject"}, "message_id")
 
 
+#: Which booking result field is compared against which authorised argument.
+#:
+#: Extracted from the body of :func:`_verify_booking` rather than restated: it is now read by
+#: :func:`check_observable_state_matches_verification` as well, and two spellings of "what the
+#: clinic holds" is exactly the drift :data:`OBSERVABLE_STATE` exists to make impossible. The
+#: **order is load-bearing** — :func:`_mismatches` iterates it, so it decides the order of the
+#: diagnostics a timeline records — and is therefore left exactly as it was rather than sorted.
+_BOOKING_COMPARISON: Final[Mapping[str, str]] = {
+    "provider_id": "provider_id",
+    "patient_id": "patient_id",
+    "slot_start": "slot_start",
+    "reason": "reason",
+}
+
+#: The clinic's own identifier for a booking, and the only thing a read-back can be keyed on.
+_BOOKING_IDENTIFIER: Final[str] = "confirmation_id"
+
+
 def _verify_booking(args: Mapping[str, str], result: ActionResult) -> list[str]:
     """Every declared booking argument, compared the same way.
 
@@ -241,17 +260,7 @@ def _verify_booking(args: Mapping[str, str], result: ActionResult) -> list[str]:
     """
     if not isinstance(result, AppointmentBooked):
         return [f"expected AppointmentBooked, the action recorded a {type(result).__name__}"]
-    return _mismatches(
-        result,
-        args,
-        {
-            "provider_id": "provider_id",
-            "patient_id": "patient_id",
-            "slot_start": "slot_start",
-            "reason": "reason",
-        },
-        "confirmation_id",
-    )
+    return _mismatches(result, args, _BOOKING_COMPARISON, _BOOKING_IDENTIFIER)
 
 
 def _verify_upload(args: Mapping[str, str], result: ActionResult) -> list[str]:
@@ -315,6 +324,59 @@ RESULT_TYPES: Final[Mapping[str, type[ActionResult]]] = {
 #: ``runner.py``, in the state machine or in an API route: a tool name in lifecycle code is the
 #: thing ``check_verifiers_cover_the_registry`` exists to prevent one layer down.
 INDEPENDENTLY_OBSERVABLE: Final[frozenset[str]] = frozenset({"book_appointment"})
+
+
+@dataclass(frozen=True, slots=True)
+class ObservableEffect:
+    """The externally held state of one action type, named so it can be digested and compared.
+
+    :attr:`state_fields` is the **joint state universe**: the fields the external system holds and
+    the read-back compares. It is deliberately not the registry's argument set — the registry says
+    what CareLoop may *send*, and the two answer different questions even where they coincide, as
+    ``tests/test_evaluator_drift.py`` says in as many words. Anything digesting "the state" has to
+    follow this one, or an argument that is sent but not externally held would silently make two
+    digests incomparable.
+
+    Sorted, so that a field list rendered from it has one canonical spelling and no consumer has to
+    normalise. Deduplicated, so a repeated field cannot be absorbed by a set conversion downstream.
+
+    :attr:`resource_id_field` names the identifier the external system minted, which is what a
+    later independent read is keyed on.
+    """
+
+    state_fields: tuple[str, ...]
+    resource_id_field: str
+
+
+#: What each independently observable action type compares against the external system.
+#:
+#: The bridge between :data:`INDEPENDENTLY_OBSERVABLE` and the per-type verifier, read only by
+#: :func:`check_observable_state_matches_verification`. An entry is required for every observable
+#: type, so adding one without saying what it compares fails at import rather than producing a
+#: state declaration nothing corroborates.
+_EXTERNAL_COMPARISONS: Final[Mapping[str, tuple[Mapping[str, str], str]]] = {
+    "book_appointment": (_BOOKING_COMPARISON, _BOOKING_IDENTIFIER),
+}
+
+#: The externally held state of every independently observable action type.
+#:
+#: **Declared once and checked against verification at import**, because it is now read by two
+#: consumers that must not disagree: the read-back already compares these fields, and
+#: :mod:`careloop.graph.witness` digests them so that what CareLoop executed and what the world
+#: holds can be compared by something outside this process. A digest universe that drifted from the
+#: comparison universe would not raise anywhere — it would quietly make two digests that were never
+#: about the same thing, and their inequality would be reported as a divergence that never
+#: happened.
+#:
+#: It lives here for the reason :data:`INDEPENDENTLY_OBSERVABLE` does: this module already owns what
+#: verification means per action type, and a field universe in a telemetry adapter would be a
+#: domain fact stored where no domain test would look at it.
+OBSERVABLE_STATE: Final[Mapping[str, ObservableEffect]] = {
+    "book_appointment": ObservableEffect(
+        state_fields=("patient_id", "provider_id", "reason", "slot_start"),
+        resource_id_field=_BOOKING_IDENTIFIER,
+    ),
+}
 
 
 class UnverifiableAction(Exception):
@@ -381,8 +443,68 @@ def check_observable_tools_are_declared() -> None:
         )
 
 
+def check_observable_state_matches_verification() -> None:
+    """Fail at import if the declared external state disagrees with what verification compares.
+
+    Four separate disagreements, each of which would be silent and none of which would raise on its
+    own:
+
+    A type in :data:`OBSERVABLE_STATE` that is not in :data:`INDEPENDENTLY_OBSERVABLE`, or the
+    reverse — a state universe for something nothing observes, or an observable action whose state
+    nobody declared. An **equality** rather than a subset, unlike
+    :func:`check_observable_tools_are_declared`: both directions are defects here, because both
+    consumers index this table by exactly the observable types.
+
+    A type with no entry in :data:`_EXTERNAL_COMPARISONS` — a declaration nothing corroborates.
+
+    A field set that is not exactly what the verifier compares. This is the one that matters: the
+    read-back's comparison universe *is* the definition of the externally held state, and a digest
+    taken over a different set would produce an inequality that means nothing about the world.
+
+    A resource identifier that is not the one the verifier requires, or a field tuple that is
+    unsorted or carries a duplicate — both of which would make the rendered field list depend on
+    how it happened to be written down.
+
+    Raises:
+        UnverifiableAction: naming the disagreement.
+    """
+    declared = frozenset(OBSERVABLE_STATE)
+    if declared != INDEPENDENTLY_OBSERVABLE:
+        raise UnverifiableAction(
+            f"the declared external state and the observable action types disagree: "
+            f"observable but undeclared {sorted(INDEPENDENTLY_OBSERVABLE - declared)}, "
+            f"declared but unobservable {sorted(declared - INDEPENDENTLY_OBSERVABLE)}"
+        )
+
+    for action_type, observable in OBSERVABLE_STATE.items():
+        comparison = _EXTERNAL_COMPARISONS.get(action_type)
+        if comparison is None:
+            raise UnverifiableAction(
+                f"action type {action_type!r} declares an external state that no verifier "
+                f"comparison corroborates; a state universe nothing compares is undefined"
+            )
+        compared, identifier = comparison
+        if frozenset(observable.state_fields) != frozenset(compared):
+            raise UnverifiableAction(
+                f"the external state declared for {action_type!r} is not what verification "
+                f"compares: declared {sorted(observable.state_fields)}, compared {sorted(compared)}"
+            )
+        if observable.state_fields != tuple(sorted(set(observable.state_fields))):
+            raise UnverifiableAction(
+                f"the external state declared for {action_type!r} must be sorted and free of "
+                f"duplicates so its rendered field list has one spelling; it is "
+                f"{list(observable.state_fields)}"
+            )
+        if observable.resource_id_field != identifier:
+            raise UnverifiableAction(
+                f"the resource identifier declared for {action_type!r} is "
+                f"{observable.resource_id_field!r}; verification requires {identifier!r}"
+            )
+
+
 check_verifiers_cover_the_registry()
 check_observable_tools_are_declared()
+check_observable_state_matches_verification()
 
 
 def verify_action(
@@ -479,8 +601,10 @@ def verify_action(
 
 __all__ = [
     "INDEPENDENTLY_OBSERVABLE",
+    "OBSERVABLE_STATE",
     "RESULT_TYPES",
     "VERIFIERS",
+    "ObservableEffect",
     "ObservationAbsent",
     "ObservationOutcome",
     "ObservationUnavailable",
@@ -489,6 +613,7 @@ __all__ = [
     "UnverifiableAction",
     "Verification",
     "Verifier",
+    "check_observable_state_matches_verification",
     "check_observable_tools_are_declared",
     "check_verifiers_cover_the_registry",
     "rehydrate",

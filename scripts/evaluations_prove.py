@@ -107,12 +107,26 @@ def path_segments(span: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(trimmed.split("/")) if trimmed else ()
 
 
+def otel_status(span: Mapping[str, Any]) -> Any:
+    """The OpenTelemetry status code, from the nested object or the flat attribute.
+
+    Production spans carry ``{"status": {"code": "UNSET"}}``; reading only the flat spelling would
+    report ``null`` for a span that plainly says ``UNSET``, and ``UNSET`` is the whole of Patch A's
+    finding that success is *not* ``OK``. An evidence table that misdescribes it is worse than one
+    that omits it.
+    """
+    status = span.get("status")
+    if isinstance(status, Mapping) and "code" in status:
+        return status["code"]
+    return attribute(span, "status.code")
+
+
 def status_of(span: Mapping[str, Any]) -> tuple[Any, Any, Any]:
     """The two HTTP status spellings and the OTel status code, unresolved and unreconciled."""
     return (
         attribute(span, "http.status_code"),
         attribute(span, "http.response.status_code"),
-        attribute(span, "status.code"),
+        otel_status(span),
     )
 
 
@@ -361,6 +375,15 @@ def main() -> int:
     parser.add_argument("--scenario", default="unnamed", help="label for the evidence record")
     parser.add_argument("--expect", help="PASS | NOT_APPLICABLE | FAIL:<CHECK_ID>")
     parser.add_argument("--window-minutes", type=float, default=60.0)
+    parser.add_argument(
+        "--since",
+        help=(
+            "ISO-8601 UTC instant to search from. CareLoop's idempotency keys are deterministic, "
+            "so one scenario run always names the same clinic resource: bounding the search by "
+            "the window of a single run is what makes discovery identify a run rather than a shape"
+        ),
+    )
+    parser.add_argument("--until", help="ISO-8601 UTC instant to search to; defaults to now")
     parser.add_argument("--list", action="store_true", help="summarise the window and stop")
     parser.add_argument("--no-evaluate", action="store_true", help="discovery and transport only")
     parser.add_argument("--out", help="write the evidence record here as JSON")
@@ -368,8 +391,14 @@ def main() -> int:
 
     logs = _logs_client()
     now = datetime.now(UTC)
-    end_ms = int(now.timestamp() * 1000) + 60_000
-    start_ms = end_ms - int(arguments.window_minutes * 60_000)
+    if arguments.until:
+        end_ms = int(datetime.fromisoformat(arguments.until).timestamp() * 1000)
+    else:
+        end_ms = int(now.timestamp() * 1000) + 60_000
+    if arguments.since:
+        start_ms = int(datetime.fromisoformat(arguments.since).timestamp() * 1000)
+    else:
+        start_ms = end_ms - int(arguments.window_minutes * 60_000)
 
     try:
         if arguments.list:
@@ -388,6 +417,10 @@ def main() -> int:
         record: dict[str, Any] = {
             "scenario": arguments.scenario,
             "captured_at": now.isoformat(),
+            "search_window": {
+                "start": datetime.fromtimestamp(start_ms / 1000, UTC).isoformat(),
+                "end": datetime.fromtimestamp(end_ms / 1000, UTC).isoformat(),
+            },
             "trace_id": trace_id,
             "payload_sha256": hashlib.sha256(payload).hexdigest(),
             "payload_bytes": len(payload),

@@ -21,6 +21,7 @@ from scripts.evaluations_prove import (
     check_expectation,
     claim_attribute_names,
     deduplicate,
+    otel_status,
     path_segments,
     scope_of,
     trace_of,
@@ -125,7 +126,13 @@ class TestTheTransportFactsDescribeTheTraceHonestly:
 
     def test_both_status_spellings_are_reported_unreconciled(self) -> None:
         facts = transport_facts(PERFORMED)
-        assert facts["writes"][0]["status"] == (201, 201, None)
+        assert facts["writes"][0]["status"] == (201, 201, "UNSET")
+
+    def test_the_otel_status_is_read_from_the_nested_object(self) -> None:
+        """Production carries it nested. Reporting ``None`` there would misdescribe the span."""
+        assert otel_status({"status": {"code": "UNSET"}}) == "UNSET"
+        assert otel_status({"attributes": {"status.code": "ERROR"}}) == "ERROR"
+        assert otel_status({}) is None
 
     def test_a_trace_with_no_claim_reports_no_attribute_names(self) -> None:
         facts = transport_facts([PERFORMED[1], PERFORMED[2]])

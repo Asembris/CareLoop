@@ -6377,6 +6377,153 @@ consecutive clean; it passes in isolation every time. Worth a look if it ever fa
 
 34, 33, 29, 30, 31, 22, 25, 26, 28. **Unchanged.**
 
+## Session Y — 2026-08-22
+
+### Position
+
+Eight patches, closing the **crash-safe external effects** item. An authorised action's identity is
+now durably frozen before anything can leave the process, and a process that dies after that
+converges instead of stopping. Two crash proofs, both against a real Demo World on a loopback
+socket: a child process killed with `os._exit` on the line after the clinic confirms, and a real
+write whose response is discarded.
+
+| Commit | Subject |
+|---|---|
+| `7e336da` | Persist the authorized action before dispatch |
+| `402f466` | Make external waiting a precise lifecycle state |
+| `188417c` | Reconcile prepared external actions deterministically |
+| `bf0f01c` | Handle losing recovery writers without failing the case |
+| `dc09a67` | Resume unsettled external actions on startup |
+| `6d33501` | Prove booking recovery across process death and lost responses |
+| `3f5e5df` | Account for readback-only recovery traces |
+| *(this)* | Document crash-safe external action recovery |
+
+Nothing pushed.
+
+### What was actually wrong
+
+Three defects, and the first was total and silent. Measured before anything was written, on a case
+persisted `EXECUTING`:
+
+```text
+nodes: ('dispatch',)   status: Status.COMPLETED
+state: EXECUTING       version: unchanged        failure_reason: None
+```
+
+No dispatch edge covered the state, so the run reported **success** having committed nothing. No API
+verb could reach it either — `reopen_case` takes only `DONE`, the decision routes need an approval
+the execute node never raises, a re-check needs `AWAITING_HUMAN` — so the case sat in the dashboard's
+"Working" column permanently while the clinic might already hold the appointment.
+
+The second was the same shape without a crash. A real write that lands and whose *answer* is lost
+raised `ClinicUnavailable` out of the node, and `run_case` marked the case `FAILED` — **terminal,
+unrecoverable** — with its own `ACTION_PREPARED` entry naming an action nobody would ever look for
+again. Reproduced against a real clinic: `state: FAILED`, `appointments in clinic: 1`. `FAILED` said
+"this did not happen" about an effect that had.
+
+The third was pre-existing and had nothing to do with the saga. A verification resumed after a crash
+reads the clinic, dispatches nothing, and — because `VerifyNode` tested
+`entered_verifying_from(case) is AWAITING_HUMAN` — emitted **no effect claim at all**. Five
+attributes instead of nine, and the frozen `CareLoopSettlementIntegrity` judged a correct trace
+`FAIL`. Repaired in `careloop`, not in `evaluators`: the evaluator was right.
+
+### What was not wrong, and was checked first
+
+`ActionRecord` was swept before anything was designed. Five consumers, three of which read existence
+as *the effect completed*, and `rehydrate` subscripts a `result` that must parse into a typed
+result. Evolving it into an intent record would have made "intent persisted" mean "effect happened"
+at three call sites. It was not touched — not one field — and the preparation is a timeline entry
+read through `unsettled_preparation`, which is the idiom `Proposal`, `Handoff`, `Delivery` and
+`RecheckTarget` already use.
+
+The identity was already reconstructible. `idempotency_key` is a pure function of `(case_id,
+tool_name, canonical args)` and the arguments were already durable on `PLAN_PROPOSED`, so no model
+call was ever needed to recover one. What was missing was a durable statement that a dispatch **was
+about to happen**, and a route back.
+
+Crash points F and H turned out to be structurally impossible — `_record_action` and `→ VERIFYING`
+share one `save`, as do the verification outcome and `→ DONE` — and G already recovered through the
+existing `dispatch → verify` edge. The scope was exactly A–E.
+
+### Two concurrency defects, both found by running it
+
+Neither was reachable before a sweep made two workers on one case ordinary.
+
+`run_case` caught **every** exception and marked the case `FAILED`. A `VersionConflict` is a case
+that is *ahead*, not broken, so the loser was about to read the winner's fresh state, notice it was
+not at rest, and commit `→ FAILED` on top. Narrowed, with `_fail` carrying its own guard; both halves
+have separate mutants.
+
+The second was found by two real threads and then reproduced deterministically. A worker whose
+dispatch edge selected a case mid-effect can arrive at `ReconcileNode` after another worker has
+legitimately settled it, find the preparation settled, and commit `VERIFYING → FAILED` —
+**successfully**, because reading fresh is exactly what stops the compare-and-set catching it:
+
+```text
+A says: reconcile: book_appointment reconciled
+after A: VERIFYING
+B says: reconcile: failed, reconciliation found no prepared action ...
+after B: FAILED
+```
+
+A healthy case terminated by the worker with nothing left to do. The guard is a state re-check at
+the top of the node body: a case that has moved on is not an inconsistency.
+
+### Lessons
+
+- **A state with legal edges and no producer is not "reserved" — it is a defect waiting for a
+  caller.** `WAITING_EXTERNAL` shipped with four legal transitions nobody had taken, one of which
+  was `→ PLANNING`: the session-Q double-effect bug pre-installed one state over. Removing it had to
+  land *before* the state acquired a producer, or the patch would have shipped the bug rather than
+  the recovery. Ordering between patches can be load-bearing.
+
+- **The compare-and-set does not catch a worker that re-reads.** Every concurrency argument in this
+  repository leaned on the guarded `UPDATE`, and it is genuinely what rejects a stale writer. It
+  does nothing about a worker that reads *fresh* and then commits a considered verdict about a case
+  it has misread. Ask of any node: what does it do when the case it was selected for has already
+  been finished by somebody else?
+
+- **A durable fact standing in for a run-scoped one is right until it is silently wrong.**
+  `entered_verifying_from(case) is AWAITING_HUMAN` was a correct proxy for "this is a re-check" and
+  a wrong proxy for "this trace did not dispatch". A case that entered `VERIFYING` from `EXECUTING`
+  looks identical whether the execute node ran a moment ago or in a process that died overnight. The
+  repository's instinct — prefer durable state to run-scoped flags — is right for *decisions* and
+  wrong for claims about *this trace*, and the flag is admissible only because nothing that decides
+  anything may read it.
+
+- **Replay must be licensed by the write contract, never by a reading.** `ABSENT → retry` is the
+  obvious rule and it is wrong: a negative read says the provider does not hold the effect *now, in
+  the world this client addressed*, which after a world reset or a lost session header is a false
+  absence. `may_replay` has no parameter for an outcome, so the rule is not one somebody forgot to
+  write — it is one there is nowhere to express.
+
+- **A test can park for the right reason by accident.** The first non-replayable check passed under
+  a mutant that made every action replayable, because `send_email` to an untrusted recipient is
+  refused by the policy engine anyway. The discriminating test had to be an `upload_document` the
+  shipped rules would *allow*, so the only thing between the prepared action and a second effect is
+  the declared recovery class.
+
+- **The kill point is what makes a chaos proof mean anything.** Proving the provider committed
+  first is done by reading the clinic *before restarting anything* — not by trusting an exit code,
+  and not by believing a file the dying process wrote. Otherwise the test proves recovery from a
+  crash that happened too early to matter.
+
+### Open decisions
+
+37. **New.** `WAITING_EXTERNAL` is exited by the next run of the case, and the only trigger today is
+    process startup. A case that lands there while the process stays up waits until the next
+    restart. That is a scheduling gap rather than a correctness one — the identity is frozen, the
+    state is honest, and the next run converges — and it is exactly where the roadmap's background
+    scheduler plugs in. The semantics are settled so that item is later a *trigger*, not a design.
+
+38. **New.** A first-attempt `ClinicRefused` still ends the case `FAILED`, leaving an unsettled
+    `ACTION_PREPARED` on a terminal case. Safe — the clinic is *answering* that it did not make the
+    booking — and unchanged from before the saga, but it is the one dispatch outcome that does not
+    go through `_stop_with_the_outcome_unestablished`, and whether it should is worth deciding
+    rather than inheriting.
+
+36, 34, 33, 29, 30, 31, 22, 25, 26, 28. **Unchanged.**
+
 ## Standing risks
 
 - **The resume is a `CaseStore` reconstruction across a process boundary, not a Strands session

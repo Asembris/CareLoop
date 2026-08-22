@@ -86,7 +86,10 @@ working around it.
 4. **`Case` is frozen.** `transition()` is the only writer of `Case.state`. `DONE` is reachable only
    from `VERIFYING`, which makes "did not finish via the unsafe path" structural rather than
    observational — and `VERIFYING` reaches no state from which an effect can be proposed, which
-   makes "did not act again on an outcome it could not certify" structural in the same way.
+   makes "did not act again on an outcome it could not certify" structural in the same way. No
+   post-effect state reaches `PLANNING`: `EXECUTING`, `WAITING_EXTERNAL` and `VERIFYING` all refuse
+   it, so "did not replan on top of a dispatched action" is one property of the table rather than
+   three places to remember.
 5. **Loop bounds come from Strands graph primitives** — `set_max_node_executions`,
    `set_execution_timeout`, `set_node_timeout`. Never hand-roll a counter.
 6. **Model-visible denial reasons come from a closed `ReasonCode` enum**, with no interpolation
@@ -96,7 +99,12 @@ working around it.
 7. **Every external-effect tool call carries an idempotency key** derived from
    `(case_id, action_type, canonical args)`. `case_id` is bound when the toolset is constructed and
    is never a tool argument — a model that could supply it could scope two identical actions apart,
-   or collapse two cases' actions together.
+   or collapse two cases' actions together. That key is **durably frozen before anything can leave
+   the process**, in the same commit that enters `EXECUTING`, so a later process reuses the identity
+   of an attempt it never saw rather than deriving a new one. It serves as both the logical action
+   identity and the provider idempotency key, deliberately: two values derived identically would be
+   two answers to one question. A run id, a trace id or a process id is none of these and may never
+   become one.
 8. **`CaseStore` is the durable source of truth** — state, evidence and provenance, approvals,
    action history, pending work, append-only timeline. Strands session persistence holds execution
    context only and is never consulted for business facts.
@@ -207,7 +215,8 @@ reading signatures. Full detail in [`docs/spike-findings.md`](docs/spike-finding
 ```
 careloop/
   agents/      Triage + Planner, their Pydantic output schemas and prompts
-  graph/       GraphBuilder wiring, deterministic nodes, edge conditions, extraction
+  graph/       GraphBuilder wiring, deterministic nodes, edge conditions, extraction,
+               recovery classes and the dispatch seam
   policy/      ReasonCode enum, rules schema, engine, BeforeToolCall hook, rules.yaml
   provenance/  TrustLevel, ArgClass, Fact, promote()
   state/       Case, state machine, CaseStore protocol, SQLite + in-memory stores
@@ -241,6 +250,12 @@ policy module names the function. The agent can never leave `DONE`; the world ca
 it.** Same arrangement, same reason: `tests/test_recheck_writers.py` fails if any agent-facing
 module names it, and a second sweep pins `graph/runner.py` and `graph/nodes.py` as the only writers
 of `transition(..., VERIFYING)`. The agent can never ask to look again; a caregiver can.
+
+**A prepared attempt is re-claimed only by `ReconcileNode`, and only from a state that means the
+outcome is unknown.** `WAITING_EXTERNAL → EXECUTING` puts a case back in front of the executor, so
+`tests/test_reconcile_writers.py` is the third instance of the same arrangement: the table says the
+move is legal, and a sweep says exactly one node can make it. Two more sweeps sit beside it — one
+function is the only writer of `WAITING_EXTERNAL`, and the recovery path may not name a model seam.
 
 **Argument classes belong to the tool registry**, not to `rules.yaml`. Two declaration sites means
 one place to forget a `DESTINATION`. Rules may reference classes; they may never define them, and
@@ -1067,6 +1082,170 @@ defect in an accessor would move both sides together. It also never modifies a s
 defaulting, no synthesised attribute, no normalised status spelling — and it refuses rather than
 guesses when a literal matches more than one trace, because choosing between candidate traces is
 deciding the thing the evidence exists to establish.
+
+**An authorised action's identity is frozen before anything can leave the process, and a process
+that dies after that converges rather than stopping.** `ExecuteNode` writes an `ACTION_PREPARED`
+timeline entry — `{tool_name, idempotency_key, args_digest}` — in the **same commit** as
+`READY_TO_EXECUTE → EXECUTING`, so "the case is `EXECUTING`" and "an attempt is durably prepared"
+are one statement rather than two that can disagree. It says nothing about the provider: a
+preparation is compatible with the request never being made, never arriving, arriving and not
+committing, committing with the response lost, and the response arriving and not being recorded.
+Which of those occurred is what reconciliation finds out.
+
+**Before the saga this window was total and silent.** Measured on a case persisted `EXECUTING`:
+`('dispatch',)`, `Status.COMPLETED`, version unchanged, `failure_reason: None`. No dispatch edge
+covered the state, so the run reported success having committed nothing and the case sat there
+permanently — rendered as "Working", unreachable by every API verb, while the clinic might already
+hold the appointment. `WAITING_EXTERNAL` had no producer at all and four legal edges nobody had
+taken, one of which was `→ PLANNING`: the session-Q double-effect defect pre-installed one state
+over, waiting for somebody to give the state a producer. **Patch B removed it before Patch C
+supplied one**, and that ordering is not cosmetic.
+
+**Duplicate suppression is resolved before a preparation is written.** A logical action the case
+already holds an `ActionRecord` for never acquires one, because `ACTION_PREPARED` means *about to be
+attempted* and a stale intent on a completed action is exactly what a recovery would find and
+dispatch. The suppression path therefore passes through `EXECUTING` and on to `VERIFYING` **in one
+commit** rather than growing a `READY_TO_EXECUTE → VERIFYING` edge — there must be no instant at
+which a case is durably `EXECUTING` with nothing prepared, since that is the shape reconciliation
+fails closed on.
+
+**`ActionRecord` was not touched, and that was the design decision.** Every consumer was swept
+first: `ExecuteNode`'s duplicate branch, `VerifyNode`'s `rehydrate`, `recheck_target`, the API's
+`action_count`/`actions`, and `scripts/resume_demo.py`. Three read existence as *the effect
+completed*, and `rehydrate` subscripts a `result` that must parse into a typed result — so evolving
+it into an intent record would have made "intent persisted" mean "effect happened" at three call
+sites and required every one of them to grow a phase filter it could later forget. The preparation
+is a **timeline entry** instead, read through `unsettled_preparation(case)`, which is the idiom
+`Proposal`, `Handoff`, `Delivery` and `RecheckTarget` already use. *Unsettled* is computed —
+`{prepared keys} − {recorded keys}` — so there is no phase field anywhere to go stale, and the
+newest preparation is inspected and the scan then **stops**: answering `None` fails closed, where
+searching backwards would hand a recovery an older episode and re-dispatch it.
+
+**Persist *and* recompute *and* require agreement.** `ReconcileNode` reads the stored key and
+independently re-derives `idempotency_key(case_id, latest_proposal.tool_name, latest_proposal.args)`
+from the durable `PLAN_PROPOSED` entry, and **refuses if they differ** rather than preferring one —
+`recheck_target`'s consistency clause applied to the problem it was written for. Storing alone loses
+drift detection; recomputing alone loses crash-auditability. The logical action identity and the
+provider idempotency key are **one value** by design: two derived identically would be two answers
+to one question, and the preparation payload is where a divergence would be expressed if a provider
+ever forced one. Run id, trace id and process id are none of these and may never be.
+
+**Recovery asks no model anything.** No planner, no triage, no proposal, no new arguments, no new
+identity — `tests/test_reconcile_writers.py` sweeps the recovery path for the five names that would
+mean otherwise, and every recovery test runs against stubs that raise if touched. This also
+neutralises the `reason` drift hazard **on the recovery path only**: recovery reads the arguments
+that were authorised, so a punctuation change needs a fresh planner call that never happens. The
+hazard is untouched on the replan path, which is the next roadmap item.
+
+**Replay is licensed by the provider's write contract and never by an observation.**
+`careloop/graph/recovery.py` declares a `RECOVERY_CLASS` per effect tool with an import-time
+coverage check, the same arrangement as `VERIFIERS` and `RESULT_TYPES`, and `may_replay` reads that
+declaration **before anything is read**. There is no `ABSENT → retry` rule anywhere and nowhere to
+express one: `may_replay(action_type, observers=…)` has no parameter for an outcome, a status or a
+diagnostic. `ABSENT` says the provider does not hold the effect *now, in the world this client
+addressed* — which after a world reset or a lost session header is a false absence — and it is never
+a statement that the write may be repeated. Only `book_appointment` is `IDEMPOTENT_REPLAYABLE`;
+`send_email`, `upload_document` and `grant_portal_access` are `NOT_REPLAYABLE` and park.
+
+**A replay also requires an independent observer bound to the run, and that is not a convenience.**
+A replay nothing could read back would be recorded and then verified closed-loop, so the case would
+reach `DONE` on CareLoop's own receipt for an effect it was not sure had happened — certifying by
+*removing* evidence, which is the hazard `VerifyNode._nothing_was_observed` closes for a re-check.
+The two conditions coincide because one collaborator turns on both the real write and the read that
+observes it, and `ConflictingExecutors` makes anything else unconstructable.
+
+**The replay happens while the case is `EXECUTING`, and that is what keeps `rules.yaml` untouched.**
+Every effect rule carries `case_state_in: [PLANNING, READY_TO_EXECUTE, EXECUTING]` and
+`deny-external-effect-outside-execution-states` refuses the rest, so a replay issued from
+`WAITING_EXTERNAL` would be **denied**. Reconciliation re-claims the attempt through
+`WAITING_EXTERNAL → EXECUTING` first — written by `ReconcileNode` alone, swept — and the replay then
+re-passes the identical verdict with identical inputs. The state machine bends to the authority
+layer; the authority layer does not bend to it. **No rule, argument class, trust level or approval
+semantic changed.**
+
+**`WAITING_EXTERNAL` now means one exact thing: a dispatch of a durably prepared action got no
+answer at all.** Not a parking lot and not a synonym for `AWAITING_HUMAN` — it is the one condition
+where waiting is *true*, because CareLoop can settle it itself as soon as something answers and a
+person can do nothing about a timeout. Every other way of not knowing parks: a provider that
+answered and declined, an action type that may never be re-attempted, a run with no channel, and a
+policy denial all get `EXTERNAL_OUTCOME_NOT_ESTABLISHED` and **no `Approval`**. Both pre-effect
+entries were removed, so every entry is post-effect.
+
+**`EXTERNAL_OUTCOME_NOT_ESTABLISHED` is the tenth `ReasonCode` and the fourth that parks a case**,
+so no rule carries it and the engine never emits it. It is deliberately not
+`EXTERNAL_STATE_NOT_CONFIRMED`: that one means CareLoop holds a receipt an independent read could
+not confirm, and implies *check whether the appointment is right*. This one means CareLoop holds no
+receipt at all, and implies *check whether an appointment exists*. Different errands, and the older
+code's own text says "an action already carried out" — which on this path is the open question.
+
+**Two nodes can send an effect and one function decides what an unestablished outcome does.**
+`ExecuteNode` reaches that fork when a first attempt's response is lost; `ReconcileNode` reaches it
+after a crash. The situation is identical, so `_stop_with_the_outcome_unestablished` is the only
+writer of `WAITING_EXTERNAL` and both nodes route through it. Transport failure is translated once,
+in `careloop/graph/recovery.py::dispatch_prepared`, which is where HTTP stops on the dispatch path
+exactly as `_clinic_readback` is where it stops on the observation path — nothing above either knows
+a clinic speaks HTTP. A `PolicyDenied` and an `IdempotencyKeyCollision` pass through untranslated,
+because the first is the authority layer refusing and the second is CareLoop being wrong about its
+own identity.
+
+**A survived ambiguous transport failure used to end the case `FAILED`, and that was the worst of
+the three.** Reproduced against a real clinic on a loopback socket: the write landed, Demo World
+held the appointment, and CareLoop marked the case `FAILED` — terminal, unrecoverable — with its own
+`ACTION_PREPARED` entry naming an action nobody would ever look for again. `FAILED` said "this did
+not happen" about an effect that had. It now waits.
+
+**Concurrent recovery is safe, and the guarantees are attributed rather than claimed.** At most one
+*durable record* is the **database** — the guarded `UPDATE … WHERE version = ?`. At most one
+*appointment* is the **provider** — Demo World's own key map. That the two are about the same action
+is the **application** — the frozen key both workers reuse. `RunAlreadyInFlight` is in-process
+scheduling and is not durable. **No lease, no claim table, no distributed lock**, and none may be
+added: a lease would duplicate the CAS and add a failure mode of its own.
+
+Two concurrency defects were found and fixed, and both were reachable only once a sweep made two
+workers on one case ordinary. `run_case` caught **every** exception and marked the case `FAILED`, so
+a `VersionConflict` — a case that is *ahead*, not broken — had the loser terminate the winner's
+work; the catch is narrowed and `_fail` carries its own guard, and both halves have separate
+mutants. Separately, a worker whose dispatch edge selected a case mid-effect could arrive at
+`ReconcileNode` after another worker had legitimately settled it, find the preparation settled,
+and commit `VERIFYING → FAILED` — **successfully**, because reading fresh is exactly what stops the
+CAS catching it. Found by two real threads rather than by review, and reproduced deterministically
+before the guard was written.
+
+**Crash points F and H are structurally impossible and G already recovered.** `_record_action` and
+`→ VERIFYING` share one `save`, as do the verification outcome and `→ DONE`, and
+`SqliteCaseStore.save` puts the case document and its timeline rows in one `BEGIN IMMEDIATE` …
+`COMMIT`. `dispatch → verify` has routed a case persisted mid-verification since long before this
+work. The saga's scope is exactly A–E.
+
+**The startup sweep is the trigger, and it is the smallest one that works.** `resume_unsettled`
+sweeps `EXECUTING` and `WAITING_EXTERNAL` and schedules a run for each. **Anything in one of those
+states when a process starts is orphaned by definition**, because that process has scheduled nothing
+yet — which is the whole safety argument. It schedules and decides nothing: no tool, no argument and
+no key is read there. No EventBridge, no SQS, no worker, no background loop; a real scheduler is a
+later *trigger*, not a later design.
+
+**Reconciliation adds no cycle, so invariant 5 needs nothing.** `outgoing(reconcile)` is the single
+edge to `verify`; its other three endings satisfy no condition and end the run. Retries happen
+across runs, never as another lap, so nothing counts them.
+
+**The nine telemetry attributes are still nine and `CareLoopSettlementIntegrity` is untouched.** A
+recovery replay is a real `POST`, so it claims `PERFORMED` — never `SUPPRESSED`, which asserts no
+HTTP write can be in the trace. A readback-only recovery claims `NOT_IN_THIS_TRACE`. That last one
+exposed a **pre-existing** defect with nothing to do with the saga: `VerifyNode` tested
+`entered_verifying_from(case) is AWAITING_HUMAN`, a durable fact standing in for a run-scoped one,
+so a verification resumed after a crash emitted **five** attributes instead of nine and the frozen
+evaluator judged a correct trace `FAIL`. Measured, then repaired in `careloop` rather than in
+`evaluators`, because the evaluator was right. The condition is now a one-way, telemetry-only
+`RunContext.effect_claimed` flag with four writers and exactly one reader, swept so no policy, tool,
+lifecycle or API module can name it — a run-scoped flag is admissible **only** because nothing that
+decides anything may read it.
+
+`tests/test_saga_chaos.py` carries both proofs: a real child process killed with `os._exit` on the
+line after the clinic confirms, and a real write whose response is discarded. Both converge on one
+appointment, one logical action, one durable result, the original key, zero model calls, a `MATCHED`
+independent read and `DONE`. A mutant that mints a fresh key on recovery turns four of them red —
+and the failure it produces is `ClinicRefused 409`, which is Demo World's own slot-collision rule
+standing where an authority decision should be, exactly as session Q measured.
 
 **`book_appointment.reason` is unstable at the punctuation level, and Patch E measured the cost.**
 Reproposals alternated between `"…for cardiology review"` and `"…for cardiology review."`, which

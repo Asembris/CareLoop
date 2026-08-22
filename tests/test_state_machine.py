@@ -105,19 +105,23 @@ def test_verifying_can_reach_exactly_three_states() -> None:
 
 
 def test_verification_is_still_only_entered_after_an_effect() -> None:
-    """The three sources of ``VERIFYING``, pinned as a set so a fourth is a deliberate edit.
+    """The two sources of ``VERIFYING``, pinned as a set so a third is a deliberate edit.
 
     ``AWAITING_HUMAN`` joined for the caregiver's re-check and it is the one entry no node makes.
     What keeps the post-effect claim true is not the table but the guard behind that source:
     :func:`careloop.graph.context.recheck_target` refuses unless the case's current handoff names an
-    existing ``ActionRecord``, so the new edge cannot be taken by a case where nothing happened.
+    existing ``ActionRecord``, so the edge cannot be taken by a case where nothing happened.
     ``tests/test_recheck_writers.py`` is where the writer restriction is enforced.
+
+    ``WAITING_EXTERNAL`` left this set when the saga gave that state a producer and a meaning. A
+    case waiting on an external outcome holds no ``ActionRecord`` by construction, so the edge could
+    only ever have reached ``VerifyNode``'s no-recorded-action failure; reconciliation instead
+    re-claims the attempt through ``EXECUTING`` and enters verification with a result in hand.
     """
     sources = {state for state, targets in TRANSITIONS.items() if CaseState.VERIFYING in targets}
 
     assert sources == {
         CaseState.EXECUTING,
-        CaseState.WAITING_EXTERNAL,
         CaseState.AWAITING_HUMAN,
     }
 
@@ -145,13 +149,18 @@ def test_replanning_is_still_legal_from_where_it_was_always_meant_to_be() -> Non
     Both remaining sources are pre-effect. The gate leaves a denied proposal in ``PLANNING`` and a
     caregiver's rejection returns a parked case there, and in neither has anything been carried out
     — which is the distinction the whole repair turns on.
+
+    ``WAITING_EXTERNAL`` was a third source until the saga, and it was the ``VERIFYING`` defect
+    pre-installed one state over: post-effect, so replanning from it would repropose on top of an
+    action already dispatched, with a free-text ``reason`` free to key differently and defeat
+    duplicate suppression at both layers. It had no producer, so nothing had ever taken it — which
+    is exactly why it had to go before the state acquired one.
     """
     assert CaseState.PLANNING in TRANSITIONS[CaseState.AWAITING_HUMAN]
     assert CaseState.PLANNING in TRANSITIONS[CaseState.GATHERING_EVIDENCE]
     assert {state for state, targets in TRANSITIONS.items() if CaseState.PLANNING in targets} == {
         CaseState.GATHERING_EVIDENCE,
         CaseState.AWAITING_HUMAN,
-        CaseState.WAITING_EXTERNAL,
     }
 
 

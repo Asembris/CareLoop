@@ -19,14 +19,18 @@ from careloop.state.case import Case, CaseState, TimelineEvent, TimelineKind
 #: Legal transitions, keyed by source state.
 TRANSITIONS: Final[dict[CaseState, frozenset[CaseState]]] = {
     CaseState.NEW: frozenset({CaseState.GATHERING_EVIDENCE, CaseState.FAILED}),
-    CaseState.GATHERING_EVIDENCE: frozenset(
-        {CaseState.PLANNING, CaseState.WAITING_EXTERNAL, CaseState.FAILED}
-    ),
+    # **Neither of these may reach WAITING_EXTERNAL, and both used to.** That state now means one
+    # exact thing — an external effect was prepared and dispatched, and its outcome could not be
+    # established — and every entry into it is therefore post-effect, exactly as every entry into
+    # VERIFYING is. A pre-effect route into it would make the name a lie the first time one was
+    # taken: a case that had not dispatched anything would be sitting in a state whose whole
+    # meaning is that something was dispatched. Neither edge ever had a producer, so removing them
+    # changes no behaviour; what it changes is what the state is allowed to mean.
+    CaseState.GATHERING_EVIDENCE: frozenset({CaseState.PLANNING, CaseState.FAILED}),
     CaseState.PLANNING: frozenset(
         {
             CaseState.AWAITING_HUMAN,
             CaseState.READY_TO_EXECUTE,
-            CaseState.WAITING_EXTERNAL,
             CaseState.FAILED,
         }
     ),
@@ -52,20 +56,44 @@ TRANSITIONS: Final[dict[CaseState, frozenset[CaseState]]] = {
         }
     ),
     CaseState.READY_TO_EXECUTE: frozenset({CaseState.EXECUTING, CaseState.FAILED}),
+    # EXECUTING means an attempt is durably prepared and its outcome is not established. Its four
+    # exits are the four things that can become true about one:
+    #
+    #   VERIFYING       the provider's result is known and recorded
+    #   WAITING_EXTERNAL nobody answered, and re-attempting the same key is safe
+    #   AWAITING_HUMAN  the outcome cannot be established and must not be re-attempted
+    #   FAILED          CareLoop is inconsistent about its own record
+    #
+    # AWAITING_HUMAN was added for the third. It is what a non-replayable action does after an
+    # ambiguous outcome — an email that may or may not have been sent is not something an agent may
+    # decide to send again — and it is deliberately not WAITING_EXTERNAL, because CareLoop will
+    # never resolve it alone and a state implying otherwise would be a lie about who is waiting.
     CaseState.EXECUTING: frozenset(
-        {CaseState.VERIFYING, CaseState.WAITING_EXTERNAL, CaseState.FAILED}
+        {
+            CaseState.VERIFYING,
+            CaseState.WAITING_EXTERNAL,
+            CaseState.AWAITING_HUMAN,
+            CaseState.FAILED,
+        }
     ),
     # **VERIFYING cannot reach PLANNING, and that is the point rather than an omission.**
     #
     # Every entry into VERIFYING is post-effect, and that is still true now that there are three
-    # sources rather than two. The execution paths — EXECUTING and WAITING_EXTERNAL — enter here
-    # after careloop.graph.nodes.ExecuteNode has recorded an action or suppressed a duplicate of
-    # one, and VerifyNode fails the case outright when no ActionRecord exists. The one non-execution
-    # entry is the guarded human re-check from AWAITING_HUMAN, which careloop.graph.context.
-    # recheck_target permits only when the case's current post-effect handoff is bound to an
-    # existing ActionRecord; a case with nothing carried out cannot reach it. So there is still no
-    # such thing as a verification failure before the effect, and "a proposal that did not verify
-    # deserves another attempt" was never a description of a reachable state.
+    # sources rather than two. The execution path — EXECUTING — enters here after
+    # careloop.graph.nodes.ExecuteNode has recorded an action or suppressed a duplicate of one, or
+    # after careloop.graph.nodes.ReconcileNode has recorded the result of a prepared attempt it
+    # reconciled; VerifyNode fails the case outright when no ActionRecord exists. The one
+    # non-execution entry is the guarded human re-check from AWAITING_HUMAN, which
+    # careloop.graph.context.recheck_target permits only when the case's current post-effect
+    # handoff is bound to an existing ActionRecord; a case with nothing carried out cannot reach
+    # it. So there is still no such thing as a verification failure before the effect, and "a
+    # proposal that did not verify deserves another attempt" was never a description of a reachable
+    # state.
+    #
+    # WAITING_EXTERNAL was a third source and is no longer one. Not a weakening: a case there holds
+    # no ActionRecord by construction, so the edge could only ever have led to the no-recorded-
+    # action failure. Reconciliation reaches verification the long way round — re-claim the attempt
+    # through EXECUTING, record what the provider returns, and enter here with a result in hand.
     #
     # What it cost was measured rather than argued. With PLANNING legal, a failed verification sent
     # the case back to the planner; an identical reproposal was suppressed and re-verified into the
@@ -81,8 +109,30 @@ TRANSITIONS: Final[dict[CaseState, frozenset[CaseState]]] = {
     # AWAITING_HUMAN is the target instead: careloop.graph.nodes._park_with_nothing_certifiable
     # parks the case for a person, carrying no Approval and therefore no authority.
     CaseState.VERIFYING: frozenset({CaseState.DONE, CaseState.AWAITING_HUMAN, CaseState.FAILED}),
+    # **WAITING_EXTERNAL could reach PLANNING, and that was the VERIFYING defect pre-installed one
+    # state over.** The state is post-effect by definition, so routing it to the planner would do
+    # precisely what a failed verification used to do: repropose on top of an action already
+    # dispatched, and — since `book_appointment.reason` is planner-authored free text carrying no
+    # trust key — repropose it with a different full stop, a different argument digest, a different
+    # idempotency key, and duplicate suppression defeated at both layers. It had no producer, so
+    # nothing had ever taken it. Giving the state a producer without removing this edge first would
+    # have shipped the bug rather than the recovery.
+    #
+    # VERIFYING is gone for a narrower reason: nothing may enter verification without an
+    # ActionRecord, and a case here has none by construction. Reconciliation reaches VERIFYING by
+    # first re-claiming the attempt through EXECUTING and recording a result, which is the only
+    # order in which that is true.
+    #
+    # EXECUTING is the re-claim, and it is written by careloop.graph.nodes.ReconcileNode alone —
+    # the same arrangement as request_recheck's entry into VERIFYING, enforced structurally by
+    # tests/test_reconcile_writers.py. It grants no authority and mints no identity: the tool, the
+    # arguments and the key are the ones already frozen on the case's own ACTION_PREPARED entry.
+    # It exists because the shipped rules permit an external effect from PLANNING,
+    # READY_TO_EXECUTE and EXECUTING and from nowhere else, so a replay issued from here would be
+    # refused by the policy engine. The state machine bends to the authority layer; the authority
+    # layer does not bend to it.
     CaseState.WAITING_EXTERNAL: frozenset(
-        {CaseState.PLANNING, CaseState.VERIFYING, CaseState.FAILED}
+        {CaseState.EXECUTING, CaseState.AWAITING_HUMAN, CaseState.FAILED}
     ),
     # DONE has exactly one way out, and only the world can take it. A claim rejected weeks after
     # the appointment was arranged is the same piece of work, not a new one, so

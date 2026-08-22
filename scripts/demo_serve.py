@@ -17,6 +17,11 @@ other process is the independent check a judge can run themselves.
 the environment the way every other entry point does, points a client at the clinic, and hands all
 three to ``create_app``. Whether a case books, parks or is refused is the graph's business.
 
+It also chooses whether runs record what they did, which is the *only* place that choice is made.
+Both telemetry lines below are composition and neither is a feature flag a route or a node can
+read: with no instrumentation the process installs no redaction and hands runs a witness that
+records nothing, and the cases it produces are identical either way.
+
 ``--clinic-url`` is optional: without it every effect is simulated, exactly as it was before this
 session, and ``read_back`` on a verification says ``false`` rather than lying.
 
@@ -36,10 +41,13 @@ import os
 from pathlib import Path
 
 from careloop.api.app import create_app
+from careloop.api.deps import clinic_context_factory, simulated_context_factory
 from careloop.api.sessions import DEFAULT_SESSION_LIMIT, demo_session_worlds
+from careloop.graph.witness import NullWitness
 from careloop.state.sqlite_store import SqliteCaseStore
 from careloop.tools.clinic import ClinicClient
 from scripts.observability import install_telemetry_redaction
+from scripts.witness_span import span_witness
 
 
 def load_env_file(path: Path) -> int:
@@ -97,9 +105,16 @@ def main() -> None:
     # case rather than a fault. Nothing below reads the result except the line that prints it.
     redacting = install_telemetry_redaction()
 
+    # Telemetry only, and only ever *additive* — the mirror of the line above, and a separate
+    # decision from it. `span_witness()` asks its own question rather than reusing `redacting`,
+    # which answers "was the redaction processor registered?" and carries a side effect with it;
+    # one switch for two unrelated features is how a later change to one silently turns off the
+    # other. A run is handed the result and never asks which one it got.
+    witness = span_witness()
+
     if arguments.isolate_sessions:
         app = create_app(
-            sessions=demo_session_worlds(clinic_url=arguments.clinic_url),
+            sessions=demo_session_worlds(clinic_url=arguments.clinic_url, witness=witness),
             demo=True,
             static_dir=arguments.static_dir or None,
         )
@@ -109,6 +124,11 @@ def main() -> None:
         app = create_app(
             SqliteCaseStore(arguments.db),
             clinic=clinic,
+            context_factory=(
+                clinic_context_factory(clinic, witness)
+                if clinic is not None
+                else simulated_context_factory(witness)
+            ),
             demo=True,
             static_dir=arguments.static_dir or None,
         )
@@ -120,6 +140,7 @@ def main() -> None:
     print(f"triage model  {os.environ.get('CARELOOP_MODEL_TRIAGE', '(mock)')}")
     print(f"planner model {os.environ.get('CARELOOP_MODEL_PLANNER', '(mock)')}")
     print(f"telemetry     {'ADOT, access key id redacted' if redacting else '(not instrumented)'}")
+    print(f"witness       {'(none)' if isinstance(witness, NullWitness) else 'span attributes'}")
 
     import uvicorn
 

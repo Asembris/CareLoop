@@ -15,6 +15,18 @@ goes red; the README cannot go quietly stale instead.
 "every number found matches the measurement" would pass on a README that had lost the numbers
 altogether, because an empty set of matches satisfies every assertion over it. So the count of
 matches is asserted too: the claim must still be *present* before it can be checked.
+
+**The animated hero states the headline as well, and an SVG is the easiest place of all for a
+number to go stale.** ``docs/readme-hero.svg`` carries ``0 / 320 UNAUTHORIZED EFFECTS`` in its
+evidence strip, above the fold, where it is the first evidence a judge sees and the last thing
+anybody would think to re-derive. It is held to the same standard as the badge and the prose: the
+figure is compared against :func:`evals.replay.replay_corpus`, not against a constant. Unlike the
+prose, the hero is checked against the **shipped** result only - it is not a place where the
+allow-all mutant's number would ever be a correct thing to display.
+
+The hero is read as *text* rather than as markup, so restyling the strip cannot quietly move the
+number out of range of the assertion, and the README is checked to still reference the file - a
+guard over an asset nothing displays would be a guard over nothing.
 """
 
 from __future__ import annotations
@@ -32,12 +44,30 @@ from evals.replay import replay_corpus
 REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[1]
 README: Final[Path] = REPO_ROOT / "README.md"
 REPORT: Final[Path] = REPO_ROOT / "docs" / "security-evaluation.md"
+HERO: Final[Path] = REPO_ROOT / "docs" / "readme-hero.svg"
 
 #: The badge's two numbers, as shields.io encodes them: ``0%20%2F%20320`` is ``0 / 320``.
 BADGE: Final[re.Pattern[str]] = re.compile(r"unauthorized%20actions-(\d+)%20%2F%20(\d+)-")
 
 #: Every prose or console statement of the headline, in either document.
 HEADLINE: Final[re.Pattern[str]] = re.compile(r"(\d+) of (\d+) adversarial attempts")
+
+#: The hero's evidence strip, matched against the SVG's *text* rather than its markup. The number
+#: is a ``<tspan>`` today so it can be set larger than the words beside it; matching the markup
+#: would tie this assertion to that styling decision and go quiet the moment somebody changed it.
+HERO_HEADLINE: Final[re.Pattern[str]] = re.compile(r"(\d+) / (\d+) UNAUTHORIZED EFFECTS")
+
+
+def hero_text() -> str:
+    """The hero's rendered text: comments dropped, then every tag removed.
+
+    Comments go first and separately. The file documents its own palette and timeline in a long
+    header comment, and text that is never drawn must not be able to satisfy - or break - an
+    assertion about what a reader sees.
+    """
+    without_comments = re.sub(r"<!--.*?-->", " ", HERO.read_text(encoding="utf-8"), flags=re.DOTALL)
+    return re.sub(r"<[^>]+>", "", without_comments)
+
 
 #: Below this, the documents have stopped making the claim rather than making it correctly.
 MINIMUM_HEADLINE_STATEMENTS: Final[int] = 3
@@ -115,3 +145,32 @@ class TestEveryPublishedHeadlineMatches:
                 f"The replay measures {sorted(measured)} — shipped rules and the allow-all "
                 "mutant. Nothing else is a result."
             )
+
+
+class TestTheHeroCannotDriftEither:
+    """The number a judge sees first is the number the replay produced."""
+
+    def test_the_hero_still_states_the_headline(self) -> None:
+        assert HERO_HEADLINE.search(hero_text()), (
+            "docs/readme-hero.svg no longer states the unauthorized-effects headline. If the "
+            "evidence strip was removed deliberately, remove this class in the same commit; do "
+            "not leave a test that passes because there is nothing left to check."
+        )
+
+    def test_the_hero_matches_the_replay(self, shipped) -> None:
+        found = HERO_HEADLINE.search(hero_text())
+        assert found is not None
+        numerator, denominator = int(found.group(1)), int(found.group(2))
+
+        assert (numerator, denominator) == (shipped.unauthorised_actions, shipped.attempts), (
+            f"docs/readme-hero.svg says {numerator} / {denominator}; the replay measures "
+            f"{shipped.unauthorised_actions} / {shipped.attempts}. Update the hero - the "
+            "measurement is the source of truth, not the other way round."
+        )
+
+    def test_the_readme_still_shows_the_hero(self) -> None:
+        assert "docs/readme-hero.svg" in README.read_text(encoding="utf-8"), (
+            "README.md no longer references docs/readme-hero.svg, so the assertions above now "
+            "guard a claim nobody is being shown. Point them at whatever replaced it, or remove "
+            "them with the hero."
+        )

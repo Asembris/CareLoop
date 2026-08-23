@@ -38,6 +38,7 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict
 
+from careloop.tools.content import content_digest
 from careloop.tools.idempotency import args_digest, canonical_args
 from careloop.tools.registry import REGISTRY
 from careloop.tools.results import (
@@ -140,11 +141,39 @@ def _book_appointment(args: Mapping[str, str], key: str) -> AppointmentBooked:
     )
 
 
+#: Where a simulated upload pretends to have filed something.
+#:
+#: Deliberately not shaped like the real provider's namespace. A mock whose keys were
+#: indistinguishable from a real store's would make "which of these ran" a question somebody has to
+#: answer by reading configuration.
+SIMULATED_OBJECT_PREFIX: Final[str] = "simulated"
+
+
 def _upload_document(args: Mapping[str, str], key: str) -> DocumentUploaded:
+    """Echo every field a real store would hold, including the content digest.
+
+    **Not an independence claim** — a mock reducing bytes CareLoop already holds says nothing
+    about the world, exactly as ``_book_appointment`` echoing ``reason`` says nothing about a
+    clinic. It is here because ``_verify_upload`` compares the result against the derived
+    expectation whether or not a provider was involved, so a simulated upload omitting the digest
+    would fail every fully mocked run against an empty string.
+
+    The bytes are read from the shipped document store, which is the same source the derived
+    expectation reads. A document the store does not hold yields an empty digest rather than a
+    guess, and verification then refuses it.
+    """
+    from careloop.tools.documents import default_document_store
+
+    try:
+        digest = content_digest(default_document_store().content(args["document_id"]))
+    except Exception:  # a document nothing holds is a verification failure, not a crash here
+        digest = ""
     return DocumentUploaded(
-        upload_id=f"upl-{_suffix(key)}",
+        object_key=f"{SIMULATED_OBJECT_PREFIX}/{key}",
+        object_id=key,
         portal_id=args["portal_id"],
         document_id=args["document_id"],
+        content_sha256=digest,
     )
 
 

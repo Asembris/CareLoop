@@ -950,28 +950,38 @@ class TestObserverCapability:
     questions — a case may be structurally re-checkable while a misconfigured run has no clinic.
     """
 
-    def test_only_booking_is_declared_observable(self) -> None:
-        assert frozenset({"book_appointment"}) == INDEPENDENTLY_OBSERVABLE
+    def test_the_two_real_providers_are_declared_observable(self) -> None:
+        assert frozenset({"book_appointment", "upload_document"}) == INDEPENDENTLY_OBSERVABLE
 
     def test_every_declared_type_is_an_effect_tool(self) -> None:
         from careloop.tools.registry import REGISTRY
 
         assert REGISTRY.external_effect_tools >= INDEPENDENTLY_OBSERVABLE
 
-    def test_the_three_simulated_effects_are_deliberately_absent(self) -> None:
-        """Not an oversight. Equality with the registry would be the wrong assertion."""
+    def test_the_two_simulated_effects_are_deliberately_absent(self) -> None:
+        """Not an oversight. Equality with the registry would be the wrong assertion.
+
+        ``send_email`` and ``grant_portal_access`` have no real provider and no independent
+        observer, so declaring them would force two fake observers into existence.
+        """
         from careloop.tools.registry import REGISTRY
 
         assert REGISTRY.external_effect_tools - INDEPENDENTLY_OBSERVABLE == frozenset(
-            {"send_email", "upload_document", "grant_portal_access"}
+            {"send_email", "grant_portal_access"}
         )
 
-    def test_a_clinic_bound_run_realises_exactly_the_declaration(self) -> None:
-        """The drift guard. The constant and the wiring are two statements of one fact.
+    def test_a_clinic_bound_run_realises_the_clinics_half_of_the_declaration(self) -> None:
+        """The drift guard, scoped to one provider now that there are two.
 
-        Without this, adding a second read-back to ``RunContext`` and forgetting the declaration
-        would leave an observable action the re-check refuses; removing one would leave a re-check
-        accepted for an action nothing can observe.
+        It asserted equality with :data:`INDEPENDENTLY_OBSERVABLE` while the clinic was the only
+        real provider, which conflated two facts: *this action type can be observed at all*, and
+        *this run has the observer for it bound*. With a second provider the two come apart —
+        a clinic-bound run realises the clinic's half and nothing else — and that is exactly the
+        capability-versus-availability distinction this class exists to keep separate.
+
+        A **subset**, so the drift it was written for is still caught: a read-back wired up for an
+        action type nothing declares observable would fail here, which is the direction that would
+        let a re-check be accepted for an action nothing can observe.
         """
         with clinic_server() as (base_url, _world):
             store = InMemoryCaseStore()
@@ -983,7 +993,8 @@ class TestObserverCapability:
             )
             unbound = context_for(store, REFERRAL_EVENT, case_id=CASE_ID)
 
-        assert frozenset(bound.readbacks) == INDEPENDENTLY_OBSERVABLE
+        assert frozenset(bound.readbacks) == frozenset({"book_appointment"})
+        assert frozenset(bound.readbacks) <= INDEPENDENTLY_OBSERVABLE
         assert frozenset(unbound.readbacks) == frozenset()
 
 

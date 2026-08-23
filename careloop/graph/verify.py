@@ -48,6 +48,7 @@ from typing import Final
 from pydantic import BaseModel, ConfigDict
 
 from careloop.state.case import ActionRecord
+from careloop.tools.content import content_digest
 from careloop.tools.idempotency import args_digest, canonical_args, idempotency_key
 from careloop.tools.registry import REGISTRY, ToolRegistry
 from careloop.tools.results import (
@@ -216,16 +217,58 @@ class DerivedExpectation:
     """Canonical authorised arguments in, one canonical expected value out, or ``None``."""
 
 
+#: What ``content_sha256`` an upload of this document should be found to have.
+#:
+#: Computed from the bytes **CareLoop holds**, freshly, at verification time — not remembered from
+#: the write and not read from anything the provider says. The other half of the comparison is
+#: computed from the bytes a fresh read returned, so the two digests have no shared source and their
+#: equality is observed rather than arranged.
+#:
+#: The shipped document store, deliberately. Every ``document_id`` that can reach an upload is a
+#: fixture identifier — ``allow-upload-to-trusted-portal`` requires the argument at ``CONTROLLED``,
+#: which only a validated, held, demand-answering document reaches — so there is no document this
+#: could be asked about that the shipped store does not hold. A run whose ``documents`` collaborator
+#: was overridden is the one case this would not follow, and it is a limitation rather than a
+#: hazard: the expectation resolves ``None`` and the verification fails closed.
+#:
+#: ``None`` on anything it cannot establish. A missing key, a document nothing holds, a fixture that
+#: is not packaged: each leaves the expectation absent, which makes every comparison against it
+#: mismatch. Inventing a digest would have CareLoop compare the world against a value it made up.
+def _expected_document_content(args: Mapping[str, str]) -> str | None:
+    from careloop.tools.documents import default_document_store
+
+    document_id = args.get("document_id")
+    if document_id is None:
+        return None
+    try:
+        return content_digest(default_document_store().content(document_id))
+    except Exception:
+        return None
+
+
+#: The name the upload comparison refers to that expectation by.
+#:
+#: Not a declared argument of any tool, which
+#: :func:`check_derived_expectations_do_not_shadow_arguments` requires and checks at import.
+UPLOAD_CONTENT_EXPECTATION: Final[str] = "content_sha256"
+
 #: The derived expectations each action type declares, in comparison order.
 #:
-#: **Deliberately empty.** Nothing CareLoop ships today compares anything an argument does not
-#: supply, so an entry here would be a guarantee that is not being made. The seam exists because
-#: the alternative — reaching for it the day a provider needs one, under implementation pressure —
-#: is how a derived value ends up as an argument, in the authority path and in the state digest.
+#: One entry. ``upload_document`` is the first effect whose verification needs a value no argument
+#: supplies: what a store is holding has to be checked against the document CareLoop was authorised
+#: to send, and that document's digest is not something a proposal carries or a rule reads.
 #:
-#: ``tests/test_derived_expectations.py`` drives it against synthetic action types, so the
-#: mechanism is proven rather than merely declared.
-DERIVED_EXPECTATIONS: Final[Mapping[str, tuple[DerivedExpectation, ...]]] = {}
+#: Adding an entry is not a way to smuggle a value into authority or telemetry, and the two
+#: import-time checks below are what make that structural rather than a convention: a derived name
+#: may not shadow an argument, and it may not appear in :data:`OBSERVABLE_STATE`.
+#:
+#: ``tests/test_derived_expectations.py`` drives the mechanism against synthetic action types, so it
+#: is proven generically rather than only in the one shipped instance.
+DERIVED_EXPECTATIONS: Final[Mapping[str, tuple[DerivedExpectation, ...]]] = {
+    "upload_document": (
+        DerivedExpectation(name=UPLOAD_CONTENT_EXPECTATION, derive=_expected_document_content),
+    ),
+}
 
 
 def derived_names(
@@ -401,15 +444,31 @@ def _verify_booking(expected: Mapping[str, str], result: ActionResult) -> list[s
     )
 
 
+#: Which upload result field is compared against which expectation.
+#:
+#: Two argument-sourced and one derived, and the mixture is the point. ``portal_id`` and
+#: ``document_id`` are what CareLoop was authorised to file and where; ``content_sha256`` is what it
+#: must be found to have filed, which no argument states and no rule reads.
+#:
+#: **The order is load-bearing** — :func:`_mismatches` iterates it, so it decides the order of the
+#: diagnostics a timeline records — and is therefore left exactly as written rather than sorted.
 _UPLOAD_COMPARISON: Final[Mapping[str, str]] = {
     "portal_id": "portal_id",
     "document_id": "document_id",
+    "content_sha256": UPLOAD_CONTENT_EXPECTATION,
 }
 
-_UPLOAD_IDENTIFIER: Final[str] = "upload_id"
+#: The bounded name of the object, and the only thing a settlement claim may repeat.
+#:
+#: :attr:`~careloop.tools.results.DocumentUploaded.object_id` rather than ``object_key``: the key
+#: carries separators, which ``careloop.graph.witness.RESOURCE_ID_PATTERN`` refuses, and an
+#: identifier that silently failed to render would fail settlement closed for a reason nothing
+#: explained.
+_UPLOAD_IDENTIFIER: Final[str] = "object_id"
 
 
 def _verify_upload(expected: Mapping[str, str], result: ActionResult) -> list[str]:
+    """Where it was filed, which document it was, and — independently — what is actually there."""
     if not isinstance(result, DocumentUploaded):
         return [f"expected DocumentUploaded, the action recorded a {type(result).__name__}"]
     return _mismatches(
@@ -503,18 +562,22 @@ RESULT_TYPES: Final[Mapping[str, type[ActionResult]]] = {
 #: re-checkable while a misconfigured run has no clinic bound at all — see
 #: :class:`careloop.graph.nodes.VerifyNode`, which fails closed on exactly that.
 #:
-#: Deliberately a **subset** of ``REGISTRY.external_effect_tools`` rather than equal to it. Three of
-#: the four effect tools are simulated on purpose — one action made genuinely external is the proof
-#: and four is scope creep with a rationale — so requiring equality would either force three fake
-#: observers into existence or make this declaration unmaintainable. What it must never do is name
-#: a tool the registry does not have, which is what :func:`check_observable_tools_are_declared`
-#: refuses.
+#: Deliberately a **subset** of ``REGISTRY.external_effect_tools`` rather than equal to it. Two of
+#: the four effect tools are simulated on purpose — ``send_email`` and ``grant_portal_access`` have
+#: no real provider and no independent observer — so requiring equality would force two fake
+#: observers into existence. What it must never do is name a tool the registry does not have, which
+#: is what :func:`check_observable_tools_are_declared` refuses.
+#:
+#: **Observable is not the same as evaluated in AWS.** The deployed ``CareLoopSettlementIntegrity``
+#: evaluator covers booking alone, deliberately, and ``tests/test_evaluator_drift.py`` states that
+#: as a subset with a named exclusion rather than as an equality that happened to hold while there
+#: was one member.
 #:
 #: It lives here, beside :data:`VERIFIERS` and :data:`RESULT_TYPES`, because this module already
 #: owns what verification means per action type. It deliberately does **not** live in
 #: ``runner.py``, in the state machine or in an API route: a tool name in lifecycle code is the
 #: thing ``check_verifiers_cover_the_registry`` exists to prevent one layer down.
-INDEPENDENTLY_OBSERVABLE: Final[frozenset[str]] = frozenset({"book_appointment"})
+INDEPENDENTLY_OBSERVABLE: Final[frozenset[str]] = frozenset({"book_appointment", "upload_document"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -547,6 +610,7 @@ class ObservableEffect:
 #: state declaration nothing corroborates.
 _EXTERNAL_COMPARISONS: Final[Mapping[str, tuple[Mapping[str, str], str]]] = {
     "book_appointment": (_BOOKING_COMPARISON, _BOOKING_IDENTIFIER),
+    "upload_document": (_UPLOAD_COMPARISON, _UPLOAD_IDENTIFIER),
 }
 
 #: The externally held state of every independently observable action type.
@@ -566,6 +630,15 @@ OBSERVABLE_STATE: Final[Mapping[str, ObservableEffect]] = {
     "book_appointment": ObservableEffect(
         state_fields=("patient_id", "provider_id", "reason", "slot_start"),
         resource_id_field=_BOOKING_IDENTIFIER,
+    ),
+    # ``content_sha256`` is deliberately absent. It is a DerivedExpectation, so it is compared by
+    # the verifier and is not part of the state CareLoop was *authorised* to put there — which is
+    # what a settlement digest is a digest of. The import-time check below refuses it here, and
+    # ``tests/test_derived_expectations.py`` measures that declaring one moves neither the field
+    # list nor either digest.
+    "upload_document": ObservableEffect(
+        state_fields=("document_id", "portal_id"),
+        resource_id_field=_UPLOAD_IDENTIFIER,
     ),
 }
 
@@ -889,6 +962,7 @@ __all__ = [
     "INDEPENDENTLY_OBSERVABLE",
     "OBSERVABLE_STATE",
     "RESULT_TYPES",
+    "UPLOAD_CONTENT_EXPECTATION",
     "VERIFIERS",
     "DerivedExpectation",
     "ObservableEffect",

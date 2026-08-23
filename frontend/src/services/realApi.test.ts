@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentRun, DashboardState } from "@/types/domain";
 import type { CaseCard, CaseDetail, CaseSections, FactView, RunView, TimelineEventView } from "./backend";
 import { emptyDashboard } from "./api";
-import { clockTime } from "./presentation";
+import {
+  RECOVERY_PROOF_BODY,
+  RECOVERY_PROOF_TITLE,
+  clockTime,
+  recoveryProofRows
+} from "./presentation";
 import {
   OFFLINE_RETRY_MS,
   POLL_INTERVAL_MS,
@@ -19,6 +24,7 @@ import {
   refusalsFor,
   latestVerification,
   policyLines,
+  recoveryProofFor,
   timelineFor
 } from "./realApi";
 
@@ -371,6 +377,178 @@ describe("the two recovery transitions the spine renders", () => {
 /* ------------------------------------------------------------------ *
  * Evidence
  * ------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------ *
+ * The recovery evidence block
+ *
+ * Read entirely from the durable trail. The signature is the whole story rather than any one part
+ * of it, because a block that appeared on a partial match would be claiming a recovery had
+ * happened while the outcome was still unknown.
+ * ------------------------------------------------------------------ */
+
+const RECOVERY_KEY = "3f9c1a2b4d5e6f70aabbccddeeff0011";
+
+function recoveryTrail(over: { state?: string; timeline?: TimelineEventView[] } = {}): CaseDetail {
+  return detail({
+    state: over.state ?? "DONE",
+    actions: [
+      {
+        idempotency_key: RECOVERY_KEY,
+        action_type: "book_appointment",
+        args_digest: "d1",
+        result: "{}",
+        recorded_at: "2026-08-13T11:00:20+00:00"
+      }
+    ],
+    timeline: over.timeline ?? [
+      entry("PLAN_PROPOSED", { tool_name: "book_appointment", args: BOOKING }),
+      entry("ACTION_PREPARED", { tool_name: "book_appointment", idempotency_key: RECOVERY_KEY }),
+      entry("STATE_TRANSITION", { from: "EXECUTING", to: "WAITING_EXTERNAL" }),
+      entry("STATE_TRANSITION", { from: "WAITING_EXTERNAL", to: "EXECUTING" }),
+      entry("ACTION_EXECUTED", { tool_name: "book_appointment", idempotency_key: RECOVERY_KEY }),
+      entry("VERIFICATION_PASSED", {
+        tool_name: "book_appointment",
+        read_back: "true",
+        observation: "MATCHED"
+      })
+    ]
+  });
+}
+
+describe("the recovery evidence block", () => {
+  it("reads the whole signature off the durable trail", () => {
+    const proof = recoveryProofFor(recoveryTrail());
+
+    expect(proof).toEqual({
+      actionKey: "3f9c1a2b…",
+      recordedActions: 1,
+      plans: 1,
+      observation: "MATCHED"
+    });
+  });
+
+  it("shows a short prefix of the identity and never the whole key", () => {
+    const proof = recoveryProofFor(recoveryTrail());
+
+    expect(proof?.actionKey).not.toContain(RECOVERY_KEY);
+    expect(RECOVERY_KEY.startsWith(proof!.actionKey.replace("…", ""))).toBe(true);
+  });
+
+  it("does not appear on a case that is still waiting", () => {
+    // F5, and the load-bearing one. While the case is `WAITING_EXTERNAL` the outcome is genuinely
+    // unknown; a block saying "one appointment" then would assert something CareLoop does not
+    // itself know yet.
+    const waiting = recoveryTrail({
+      state: "WAITING_EXTERNAL",
+      timeline: [
+        entry("PLAN_PROPOSED", { tool_name: "book_appointment", args: BOOKING }),
+        entry("ACTION_PREPARED", { tool_name: "book_appointment", idempotency_key: RECOVERY_KEY }),
+        entry("STATE_TRANSITION", { from: "EXECUTING", to: "WAITING_EXTERNAL" })
+      ]
+    });
+
+    expect(recoveryProofFor(waiting)).toBeNull();
+  });
+
+  it("does not appear on an ordinary booking that never needed recovering", () => {
+    const ordinary = recoveryTrail({
+      timeline: [
+        entry("PLAN_PROPOSED", { tool_name: "book_appointment", args: BOOKING }),
+        entry("ACTION_PREPARED", { tool_name: "book_appointment", idempotency_key: RECOVERY_KEY }),
+        entry("ACTION_EXECUTED", { tool_name: "book_appointment", idempotency_key: RECOVERY_KEY }),
+        entry("VERIFICATION_PASSED", {
+          tool_name: "book_appointment",
+          read_back: "true",
+          observation: "MATCHED"
+        })
+      ]
+    });
+
+    expect(recoveryProofFor(ordinary)).toBeNull();
+  });
+
+  it("does not appear when the executed action carries a different identity", () => {
+    // Which would mean a *new* action was issued rather than the frozen one replayed — the exact
+    // failure the backend's frozen-key clause exists to prevent, and not something to celebrate.
+    const drifted = recoveryTrail({
+      timeline: [
+        entry("ACTION_PREPARED", { tool_name: "book_appointment", idempotency_key: RECOVERY_KEY }),
+        entry("STATE_TRANSITION", { from: "EXECUTING", to: "WAITING_EXTERNAL" }),
+        entry("STATE_TRANSITION", { from: "WAITING_EXTERNAL", to: "EXECUTING" }),
+        entry("ACTION_EXECUTED", { tool_name: "book_appointment", idempotency_key: "something-else" }),
+        entry("VERIFICATION_PASSED", { read_back: "true", observation: "MATCHED" })
+      ]
+    });
+
+    expect(recoveryProofFor(drifted)).toBeNull();
+  });
+
+  it("does not appear when nothing independent confirmed it", () => {
+    const unobserved = recoveryTrail({
+      timeline: [
+        entry("ACTION_PREPARED", { tool_name: "book_appointment", idempotency_key: RECOVERY_KEY }),
+        entry("STATE_TRANSITION", { from: "EXECUTING", to: "WAITING_EXTERNAL" }),
+        entry("STATE_TRANSITION", { from: "WAITING_EXTERNAL", to: "EXECUTING" }),
+        entry("ACTION_EXECUTED", { tool_name: "book_appointment", idempotency_key: RECOVERY_KEY }),
+        entry("VERIFICATION_PASSED", { read_back: "false", observation: "NOT_OBSERVED" })
+      ]
+    });
+
+    expect(recoveryProofFor(unobserved)).toBeNull();
+  });
+
+  it("does not appear when a second action was recorded", () => {
+    const once = recoveryTrail();
+    const doubled = { ...once, actions: [...once.actions, { ...once.actions[0] }] };
+
+    expect(recoveryProofFor(doubled)).toBeNull();
+  });
+
+  it("reaches the case the page renders", () => {
+    // F6, through the real builder rather than the reader alone.
+    const built = buildCase(card({ state: "DONE" }), recoveryTrail(), "run-1", NOW);
+
+    expect(built.recovery?.recordedActions).toBe(1);
+    expect(built.recovery?.observation).toBe("MATCHED");
+  });
+
+  it("is absent from the case a still-waiting page renders", () => {
+    const waiting = recoveryTrail({
+      state: "WAITING_EXTERNAL",
+      timeline: [
+        entry("ACTION_PREPARED", { tool_name: "book_appointment", idempotency_key: RECOVERY_KEY }),
+        entry("STATE_TRANSITION", { from: "EXECUTING", to: "WAITING_EXTERNAL" })
+      ]
+    });
+    const built = buildCase(card({ state: "WAITING_EXTERNAL" }), waiting, "run-1", NOW);
+
+    expect(built.recovery).toBeNull();
+  });
+
+  it("says one appointment and one action, and claims nothing about model calls", () => {
+    // F7. The rows may only say what the durable trail supports. "Plans made" is that; "no model
+    // was asked" is not — a model can be invoked and fail without ever producing a plan, and that
+    // stronger claim is proven in the backend with seams that raise if touched.
+    const rows = recoveryProofRows(recoveryProofFor(recoveryTrail())!);
+    const flat = rows.map((row) => `${row.label} ${row.value}`).join(" | ");
+
+    expect(flat).toContain("ACTION IDENTITY");
+    expect(flat).toContain("RECORDED ACTIONS 1");
+    expect(flat).toContain("PLANS MADE 1");
+    expect(flat).toContain("MATCHED");
+    expect(flat.toLowerCase()).not.toContain("model");
+  });
+
+  it("says the action was replayed rather than that it was not sent again", () => {
+    const words = `${RECOVERY_PROOF_TITLE} ${RECOVERY_PROOF_BODY}`.toLowerCase();
+
+    expect(words).toContain("one appointment");
+    expect(words).toContain("replayed");
+    expect(words).not.toContain("twice");
+    expect(words).not.toContain("resent");
+    expect(words).not.toContain("only once");
+  });
+});
 
 describe("evidence", () => {
   const page = fact({

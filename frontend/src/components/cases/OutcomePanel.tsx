@@ -1,6 +1,11 @@
 import type { CareCase } from "@/types/domain";
 import { caseTone } from "@/lib/tone";
-import { OBSERVED_VALUES_WITHHELD } from "@/services/presentation";
+import {
+  OBSERVED_VALUES_WITHHELD,
+  RECOVERY_PROOF_BODY,
+  RECOVERY_PROOF_TITLE,
+  recoveryProofRows
+} from "@/services/presentation";
 import VerificationSeal from "./VerificationSeal";
 
 const LABEL = {
@@ -112,6 +117,37 @@ export default function OutcomePanel({ careCase }: { careCase: CareCase }) {
                 {OBSERVED_VALUES_WITHHELD}
               </span>
             ) : null}
+          </div>
+        ) : null}
+
+        {/* Only on a case whose own trail records a *settled* recovery — see `recoveryProofFor`.
+            A case that is still waiting has no block, because there is nothing yet to claim. */}
+        {careCase.recovery ? (
+          <div
+            data-testid="recovery-proof"
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 12,
+              marginTop: 10,
+              paddingTop: 16,
+              borderTop: "1px solid color-mix(in oklab, currentColor 10%, transparent)"
+            }}
+          >
+            <span style={{ ...LABEL, letterSpacing: "0.1em", color: "var(--state-verified)" }}>
+              {RECOVERY_PROOF_TITLE}
+            </span>
+            <span style={{ fontSize: 14.5, lineHeight: 1.6, color: "var(--muted-foreground)" }}>
+              {RECOVERY_PROOF_BODY}
+            </span>
+            <div style={{ display: "flex", gap: 28, flexWrap: "wrap", fontVariantNumeric: "tabular-nums" }}>
+              {recoveryProofRows(careCase.recovery).map((row) => (
+                <div key={row.label} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                  <span style={LABEL}>{row.label}</span>
+                  <span style={{ fontSize: 14 }}>{row.value}</span>
+                </div>
+              ))}
+            </div>
           </div>
         ) : null}
       </div>

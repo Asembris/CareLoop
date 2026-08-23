@@ -26,6 +26,7 @@ import type {
   DecisionKind,
   EventTone,
   ProvenanceStep,
+  RecoveryProof,
   RunStage
 } from "@/types/domain";
 import type { CaseState, FactView, RunState } from "./backend";
@@ -888,6 +889,49 @@ export function verificationDetailFor(passed: boolean | null, readBack: boolean)
   if (passed === null) return "pending";
   if (passed) return readBack ? "MATCH — external read-back" : "MATCH — recorded effect checked";
   return readBack ? "MISMATCH — authorized ≠ observed" : "MISMATCH — authorized ≠ recorded";
+}
+
+/* ------------------------------------------------------------------ *
+ * The recovery evidence block
+ * ------------------------------------------------------------------ */
+
+/** The heading over a settled recovery.
+ *
+ *  **Both halves are load-bearing and the second is where the honesty is.** "One appointment" is
+ *  the outcome; "same action safely replayed" is *how*, and it says plainly that the action was
+ *  replayed. The tidier heading — "recovered without sending the booking twice" — is false: the
+ *  measured shape is two HTTP requests, one action identity, one appointment. The backend's
+ *  `tests/test_recovery_proof.py` measures it and `tests/test_recovery_copy.py` sweeps this file
+ *  for any sentence that denies it. */
+export const RECOVERY_PROOF_TITLE = "ONE APPOINTMENT — SAME ACTION SAFELY REPLAYED";
+
+export const RECOVERY_PROOF_BODY =
+  "The clinic accepted the booking and CareLoop never got the answer. It reused the exact action " +
+  "identity it had frozen beforehand, so the clinic returned the appointment it already had " +
+  "instead of making a second one — then CareLoop checked that record itself before finishing.";
+
+export interface RecoveryProofRow {
+  label: string;
+  value: string;
+}
+
+/** The four rows of the block, each one a durable fact the API already projects.
+ *
+ *  **"Plans made" is deliberately not "model calls".** One persisted plan is what the trail can
+ *  support; it does not establish that no model was invoked and failed without producing one. The
+ *  stronger claim — zero planner, triage and model calls during recovery — is proven in the backend
+ *  with seams that raise if touched, and it belongs in the tests and the documentation rather than
+ *  on a screen that would be asserting something its own evidence cannot reach. */
+export function recoveryProofRows(proof: RecoveryProof): RecoveryProofRow[] {
+  return [
+    { label: "ACTION IDENTITY", value: `${proof.actionKey} · frozen before the first attempt` },
+    { label: "RECORDED ACTIONS", value: String(proof.recordedActions) },
+    { label: "PLANS MADE", value: `${proof.plans} · no new plan after the answer was lost` },
+    {
+      label: "CONFIRMED BY",
+      value: `an independent read of the clinic's own record · ${proof.observation}`
+    }
+  ];
 }
 
 /* ------------------------------------------------------------------ *

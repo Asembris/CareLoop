@@ -12,11 +12,15 @@ import type { ScenarioId } from "@/types/domain";
  *  referral that completes and is verified; 02 is a document that tries to instruct the agent and
  *  a branch that ends. Both are what the field's `referral` and `injection` sequences draw.
  *
- *  **03 is deliberately absent.** It is `resume` — CareLoop stops for a decision it has no
+ *  **03 and 04 are deliberately absent.** 03 is `resume` — CareLoop stops for a decision it has no
  *  authority to take, and finishes when the caregiver decides. The field ships a `mismatch`
  *  sequence, which draws a verification that disagrees and a loop that refuses to close; pointing
- *  03 at it would animate a failure this scenario does not have. An unmapped card gets the ambient
- *  field, which asserts nothing. A truthful `resume` sequence is a thing to author, not to borrow.
+ *  03 at it would animate a failure this scenario does not have. 04 is `recovery`, and the same
+ *  argument applies one step further: its verification *passes* — the whole beat is that CareLoop
+ *  reaches a confirmed booking after losing the answer — so `mismatch` would draw the opposite of
+ *  what happens, and `referral` would draw a loop that never wobbles. An unmapped card gets the
+ *  ambient field, which asserts nothing. A truthful sequence for either is a thing to author, not
+ *  to borrow.
  */
 const SCENE_ZONES: Partial<Record<ScenarioId, string>> = {
   referral: "referral",

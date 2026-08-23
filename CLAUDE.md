@@ -1347,6 +1347,114 @@ There is no queue, no worker, no lease, no claim table and no distributed lock; 
 one durable case are still made safe by the store's compare-and-set and the provider's own
 idempotency, exactly as before, and the per-case dedupe claim is scoped to one waker and says so.
 
+## A judge can watch an ambiguous outcome recover
+
+**The saga's strongest property was unreachable from a browser, and that is now closed.** Nothing an
+HTTP client could press produced an ambiguous external outcome, so `WAITING_EXTERNAL` had never been
+seen outside the test suite — `e2e/tests/unreachable-states.spec.ts` says so in its own words, and
+mocks the post-effect states because a browser cannot reach them. `POST /api/demo/scenarios/recovery`
+is the fifth demo scenario and the only one that arms anything: the clinic really creates the
+appointment, the answer is discarded below CareLoop's HTTP client, and **the shipped saga, the
+shipped five-second wake and the shipped read-back do everything after that**. No rule, state,
+transition, `ReasonCode`, timeline kind, telemetry attribute, payload key, API schema or evaluator
+changed, and no API allowlist widened — every field the presentation reads was already projected.
+
+**The claim is "one appointment", never "one request", and the difference is the whole of it.**
+Reconciliation issues a **second real `POST`** under the identity frozen before the first left the
+process, which is precisely why Demo World answers out of `_by_key` with the appointment it already
+made. Measured end to end in `tests/test_recovery_proof.py`: **2 provider `POST`s, 1 action identity,
+1 `ActionRecord`, 1 `PLAN_PROPOSED`, 1 appointment, 1 independent `GET` returning `MATCHED`, `DONE`**.
+The tidier sentence — *"CareLoop did not send the booking twice"* — is **false**, and it is exactly
+what a well-meaning editor writes. `tests/test_recovery_copy.py` sweeps `frontend/src/` and
+`docs/judges.md` for it and for eight near-synonyms, with both halves proven: the plausible false
+sentences are caught, and ten true ones — *"no second appointment"*, *"CareLoop will not repeat the
+action"*, *"tried twice to work out a valid next action"* — are left alone. It strips TypeScript
+comments before matching, because this repository explains rules by *stating the false sentence*, and
+a sweep that could not tell a claim from an explanation of the claim is a sweep that gets deleted.
+
+**There is no model-call count on screen, and that is a deliberate refusal.** The durable trail
+proves `PLAN_PROPOSED == 1`; it does **not** prove no model was invoked, because a model can be asked
+and fail without ever producing a plan. So the evidence block says *"Plans made · 1 · no new plan
+after the answer was lost"* and stops there. The stronger claim — zero planner, triage and model
+calls during recovery — is proven where it can be: `PhasedAgents` hands the second and every later
+context for that case an `ExplodingPlanner` and an `ExplodingTriage`, so a recovery *cannot* consult
+one, and the seams are counted as well so it is measured rather than inferred. The two are asserted
+separately and the docs say which is which.
+
+**The fault is a transport, and it fires only after the provider says it committed.**
+`careloop/api/faults.py::LostResponseTransport` wraps a real `httpx.BaseTransport`. The inner
+request goes **first, always**; the loss is injected only when the answer is `201`, which is Demo
+World *stating* it created the appointment — so an ambiguity can never be manufactured over a write
+that did not land. A `409`, a `404`, a `200` replay, a read and every other route pass through
+untouched, which is also what keeps the independent read-back that settles the case out of reach of
+the seam. Deciding before the request instead turns 7 assertions red; firing on any status turns 4.
+Nothing in the wrapper knows about cases, states, `ActionRecord`, policy, the planner, verification
+or settlement, and `tests/test_faults.py` sweeps `graph/`, `policy/`, `state/` and `tools/` so none
+of them can name it.
+
+**The intercepted answer is released, not abandoned.** A transport-returned `httpx.Response` holds a
+pooled connection until something consumes it, and nothing above `handle_request` will ever see this
+one — the method raises instead of returning it. So it sets `response.request` (which the transport
+layer does not, and which `read`/`close` both require), reads the body and closes it. Asserted
+against a stream the test owns, in **both** directions: a discarded answer must be drained and
+closed, and a passed-through answer must be left alone for `httpx.Client` to read. Removing only the
+release turns exactly one assertion red.
+
+**The fault belongs to one case, and the binding is which object a run holds rather than a check
+somebody remembered.** A world with a clinic builds **two** `ClinicClient`s into the same Demo World
+world; the context factory hands the losing one to runs for the case a recovery scenario armed and
+the ordinary one to every other run. So a booking belonging to any other case in that same visitor's
+world travels a transport containing no fault at all. This is not an argument from the scenario lock:
+`RunRegistry.start` refuses only a second run of the *same* case, so an interleaved booking is
+genuinely reachable, and `tests/test_recovery_proof.py::TestAnUnrelatedBookingCannotConsumeTheFault`
+drives one for real — the unrelated case books **first**, while armed, and reaches `DONE` with the
+loss still unspent. `case_id` is already a parameter of every `ContextFactory`, so no header, query
+parameter, token, endpoint or run-scoped flag was invented to correlate any of this.
+
+**One production arming site, swept.** `careloop/api/app.py::arm_the_lost_booking_response`, called
+between the scenario's reset and its delivery, under `deps.scenarios`.
+`DemoScenario.loses_the_booking_response` is data, so the route reads a scenario's own declaration
+rather than comparing a key to a literal, and the sweep in `tests/test_demo_recovery.py` fails if a
+second caller appears — the arrangement `CaseStore.clear` already has. **Default off**:
+`ApiDeps.faults` is `None` on every CareLoop with no clinic, the routes do not exist without
+`demo=True`, and a world with no clinic is refused with a truthful 409 rather than shown a recovery
+that demonstrates nothing. `_reset_quiesced_world` disarms — the second of two disarms, since the
+transport consumes its own — so a scenario that ran and one abandoned halfway leave the world
+identical, and a *refused* reset changes nothing at all, arming included.
+
+**`test_api_demo.py`'s distinctness invariant moved axis, deliberately.** `referral` and `recovery`
+deliver the *same* inbound event, because the beat is what happens when the answer to a perfectly
+ordinary booking never comes back and a different referral would make the scenario about the
+document. So "event ids are distinct" — which was the property standing in for the real one — is now
+"no two scenarios agree on everything a judge can perceive", with the pair that exercises it asserted
+directly.
+
+**Two `STATE_TRANSITION` rows reach the spine and no others.** `_stop_with_the_outcome_unestablished`
+writes no timeline entry of its own on the waiting branch, so `EXECUTING → WAITING_EXTERNAL` **is**
+the record that the answer never came, and `WAITING_EXTERNAL → EXECUTING` is the record that the
+frozen attempt was re-claimed. Keyed on the closed `from`/`to` enum and **never** on the transition's
+free-text `reason`, which a backend edit could reword. Every other transition is still the state
+machine narrating itself and is still dropped; an ordinary booking's spine is unchanged, asserted
+row for row. `WAITING_EXTERNAL`'s status copy is sharpened globally — *"NO ANSWER FROM THE CLINIC"* —
+which is truthful because the state means exactly one thing, and would stop being truthful the moment
+anything else writes it.
+
+**The evidence block renders from a settled signature, never from a state.** `DONE`, plus a frozen
+identity, plus a real waiting episode, plus a real re-claim, plus an `ACTION_EXECUTED` carrying *that*
+identity, plus exactly one `ActionRecord`, plus an independent read. A case that is merely
+`WAITING_EXTERNAL` fails it, which is the point: the outcome is genuinely unknown then, and a block
+saying "one appointment" would assert something CareLoop does not yet know. Only a short key prefix
+is shown. A mutant that renders it from the state alone turns 5 frontend tests red.
+
+**Real process death is not reachable from the live demo, and the reason is not squeamishness.**
+Visitor worlds are `SqliteCaseStore(":memory:")`, so killing the process there would destroy the very
+durability the claim is about — the claim would be *false*, quite apart from taking every other
+visitor's world with it. The split is stated in `docs/judges.md`: the live product demonstrates
+provider-commit-plus-lost-answer recovering with no restart, and `tests/test_saga_chaos.py` (a real
+child process, a real SQLite file, `os._exit` on the line after the clinic confirms) plus
+`scripts/resume_demo.py` carry the hard-crash property. **No AgentCore claim is made from this
+scenario**; the deterministic trace evaluation stays what it was, recorded and operator-driven.
+
 ## Four questions about one argument
 
 **An argument answers four questions, and folding any two of them together is how each of the last

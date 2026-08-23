@@ -287,15 +287,27 @@ class TestTheRecoveryClassesAreDeclaredAndCovered:
 
         assert frozenset(RECOVERY_CLASS) == REGISTRY.external_effect_tools
 
-    def test_only_booking_is_replayable(self) -> None:
-        """An exact set, so widening it is a deliberate edit with a measurement behind it."""
+    def test_exactly_the_two_measured_providers_are_replayable(self) -> None:
+        """An exact set, so widening it is a deliberate edit with a measurement behind it.
+
+        Both entries were measured against their own provider before being written, and the two
+        contracts have almost nothing in common: the clinic replays the original record under the
+        same key, while the object store refuses a duplicate outright and CareLoop settles the
+        outcome with a fresh read. That is why :class:`RecoveryClass` is defined by the outcome it
+        guarantees rather than by a mechanism.
+        """
         replayable = {
             name
             for name, klass in RECOVERY_CLASS.items()
             if klass is RecoveryClass.IDEMPOTENT_REPLAYABLE
         }
 
-        assert replayable == {"book_appointment"}
+        assert replayable == {"book_appointment", "upload_document"}
+
+    def test_the_simulated_effects_are_still_refused(self) -> None:
+        """The other half. Nothing that reaches no real provider became replayable."""
+        assert RECOVERY_CLASS["send_email"] is RecoveryClass.NOT_REPLAYABLE
+        assert RECOVERY_CLASS["grant_portal_access"] is RecoveryClass.NOT_REPLAYABLE
 
     def test_a_replay_needs_both_a_class_and_an_observer(self) -> None:
         """Neither condition alone. A replay nothing can read back certifies on its own receipt."""

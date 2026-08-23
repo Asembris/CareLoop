@@ -39,8 +39,8 @@ from collections.abc import Callable, Collection, Mapping
 from enum import StrEnum
 from typing import Final
 
-from careloop.tools.clinic import ClinicRefused, ClinicUnavailable
 from careloop.tools.executor import ExecutionResult
+from careloop.tools.provider import ProviderRefused, ProviderUnavailable
 from careloop.tools.registry import REGISTRY
 
 
@@ -177,11 +177,16 @@ def dispatch_prepared(dispatch: Callable[[], ExecutionResult]) -> ExecutionResul
     second translation would be a second answer. What differs is what each node *does* with the
     result, and that difference lives in the nodes where it can be read.
 
-    **This is where HTTP stops on the recovery path**, exactly as
-    :func:`careloop.graph.context._clinic_readback` is where it stops on the observation path, and
+    **This is where transport stops on the recovery path**, exactly as
+    :func:`careloop.graph.providers.clinic_readback` is where it stops on the observation path, and
     for the same reason: a node deciding a lifecycle should be reading what a call *established*,
-    not what status a service returned. Nothing above this function knows that a clinic speaks HTTP,
-    which is what lets a second integration answer the same question in its own terms.
+    not what status a service returned.
+
+    It matches on :mod:`careloop.tools.provider`'s two neutral types rather than on any client's
+    own, which is what makes the sentence above true of this function and not merely of its callers.
+    It named ``ClinicUnavailable`` and ``ClinicRefused`` until a second provider existed, and a
+    provider raising anything else would have passed straight through untranslated — so a lost
+    response would have failed the case instead of leaving it waiting.
 
     ``dispatch`` is a thunk rather than a tool name and an argument map, so this function chooses
     nothing about *what* is re-issued — the caller has already proved which action that is, and
@@ -195,12 +200,12 @@ def dispatch_prepared(dispatch: Callable[[], ExecutionResult]) -> ExecutionResul
     """
     try:
         return dispatch()
-    except ClinicUnavailable as unreachable:
+    except ProviderUnavailable as unreachable:
         raise DispatchUnavailable(
             "the external system could not be reached, so nothing was established about the "
             "prepared action"
         ) from unreachable
-    except ClinicRefused as refused:
+    except ProviderRefused as refused:
         raise DispatchRefused(
             "the external system answered and declined the replay, so nothing was established "
             "about the prepared action"

@@ -29,10 +29,14 @@ from pydantic import BaseModel, ConfigDict
 
 from careloop.agents.planner import PlannerAgent
 from careloop.agents.triage import TriageAgent
+from careloop.graph.providers import (
+    ExternalProvider,
+    clinic_provider,
+    merged_handlers,
+    merged_readbacks,
+)
 from careloop.graph.verify import (
     INDEPENDENTLY_OBSERVABLE,
-    ObservationAbsent,
-    ObservationUnavailable,
     ReadBack,
 )
 from careloop.graph.witness import NO_WITNESS, Witness
@@ -43,17 +47,10 @@ from careloop.policy.verdicts import ReasonCode
 from careloop.state.case import ActionRecord, Approval, Case, CaseState, TimelineKind
 from careloop.state.store import CaseStore
 from careloop.tools.callables import ToolSet
-from careloop.tools.clinic import (
-    AppointmentNotFound,
-    ClinicClient,
-    ClinicRefused,
-    ClinicUnavailable,
-    clinic_executor,
-)
+from careloop.tools.clinic import ClinicClient
 from careloop.tools.documents import DocumentStore
 from careloop.tools.executor import MockExternalExecutor
 from careloop.tools.idempotency import args_digest, idempotency_key
-from careloop.tools.results import ActionResult
 
 
 def _utcnow() -> datetime:
@@ -636,8 +633,23 @@ class RunContext:
     builds the executor whose ``book_appointment`` is a genuine HTTP call *and* the read-back
     verification uses to observe the result independently. A real booking checked against a
     simulated verification would be exactly the tautology this collaborator exists to remove, so
-    the combination is made unconstructable rather than discouraged: supplying ``clinic`` and
+    the combination is made unconstructable rather than discouraged: supplying a provider and
     ``executor`` together raises.
+
+    Kept as its own field rather than folded into :attr:`providers` because it is what every
+    existing composition root and test passes, and because the clinic is the one provider whose
+    absence has a settled meaning throughout the suite. It is converted to an
+    :class:`~careloop.graph.providers.ExternalProvider` on the way in, so nothing below this line
+    treats it specially.
+    """
+
+    providers: tuple[ExternalProvider, ...] = ()
+    """Every other real external system this run is bound to.
+
+    The generalisation of :attr:`clinic`. Handlers and read-backs are merged across all of them, so
+    "which action types are really external" and "which of those can be independently observed" are
+    answers this object assembles rather than facts a lifecycle spells out. Two providers claiming
+    one action type raises :class:`~careloop.graph.providers.ConflictingProviders`.
     """
 
     documents: DocumentStore | None = None
@@ -696,19 +708,30 @@ class RunContext:
         #: later edit could use to suppress a claim.
         self.effect_claimed: bool = False
 
-        if self.clinic is not None and self.executor is not None:
+        #: Every real external system this run reaches, the clinic among them.
+        #:
+        #: Assembled once so that "is this run bound to anything real" is one question with one
+        #: answer, and so the two things a provider brings — a real write and the read that observes
+        #: it — can never be supplied separately.
+        self.bound: tuple[ExternalProvider, ...] = (
+            self.providers
+            if self.clinic is None
+            else (*self.providers, clinic_provider(self.clinic))
+        )
+
+        if self.bound and self.executor is not None:
             raise ConflictingExecutors(
-                "a run is bound to a clinic or to an executor, never to both: the clinic builds "
-                "the executor whose bookings are real and the read-back that observes them, and "
-                "an executor supplied beside it could make one of those two simulated"
+                "a run is bound to providers or to an executor, never to both: a provider builds "
+                "the executor whose effects are real and the read-backs that observe them, and "
+                "an executor supplied beside one could make either of those simulated"
             )
         if self.executor is None:
             self.executor = (
-                clinic_executor(self.clinic) if self.clinic is not None else MockExternalExecutor()
+                MockExternalExecutor(handlers=merged_handlers(self.bound))
+                if self.bound
+                else MockExternalExecutor()
             )
-        self.readbacks: dict[str, ReadBack] = (
-            {} if self.clinic is None else {"book_appointment": _clinic_readback(self.clinic)}
-        )
+        self.readbacks: dict[str, ReadBack] = merged_readbacks(self.bound)
 
         self.gate = PolicyGate(self.current_case)
         self.hook = PolicyHook(self.gate)
@@ -731,55 +754,7 @@ class RunContext:
 
 
 class ConflictingExecutors(Exception):
-    """Raised when a run is handed both a clinic and an executor."""
-
-
-def _clinic_readback(client: ClinicClient) -> ReadBack:
-    """Observe a booking by asking the clinic what it holds now.
-
-    **A separate GET, keyed on the confirmation the effect returned.** It is not the booking's own
-    response replayed, and it is not read from anything CareLoop stored — those would both make the
-    check a re-read of CareLoop's receipt.
-
-    **This is the boundary where HTTP stops.** Everything the client can raise is translated into
-    the observation vocabulary of :mod:`careloop.graph.verify`, so a verifier and a graph node see
-    what the read *established* rather than what status a service returned. Nothing above this
-    function knows that a clinic speaks HTTP at all, which is what lets a second integration answer
-    the same question in its own terms.
-
-    Two answers, and they are different facts:
-
-    ``AppointmentNotFound`` — the clinic answered about the exact confirmation it minted and said
-    it holds no such appointment. A definite external answer, so
-    :class:`~careloop.graph.verify.ObservationAbsent`.
-
-    Anything else — nobody answered, or what answered could not serve the read. CareLoop
-    established nothing, so :class:`~careloop.graph.verify.ObservationUnavailable`. The originating
-    exception is kept as ``__cause__`` rather than discarded: distinguishing a transient cause from
-    a permanent one is a judgement Patch 2A deliberately does not make, and re-deriving it later
-    should not mean re-plumbing this.
-
-    The ordering is load-bearing — ``AppointmentNotFound`` is a ``ClinicRefused``, so the narrower
-    clause has to come first or the absence is swallowed by the general case.
-
-    **The message is identical for both**, and that is deliberate too. What the failure *means*
-    lives in its type; a reader who wants the clinic's own words has the diagnostic. Making the two
-    texts differ would invite something downstream to tell them apart by reading it.
-    """
-
-    def observe(result: ActionResult) -> ActionResult:
-        try:
-            return client.appointment(result.confirmation_id)
-        except AppointmentNotFound as absent:
-            raise ObservationAbsent(
-                f"the clinic could not confirm {result.confirmation_id}: {absent}"
-            ) from absent
-        except (ClinicRefused, ClinicUnavailable) as failure:
-            raise ObservationUnavailable(
-                f"the clinic could not confirm {result.confirmation_id}: {failure}"
-            ) from failure
-
-    return observe
+    """Raised when a run is handed both a real provider and an executor."""
 
 
 def _empty_registry():

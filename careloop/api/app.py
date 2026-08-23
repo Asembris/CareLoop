@@ -758,6 +758,13 @@ def _reset_quiesced_world(deps: ApiDeps) -> dict[str, object]:
     Split out so the ordering above is a structure rather than a comment: everything here runs
     inside the quiesced scope, and there is no way to call it from outside one by accident that does
     not also mean writing this name.
+
+    **Only this function can say whether the teardown went through**, which is why discarding the
+    withdrawn wake intents happens here rather than in the scope. A reset that clears the store has
+    destroyed the cases those intents named, so keeping them would schedule runs for cases that no
+    longer exist; a reset that is *refused* has destroyed nothing, and its intents are restored when
+    the gate reopens — which is what stops a momentary refusal costing a still-waiting case its
+    scheduled reconciliation. The scope cannot tell the two apart and does not try.
     """
     if (running := deps.runs.any_in_flight()) is not None:
         raise HTTPException(
@@ -769,6 +776,10 @@ def _reset_quiesced_world(deps: ApiDeps) -> dict[str, object]:
         )
 
     removed = deps.store.clear()
+    # The cases those wakes were about are gone, so their intents go with them. After this line and
+    # not before it: everything above can still refuse, and a refusal must leave the scheduling it
+    # found exactly as it was.
+    deps.wakes.discard_deferred()
     # `put_back`, not `reset`: a session-scoped clinic has its world *ended*, which is the same
     # observable outcome — the next booking gets a freshly seeded world — and is also what keeps
     # this registry and Demo World's agreeing about who is still here. Which of the two happens is

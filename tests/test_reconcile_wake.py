@@ -37,7 +37,7 @@ import pytest
 from careloop.api.deps import ApiDeps
 from careloop.api.runs import RunRegistry
 from careloop.api.sessions import SessionWorlds
-from careloop.api.wake import ReconcileWaker, stopped_waker
+from careloop.api.wake import WAKE_DELAYS, ReconcileWaker, RecoveryOutcome, stopped_waker
 from careloop.state import InMemoryCaseStore
 
 #: How long a handshake may wait before the test fails instead of hanging.
@@ -90,10 +90,11 @@ class Runs:
         self.release = asyncio.Event()
         self.started: list[str] = []
 
-    def start(self, case_id: str = CASE) -> None:
+    def start(self, case_id: str = CASE) -> RecoveryOutcome:
         """Register one run. Shaped as a :data:`careloop.api.wake.Registration`."""
         self.started.append(case_id)
         self.registry.start(case_id, self._run)
+        return RecoveryOutcome.STARTED
 
     async def _run(self) -> Any:
         await self.release.wait()
@@ -196,13 +197,17 @@ class TestTheStopBoundaryIsLinearized:
         assert runs.started == [CASE]
         assert waker.stopped
 
-    def test_a_wake_firing_while_the_gate_is_merely_closed_registers_nothing(self) -> None:
+    def test_a_wake_firing_while_the_gate_is_merely_closed_is_deferred_not_spent(self) -> None:
         """The window a teardown decides inside, and the only path where one guard stands alone.
 
         ``close`` deliberately does **not** withdraw the pending wakes — an eviction that backs off
         has to leave them intact — so a wake that fires here passes the identity check and reaches
         the gate check with nothing else in front of it. After a ``stop`` the identity check fires
         first, because stopping moves the pending tasks aside; this is what covers the other half.
+
+        **Deferred, not consumed.** The wake registers nothing *and keeps its intent*, and it does
+        not count as an attempt: a momentary lifecycle event must not cost a still-waiting case the
+        only opportunity it had scheduled, and must not push its backoff along either.
         """
 
         async def scenario() -> tuple[Runs, ReconcileWaker]:
@@ -225,6 +230,9 @@ class TestTheStopBoundaryIsLinearized:
         # Closed, not stopped: this is the reversible half, and the wake was refused by it alone.
         assert not waker.stopped
         assert not waker.accepting
+        # The opportunity survives the window rather than being burned by it.
+        assert waker.deferred() == (CASE,)
+        assert waker.attempts(CASE) == 0
 
     def test_a_wake_firing_after_the_gate_reopens_does_its_job(self) -> None:
         """Vacuity for the guard above: a closed gate is what refuses, not the code path.
@@ -314,6 +322,307 @@ class TestTheStopBoundaryIsLinearized:
             return [first, waker.accepting]
 
         assert asyncio.run(scenario()) == [False, True]
+
+
+class TestDeferredWakesSurviveAReversibleClose:
+    """A temporary close costs a case nothing, and that is the whole of this class.
+
+    The lifecycle foundation established that a wake cannot act across a teardown. Once wakes carry
+    production meaning, *not acting* is not enough on its own: a wake that fell due inside a window
+    that was then reopened has to come back, or an eviction that changed its mind and a reset that
+    was refused would each silently strand a case in ``WAITING_EXTERNAL`` with nothing scheduled.
+    """
+
+    def test_reopening_the_gate_restores_a_deferred_wake(self) -> None:
+        async def scenario() -> tuple[Runs, ReconcileWaker]:
+            runs = Runs()
+            gate = threading.Event()
+            waker = ReconcileWaker(sleeper=held_by(gate))
+
+            assert waker.arm(CASE, 0.0, runs.start)
+            waker.close()
+            gate.set()
+            while waker.pending():
+                await asyncio.sleep(0)
+            assert waker.deferred() == (CASE,)
+
+            waker.reopen()
+            # Restored as a fresh pending wake, which then fires: the sleeper's gate is still open.
+            while waker.pending():
+                await asyncio.sleep(0)
+            await runs.finish()
+            return runs, waker
+
+        runs, waker = asyncio.run(scenario())
+
+        assert runs.started == [CASE], "a deferred wake was lost when the gate reopened"
+        assert waker.deferred() == ()
+        assert waker.attempts(CASE) == 1
+
+    def test_arming_while_the_gate_is_closed_defers_rather_than_refusing(self) -> None:
+        """A run that settles mid-teardown must not lose its case's next opportunity either."""
+
+        async def scenario() -> tuple[bool, tuple[str, ...], tuple[str, ...], Runs]:
+            runs = Runs()
+            waker = ReconcileWaker(sleeper=never())
+
+            waker.close()
+            armed = waker.arm(CASE, 0.0, runs.start)
+            deferred = waker.deferred()
+
+            waker.reopen()
+            while not waker.pending():
+                await asyncio.sleep(0)
+            restored = waker.pending()
+
+            await waker.quiesce()
+            return armed, deferred, restored, runs
+
+        armed, deferred, restored, runs = asyncio.run(scenario())
+
+        assert armed is False, "arm reports that nothing is scheduled to fire yet"
+        assert deferred == (CASE,), "and keeps the intent rather than dropping it"
+        assert restored == (CASE,), "which the reopened gate turns back into a pending wake"
+        assert runs.started == []
+
+    def test_reopen_is_safe_from_a_thread_that_owns_no_loop(self) -> None:
+        """Eviction backs off from a Starlette worker thread, so restoring must cross back safely.
+
+        Arming creates a task, which cannot be done from another thread — so ``reopen`` hands the
+        restoration to the captured loop rather than doing it where it stands. Asserted by doing it
+        from a real thread and requiring the wake to come back.
+        """
+
+        async def scenario() -> tuple[Runs, ReconcileWaker]:
+            runs = Runs()
+            gate = threading.Event()
+            waker = ReconcileWaker(sleeper=held_by(gate))
+
+            assert waker.arm(CASE, 0.0, runs.start)
+            waker.close()
+            gate.set()
+            while waker.pending():
+                await asyncio.sleep(0)
+            assert waker.deferred() == (CASE,)
+
+            await asyncio.to_thread(waker.reopen)
+            # The restoration is queued on this loop; giving it turns is all that is needed.
+            while not runs.started:
+                await asyncio.sleep(0)
+            await runs.finish()
+            return runs, waker
+
+        runs, waker = asyncio.run(scenario())
+
+        assert runs.started == [CASE]
+        assert waker.deferred() == ()
+
+    def test_a_nested_close_does_not_restore_early(self) -> None:
+        async def scenario() -> tuple[tuple[str, ...], tuple[str, ...], Runs]:
+            runs = Runs()
+            waker = ReconcileWaker(sleeper=never())
+
+            waker.close()
+            waker.close()
+            waker.arm(CASE, 0.0, runs.start)
+
+            waker.reopen()
+            still_deferred = waker.deferred()
+            waker.reopen()
+            while not waker.pending():
+                await asyncio.sleep(0)
+            restored = waker.pending()
+
+            await waker.quiesce()
+            return still_deferred, restored, runs
+
+        still_deferred, restored, runs = asyncio.run(scenario())
+
+        assert still_deferred == (CASE,)
+        assert restored == (CASE,)
+        assert runs.started == []
+
+    def test_stopping_discards_deferred_intents(self) -> None:
+        """Permanent means permanent: a stopped world's deferred wakes are not a backlog."""
+
+        async def scenario() -> tuple[tuple[str, ...], bool, Runs]:
+            runs = Runs()
+            waker = ReconcileWaker(sleeper=never())
+
+            waker.close()
+            waker.arm(CASE, 0.0, runs.start)
+            assert waker.deferred() == (CASE,)
+
+            waker.stop()
+            after_stop = waker.deferred()
+            waker.reopen()
+            for _ in range(5):
+                await asyncio.sleep(0)
+
+            await waker.quiesce()
+            return after_stop, waker.stopped, runs
+
+        after_stop, stopped, runs = asyncio.run(scenario())
+
+        assert after_stop == ()
+        assert stopped
+        assert runs.started == []
+
+    def test_discarding_deferred_intents_is_explicit(self) -> None:
+        """What a teardown that really went through calls, and nothing else does."""
+
+        async def scenario() -> tuple[int, tuple[str, ...], Runs]:
+            runs = Runs()
+            waker = ReconcileWaker(sleeper=never())
+
+            waker.close()
+            waker.arm(CASE, 0.0, runs.start)
+            waker.arm("case-other", 0.0, runs.start)
+            discarded = waker.discard_deferred()
+
+            waker.reopen()
+            for _ in range(5):
+                await asyncio.sleep(0)
+            return discarded, waker.pending(), runs
+
+        discarded, pending, runs = asyncio.run(scenario())
+
+        assert discarded == 2
+        assert pending == ()
+        assert runs.started == []
+
+
+class TestTheBackoffAdvancesOnlyOnRealAttempts:
+    """The schedule is a table, and only a registered reconciliation moves along it.
+
+    Counting a deferral, a clash with another run or a case that had already settled would have a
+    provider outage look longer than it was, and would push a case that is genuinely retrying
+    towards the ceiling for reasons that have nothing to do with the provider.
+    """
+
+    def test_the_schedule_is_the_declared_table_and_its_last_value_repeats(self) -> None:
+        waker = ReconcileWaker(sleeper=never())
+        seen = []
+        for attempt in range(8):
+            waker._attempts[CASE] = attempt
+            seen.append(waker.delay_for(CASE))
+
+        assert seen == [5.0, 15.0, 45.0, 120.0, 300.0, 300.0, 300.0, 300.0]
+        assert seen[: len(WAKE_DELAYS)] == list(WAKE_DELAYS)
+
+    def test_a_started_registration_advances_it(self) -> None:
+        """Driven through ``schedule`` rather than ``arm``: that is the production entry point."""
+
+        async def scenario() -> tuple[list[float], int]:
+            delays: list[float] = []
+
+            async def sleeper(delay: float) -> None:
+                delays.append(delay)
+
+            waker = ReconcileWaker(sleeper=sleeper)
+            for _ in range(3):
+                assert waker.schedule(CASE, lambda: RecoveryOutcome.STARTED)
+                while waker.pending():
+                    await asyncio.sleep(0)
+            return delays, waker.attempts(CASE)
+
+        delays, attempts = asyncio.run(scenario())
+
+        assert delays == [5.0, 15.0, 45.0]
+        assert attempts == 3
+
+    def test_a_registration_that_raises_is_logged_and_costs_no_attempt(self) -> None:
+        """A scheduler that dies on a bug in the layer above stops scheduling silently.
+
+        Nothing is counted, nothing is re-raised, and the task finishes cleanly rather than leaving
+        an exception nobody retrieves — while the failure itself is logged at ``exception`` level.
+        """
+        unhandled: list[dict[str, Any]] = []
+
+        async def scenario() -> tuple[int, bool]:
+            asyncio.get_running_loop().set_exception_handler(
+                lambda _loop, context: unhandled.append(context)
+            )
+
+            async def sleeper(_delay: float) -> None:
+                return None
+
+            def exploding() -> RecoveryOutcome:
+                raise RuntimeError("the layer above is broken")
+
+            waker = ReconcileWaker(sleeper=sleeper)
+            assert waker.arm(CASE, 0.0, exploding)
+            task = next(iter(waker._pending.values()))
+            while waker.pending():
+                await asyncio.sleep(0)
+            for _ in range(3):
+                await asyncio.sleep(0)
+            return waker.attempts(CASE), task.done() and task.exception() is None
+
+        attempts, finished_cleanly = asyncio.run(scenario())
+
+        assert attempts == 0
+        assert finished_cleanly
+        assert unhandled == []
+
+    def test_a_clash_with_another_run_is_not_an_attempt(self) -> None:
+        async def scenario() -> tuple[list[float], int]:
+            delays: list[float] = []
+
+            async def sleeper(delay: float) -> None:
+                delays.append(delay)
+
+            waker = ReconcileWaker(sleeper=sleeper)
+            for _ in range(3):
+                assert waker.schedule(CASE, lambda: RecoveryOutcome.RUN_ALREADY_IN_FLIGHT)
+                while waker.pending():
+                    await asyncio.sleep(0)
+            return delays, waker.attempts(CASE)
+
+        delays, attempts = asyncio.run(scenario())
+
+        assert delays == [5.0, 5.0, 5.0], "a clash pushed the backoff along"
+        assert attempts == 0
+
+    def test_a_settled_case_clears_the_backoff(self) -> None:
+        async def scenario() -> tuple[int, int]:
+            async def sleeper(_delay: float) -> None:
+                return None
+
+            waker = ReconcileWaker(sleeper=sleeper)
+            assert waker.schedule(CASE, lambda: RecoveryOutcome.STARTED)
+            while waker.pending():
+                await asyncio.sleep(0)
+            after_start = waker.attempts(CASE)
+
+            assert waker.schedule(CASE, lambda: RecoveryOutcome.STATE_MOVED)
+            while waker.pending():
+                await asyncio.sleep(0)
+            after_move = waker.attempts(CASE)
+
+            return after_start, after_move
+
+        assert asyncio.run(scenario()) == (1, 0)
+
+    def test_forgetting_a_case_clears_its_backoff(self) -> None:
+        async def scenario() -> tuple[int, int, bool]:
+            async def sleeper(_delay: float) -> None:
+                return None
+
+            waker = ReconcileWaker(sleeper=sleeper)
+            assert waker.schedule(CASE, lambda: RecoveryOutcome.STARTED)
+            while waker.pending():
+                await asyncio.sleep(0)
+            before = waker.attempts(CASE)
+
+            forgotten = waker.forget(CASE)
+            return before, waker.attempts(CASE), forgotten
+
+        before, after, forgotten = asyncio.run(scenario())
+
+        assert (before, after) == (1, 0)
+        # Nothing was pending — the wake had already fired — and forgetting still cleared the count.
+        assert forgotten is False
 
 
 # -- B. eviction -----------------------------------------------------------------------------------

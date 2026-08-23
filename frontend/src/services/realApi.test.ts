@@ -249,6 +249,126 @@ describe("the timeline the spine renders", () => {
 });
 
 /* ------------------------------------------------------------------ *
+ * The recovery beats
+ *
+ * `_stop_with_the_outcome_unestablished` writes no timeline entry of its own when a case starts
+ * waiting on an unanswered request, and `ReconcileNode` writes none when it re-claims the frozen
+ * attempt. So those two `STATE_TRANSITION` rows *are* the record, and without them the strongest
+ * thing the backend does was invisible on the page whose job is to say what happened.
+ * ------------------------------------------------------------------ */
+
+describe("the two recovery transitions the spine renders", () => {
+  it("says the request was sent and nothing came back", () => {
+    const events = timelineFor([entry("STATE_TRANSITION", { from: "EXECUTING", to: "WAITING_EXTERNAL" })]);
+
+    expect(events).toHaveLength(1);
+    expect(events[0].text).toBe(
+      "No answer came back — CareLoop does not yet know whether it happened"
+    );
+  });
+
+  it("says the frozen identity is being retried, never that nothing is sent again", () => {
+    // The load-bearing wording. Reconciliation really does issue a second POST — under the
+    // identity frozen before the first — which is why the provider returns the appointment it
+    // already made instead of creating another. `tests/test_recovery_copy.py` in the backend is
+    // what fails if this ever claims CareLoop did not send it again.
+    const events = timelineFor([entry("STATE_TRANSITION", { from: "WAITING_EXTERNAL", to: "EXECUTING" })]);
+
+    expect(events).toHaveLength(1);
+    expect(events[0].text).toBe("Retrying the same frozen booking identity — never a new booking");
+  });
+
+  it("renders each of them exactly once in a whole recovery trail", () => {
+    const events = timelineFor([
+      entry("PLAN_PROPOSED", { tool_name: "book_appointment" }),
+      entry("POLICY_ALLOW", { tool_name: "book_appointment" }),
+      entry("ACTION_PREPARED", { tool_name: "book_appointment", idempotency_key: "abc123" }),
+      entry("STATE_TRANSITION", { from: "READY_TO_EXECUTE", to: "EXECUTING" }),
+      entry("STATE_TRANSITION", { from: "EXECUTING", to: "WAITING_EXTERNAL" }),
+      entry("STATE_TRANSITION", { from: "WAITING_EXTERNAL", to: "EXECUTING" }),
+      entry("ACTION_EXECUTED", { tool_name: "book_appointment", idempotency_key: "abc123" }),
+      entry("STATE_TRANSITION", { from: "EXECUTING", to: "VERIFYING" }),
+      entry("VERIFICATION_PASSED", { tool_name: "book_appointment", read_back: "true" }),
+      entry("STATE_TRANSITION", { from: "VERIFYING", to: "DONE" })
+    ]);
+
+    expect(events.map((e) => e.text)).toEqual([
+      "Next step: book the appointment",
+      "Checked against policy — allowed",
+      "The exact booking was written down before anything was sent",
+      "No answer came back — CareLoop does not yet know whether it happened",
+      "Retrying the same frozen booking identity — never a new booking",
+      "Appointment booked",
+      "Clinic record checked independently — match"
+    ]);
+  });
+
+  it("still keeps every other state change off the spine", () => {
+    // The narrowing. Four transitions in, none of them one of the two, nothing out.
+    const events = timelineFor([
+      entry("STATE_TRANSITION", { from: "NEW", to: "GATHERING_EVIDENCE" }),
+      entry("STATE_TRANSITION", { from: "READY_TO_EXECUTE", to: "EXECUTING" }),
+      entry("STATE_TRANSITION", { from: "EXECUTING", to: "VERIFYING" }),
+      entry("STATE_TRANSITION", { from: "VERIFYING", to: "DONE" }),
+      entry("STATE_TRANSITION", { from: "AWAITING_HUMAN", to: "VERIFYING" })
+    ]);
+
+    expect(events).toEqual([]);
+  });
+
+  it("reads the closed enum and never the transition's free-text reason", () => {
+    // A backend rewording of `reason` must not move a single pixel here.
+    const reworded = entry("STATE_TRANSITION", {
+      from: "EXECUTING",
+      to: "WAITING_EXTERNAL",
+      reason: "something a future commit rewrote entirely"
+    });
+
+    expect(timelineFor([reworded])[0].text).toBe(
+      "No answer came back — CareLoop does not yet know whether it happened"
+    );
+  });
+
+  it("leaves an ordinary booking trail exactly as it was", () => {
+    // F1. A case that never needed recovering gains nothing: same rows, same order, same words.
+    const events = timelineFor([
+      entry("CASE_CREATED", { event_id: "evt-0001-referral" }),
+      entry("STATE_TRANSITION", { from: "NEW", to: "GATHERING_EVIDENCE" }),
+      entry("EVIDENCE_RECORDED", { key: "slot_start", trust_level: "UNTRUSTED" }),
+      entry("FACT_PROMOTED", { key: "slot_start", to_trust_level: "CONTROLLED" }),
+      entry("STATE_TRANSITION", { from: "GATHERING_EVIDENCE", to: "PLANNING" }),
+      entry("PLAN_PROPOSED", { tool_name: "book_appointment" }),
+      entry("POLICY_ALLOW", { tool_name: "book_appointment" }),
+      entry("STATE_TRANSITION", { from: "READY_TO_EXECUTE", to: "EXECUTING" }),
+      entry("ACTION_EXECUTED", { tool_name: "book_appointment", idempotency_key: "abc123" }),
+      entry("VERIFICATION_PASSED", { tool_name: "book_appointment", read_back: "true" }),
+      entry("STATE_TRANSITION", { from: "VERIFYING", to: "DONE" })
+    ]);
+
+    expect(events.map((e) => e.text)).toEqual([
+      "Case opened",
+      "Appointment slot found",
+      "Appointment slot validated",
+      "Next step: book the appointment",
+      "Checked against policy — allowed",
+      "Appointment booked",
+      "Clinic record checked independently — match"
+    ]);
+  });
+
+  it("says what a frozen action identity is for, in the register the page is in", () => {
+    // The backend summary is "book_appointment prepared for dispatch", which is accurate and
+    // written for an engineer. It also must not claim anything was sent, because nothing was.
+    const events = timelineFor([
+      entry("ACTION_PREPARED", { tool_name: "book_appointment", idempotency_key: "abc123" })
+    ]);
+
+    expect(events[0].text).toBe("The exact booking was written down before anything was sent");
+    expect(events[0].tone).toBe("neutral");
+  });
+});
+
+/* ------------------------------------------------------------------ *
  * Evidence
  * ------------------------------------------------------------------ */
 

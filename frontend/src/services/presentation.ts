@@ -99,10 +99,21 @@ const STATUS: Record<CaseState, StatusCopy> = {
     statusText: "Confirming with the clinic…",
     headline: "Confirming with the clinic…"
   },
+  /* `WAITING_EXTERNAL` means one exact thing — a request that was really sent and never answered
+     — so the copy can say it, and the old line did not. "Waiting for the other side" reads like a
+     polite queue; what has actually happened is that CareLoop asked an outside system to do
+     something, got no answer at all, and does not know whether it happened.
+
+     It deliberately does not promise that nothing will be sent again, because something will be:
+     reconciliation re-issues the *same frozen booking identity*, which is a lookup that also
+     repairs. What it promises is the true and stronger thing — the identity does not change, and
+     nothing is concluded until the other system's own record has been read. See
+     `tests/test_recovery_copy.py` in the backend, which fails if any of this copy starts claiming
+     CareLoop will not send the request again. */
   WAITING_EXTERNAL: {
-    statusLabel: "WAITING FOR A REPLY",
-    statusText: "Waiting for the other side",
-    headline: "Waiting for the other side"
+    statusLabel: "NO ANSWER FROM THE CLINIC",
+    statusText: "Sent, with no answer back",
+    headline: "The booking was sent and no answer came back"
   },
   DONE: {
     statusLabel: "COMPLETED",
@@ -421,6 +432,10 @@ const TONES: Record<string, EventTone> = {
   // entries, and this row is the one that says a person is needed — the same tone the Needs You
   // card it produces is drawn in.
   MANUAL_HANDOFF_REQUIRED: "decision",
+  // Neutral on purpose. A frozen action identity is a precaution, not an alarm, and colouring it
+  // would make an ordinary booking look eventful on every case that never needs recovering.
+  ACTION_PREPARED: "neutral",
+  EXTERNAL_RECHECK_REQUESTED: "decision",
   ACTION_EXECUTED: "neutral",
   DUPLICATE_SUPPRESSED: "neutral",
   VERIFICATION_PASSED: "verified",
@@ -436,9 +451,39 @@ export function toneFor(kind: string): EventTone {
  *  `STATE_TRANSITION` is the state machine narrating itself — every one of them is already said
  *  by the status line, and a dozen "PLANNING -> EXECUTING" rows would bury the four things that
  *  actually happened. `POLICY_DENY` is not dropped: it is *folded* into the event it interrupted,
- *  which is where the UI hangs its dashed blocked branch. */
+ *  which is where the UI hangs its dashed blocked branch.
+ *
+ *  **Two transitions are the exception, and `recoveryTransitionText` is where they are named.**
+ *  They are not the machine narrating itself: the backend writes no other timeline entry for
+ *  either of them, so those two rows *are* the record of what happened. This function still says
+ *  no to every `STATE_TRANSITION`, because it only sees a kind; `timelineFor` asks the other
+ *  question first. */
 export function isRenderedOnTheSpine(kind: string): boolean {
   return kind !== "STATE_TRANSITION" && kind !== "POLICY_DENY";
+}
+
+/** The two state changes the spine renders, keyed on the closed enum and never on free text.
+ *
+ *  `EXECUTING -> WAITING_EXTERNAL` is the only durable record that a request was sent and no answer
+ *  came back: `_stop_with_the_outcome_unestablished` writes no timeline entry of its own on that
+ *  branch. `WAITING_EXTERNAL -> EXECUTING` is the only record that the frozen attempt was
+ *  re-claimed — written by `ReconcileNode` alone, which the backend sweeps for.
+ *
+ *  The transition payload also carries a `reason`, and nothing here reads it. It is free text a
+ *  backend edit could reword at any time; `from` and `to` are members of a closed enum.
+ *
+ *  **The second line says "retrying the same booking", not "not booking again".** Reconciliation
+ *  really does issue another request — under the identity frozen before the first one, which is
+ *  what makes the provider return the appointment it already made instead of creating a second.
+ *  Copy claiming CareLoop does not send again would be false; the backend's
+ *  `tests/test_recovery_copy.py` is what fails if it appears. */
+const RECOVERY_TRANSITIONS: Record<string, string> = {
+  "EXECUTING>WAITING_EXTERNAL": "No answer came back — CareLoop does not yet know whether it happened",
+  "WAITING_EXTERNAL>EXECUTING": "Retrying the same frozen booking identity — never a new booking"
+};
+
+export function recoveryTransitionText(from: string, to: string): string | null {
+  return RECOVERY_TRANSITIONS[`${from}>${to}`] ?? null;
 }
 
 /** Why an action was refused, as one sentence.
@@ -737,6 +782,10 @@ const NODE_STAGES: Record<string, RunStage> = {
   plan: "PLANNER",
   gate: "GATE",
   execute: "EXECUTE",
+  // A reconciliation is the executor doing the same job on a later run: it re-issues the action the
+  // case already froze. Mapping it to `EXECUTE` keeps the drawer's agent path honest — without it a
+  // live recovery run showed `IDLE`, which is the one thing it certainly was not.
+  reconcile: "EXECUTE",
   verify: "VERIFY"
 };
 

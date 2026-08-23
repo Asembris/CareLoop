@@ -66,6 +66,7 @@ import {
   factSummary,
   isExcerptFact,
   isRenderedOnTheSpine,
+  recoveryTransitionText,
   observationCopy,
   observedLabel,
   outcomeCopy,
@@ -538,6 +539,16 @@ export function timelineText(event: TimelineEventView): string {
       return `${who || "The caregiver"} approved`;
     case "APPROVAL_REJECTED":
       return `${who || "The caregiver"} declined — looking for another way`;
+    /* Written out rather than left to the `summary` fallback, which says "book_appointment
+       prepared for dispatch" — accurate, and written for an engineer. This row is the first half
+       of the recovery story: CareLoop wrote down exactly which action it was about to attempt
+       *before* anything could leave the process, which is what lets a later run reuse that identity
+       instead of inventing one. It says nothing about whether anything was sent, and neither does
+       the backend entry. */
+    case "ACTION_PREPARED":
+      return "The exact booking was written down before anything was sent";
+    case "EXTERNAL_RECHECK_REQUESTED":
+      return `${who || "The caregiver"} asked CareLoop to look at the clinic's record again`;
     case "ACTION_EXECUTED":
       return toolPast(tool);
     case "DUPLICATE_SUPPRESSED":
@@ -605,6 +616,28 @@ export function timelineFor(
           tone: "denied"
         });
       }
+      continue;
+    }
+
+    /* The two state changes that *are* the record, and no others. The backend writes no timeline
+       entry of its own when a case starts waiting on an unanswered request or when the frozen
+       attempt is re-claimed, so dropping every `STATE_TRANSITION` left the recovery invisible on a
+       page whose job is to say what happened. Keyed on the closed `from`/`to` enum and never on
+       the transition's free-text `reason`. */
+    if (entry.kind === "STATE_TRANSITION") {
+      const recovery = recoveryTransitionText(
+        payloadString(entry, "from"),
+        payloadString(entry, "to")
+      );
+      if (!recovery) continue;
+      const at = clockTime(entry.at);
+      events.push({
+        id: String(entry.seq),
+        time: at === printed ? "" : at,
+        text: recovery,
+        tone: "decision"
+      });
+      printed = at;
       continue;
     }
 

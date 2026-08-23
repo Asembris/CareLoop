@@ -1002,7 +1002,10 @@ export function pacedState(
 const TITLES: Record<string, string> = {
   "demo-referral": "Cardiology referral",
   "demo-injection": "Care continuity packet",
-  "demo-resume": "Appointment instructions"
+  "demo-resume": "Appointment instructions",
+  // The same referral as 01, which is the point of the scenario — so the title has to say which
+  // row is which, or a judge with both on screen cannot tell them apart.
+  "demo-recovery": "Cardiology referral · lost reply"
 };
 
 export function titleFor(caseId: string, summary: string): string {

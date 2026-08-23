@@ -368,6 +368,14 @@ test.describe("the orchestration field", () => {
      * hover, still animate, and still look deliberate. */
     await page.getByText("Pause for a decision").hover();
     await expect.poll(mode, { message: "scenario 03 claims nothing" }).toBe("ambient");
+
+    /* Scenario 04 is `recovery`, and the same argument goes one step further. Its verification
+     * *passes* — the beat is that CareLoop reaches a confirmed booking after losing the answer —
+     * so `mismatch` would draw the opposite of what happens and `referral` would draw a loop that
+     * never wobbles. Neither is this scenario, so the card carries no zone. */
+    await page.getByText("The answer gets lost").hover();
+    await expect.poll(mode, { message: "scenario 04 claims nothing" }).toBe("ambient");
+
     expect(declared, "nothing in this application is a verification mismatch").not.toContain("mismatch");
 
     // And the card is still a button that starts its run.

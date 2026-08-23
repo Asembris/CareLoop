@@ -29,7 +29,7 @@ from careloop.tools.document_source import (
     POISONED_DOCUMENT_ID,
     RECEIPT_DOCUMENT_ID,
 )
-from careloop.tools.pdf import read_document
+from careloop.tools.pdf import fixture_bytes, read_document
 from careloop.tools.results import Document
 
 
@@ -73,6 +73,24 @@ class DocumentStore:
     def ids(self) -> frozenset[str]:
         """Every document id the store holds."""
         return frozenset(self._by_id)
+
+    def content(self, document_id: str) -> bytes:
+        """The document's own bytes, as CareLoop holds them.
+
+        **What an upload transmits, and what a content-integrity check expects to find at the other
+        end.** Resolved through :attr:`~careloop.tools.results.Document.source_doc` rather than from
+        the identifier directly, so the store stays the one place that knows which file answers to
+        which id.
+
+        Separate from :meth:`get` because they answer different questions and are read by different
+        layers: extraction wants pages a fact can cite, and an external effect wants the file. A
+        single method returning both would make every caller carry the one it did not want.
+
+        Raises:
+            DocumentNotFound: if the store does not hold ``document_id``.
+            careloop.tools.pdf.DocumentUnreadable: if the file behind it is not packaged.
+        """
+        return fixture_bytes(self.get(document_id).source_doc)
 
 
 @lru_cache(maxsize=1)

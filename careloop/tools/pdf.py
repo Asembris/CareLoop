@@ -74,6 +74,33 @@ def extract_pages(data: bytes) -> tuple[str, ...]:
     return pages
 
 
+def fixture_bytes(source_doc: str) -> bytes:
+    """The packaged fixture's bytes, exactly as they sit on disk.
+
+    **The bytes, not the text**, and the distinction is the point. Extraction turns a PDF into pages
+    so a fact can cite one; this returns the file, because what an upload transmits is the document
+    rather than CareLoop's reading of it — and what a content-integrity check compares is the same
+    bytes on both sides. Reducing to text first would make two documents with identical prose and
+    different bytes compare equal, which is not what "the document CareLoop was authorised to send"
+    means.
+
+    Deterministic and cached by the filesystem alone: the fixtures are rendered from
+    :mod:`careloop.tools.document_source` and byte-compared by a test, so a replay transmits exactly
+    what the first attempt did.
+
+    Raises:
+        DocumentUnreadable: if the fixture is absent. Absence is a packaging failure and should say
+            so, exactly as it does for :func:`read_fixture`.
+    """
+    try:
+        return (resources.files(FIXTURE_PACKAGE) / FIXTURE_DIR / source_doc).read_bytes()
+    except (FileNotFoundError, ModuleNotFoundError, OSError) as failure:
+        raise DocumentUnreadable(
+            f"fixture {source_doc!r} is not packaged under "
+            f"{FIXTURE_PACKAGE}/{FIXTURE_DIR}; run `python scripts/generate_documents.py`"
+        ) from failure
+
+
 def read_fixture(source_doc: str) -> tuple[str, ...]:
     """Every page of the packaged fixture named ``source_doc``.
 
@@ -82,14 +109,7 @@ def read_fixture(source_doc: str) -> tuple[str, ...]:
             — the PDFs are declared package data — and it should say so rather than surfacing as a
             case with no evidence.
     """
-    try:
-        data = (resources.files(FIXTURE_PACKAGE) / FIXTURE_DIR / source_doc).read_bytes()
-    except (FileNotFoundError, ModuleNotFoundError, OSError) as failure:
-        raise DocumentUnreadable(
-            f"fixture {source_doc!r} is not packaged under "
-            f"{FIXTURE_PACKAGE}/{FIXTURE_DIR}; run `python scripts/generate_documents.py`"
-        ) from failure
-    return extract_pages(data)
+    return extract_pages(fixture_bytes(source_doc))
 
 
 def read_document(document_id: str, title: str, source_doc: str, kind: DocumentKind) -> Document:

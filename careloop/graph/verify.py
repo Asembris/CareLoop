@@ -169,9 +169,92 @@ class Verification(BaseModel):
         return not self.passed
 
 
-#: A verifier compares the canonical authorised arguments against the typed result.
+#: A verifier compares the **expectations** for one action against the typed result.
 Verifier = Callable[[Mapping[str, str], ActionResult], list[str]]
-"""Returns the list of mismatches. Empty means verified."""
+"""Returns the list of mismatches. Empty means verified.
+
+The mapping was the canonical authorised arguments and is now :func:`expectations` — those same
+arguments plus any :class:`DerivedExpectation` the action type declares. For every action type
+CareLoop ships the two are identical, because nothing declares one yet.
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class DerivedExpectation:
+    """One value a verifier compares that **no argument supplies**.
+
+    **Why this is a separate concept rather than another argument.** An argument is something a
+    proposal carries, policy resolves trust for, an approval is keyed on, an idempotency key may
+    cover, and a provider is sent. A derived expectation is none of those: it is computed from
+    trusted or controlled state CareLoop already holds, at verification time, purely to be compared
+    against what an external system turned out to hold. Making one an argument to reach it would
+    put a value into authority, identity and the outbound payload in order to solve a question
+    about scrutiny — which is the fold this repository has closed several times in the other
+    direction.
+
+    **It is emphatically not part of the authorised effect state.** The field list and the state
+    digest a :class:`careloop.graph.witness.EffectClaim` carries are taken over
+    :attr:`ObservableEffect.state_fields`, which
+    :func:`check_observable_state_matches_verification` requires to be argument-sourced and free of
+    every name declared here. So a richer verifier cannot silently redefine what a settlement
+    digest is a digest *of*. A verifier may check more than the effect claim describes; the effect
+    claim may never quietly grow because a verifier did.
+
+    The attribute *names* those two become are spelled in the deployment adapter and nowhere in
+    this package, which is why they are described here rather than quoted.
+
+    ``derive`` is a pure function of the canonical authorised arguments. Returning ``None`` means
+    *no expectation could be established*, which leaves the name absent from the mapping and makes
+    every comparison against it mismatch — the fail-closed direction, and the same one
+    :class:`careloop.tools.results.AppointmentBooked` refuses a default for.
+    """
+
+    name: str
+    """What the comparison map refers to this expectation by. Never a declared argument name."""
+
+    derive: Callable[[Mapping[str, str]], str | None]
+    """Canonical authorised arguments in, one canonical expected value out, or ``None``."""
+
+
+#: The derived expectations each action type declares, in comparison order.
+#:
+#: **Deliberately empty.** Nothing CareLoop ships today compares anything an argument does not
+#: supply, so an entry here would be a guarantee that is not being made. The seam exists because
+#: the alternative — reaching for it the day a provider needs one, under implementation pressure —
+#: is how a derived value ends up as an argument, in the authority path and in the state digest.
+#:
+#: ``tests/test_derived_expectations.py`` drives it against synthetic action types, so the
+#: mechanism is proven rather than merely declared.
+DERIVED_EXPECTATIONS: Final[Mapping[str, tuple[DerivedExpectation, ...]]] = {}
+
+
+def derived_names(
+    action_type: str, declared: Mapping[str, tuple[DerivedExpectation, ...]] | None = None
+) -> frozenset[str]:
+    """Every expectation name for ``action_type`` that no argument supplies."""
+    table = DERIVED_EXPECTATIONS if declared is None else declared
+    return frozenset(expectation.name for expectation in table.get(action_type, ()))
+
+
+def expectations(action_type: str, canonical: Mapping[str, str]) -> dict[str, str]:
+    """What a verifier for ``action_type`` compares against.
+
+    Every canonical authorised argument, plus every :class:`DerivedExpectation` the type declares.
+    Arguments go in first and a derived expectation can never displace one:
+    :func:`check_derived_expectations_do_not_shadow_arguments` refuses that at import, so a derived
+    value cannot stand in for something policy actually allowed.
+
+    A derivation answering ``None`` contributes no entry, which makes anything compared against it
+    mismatch and fail the verification. That is the fail-closed reading — an expectation nobody
+    could establish is not a licence to skip the comparison.
+    """
+    expected = dict(canonical)
+    for expectation in DERIVED_EXPECTATIONS.get(action_type, ()):
+        value = expectation.derive(canonical)
+        if value is not None:
+            expected[expectation.name] = value
+    return expected
+
 
 #: A read-back fetches the external system's *current* record of a performed effect.
 ReadBack = Callable[[ActionResult], ActionResult]
@@ -208,16 +291,29 @@ class ObservationUnavailable(ReadBackFailed):
 
 def _mismatches(
     result: ActionResult,
-    args: Mapping[str, str],
+    expected: Mapping[str, str],
     fields: Mapping[str, str],
     identifier: str,
+    derived: frozenset[str] = frozenset(),
 ) -> list[str]:
-    """Compare each ``result`` field against the argument it echoes, plus the synthetic id."""
+    """Compare each ``result`` field against its expectation, plus the synthetic id.
+
+    ``fields`` maps a result field to the *expectation name* it is compared against. For an
+    argument-sourced expectation that name is the argument's; for a derived one it is
+    :attr:`DerivedExpectation.name`, and ``derived`` is what tells the two apart.
+
+    **The two report differently, and that is load-bearing rather than cosmetic.** "authorised as"
+    is a claim that policy allowed this exact value, and it is untrue of a value no proposal
+    carried. It is also how ``tests/test_evaluator_drift.py`` and ``tests/test_witness_seam.py``
+    derive the field universe the settlement digests are taken over — by running a verifier against
+    an empty expectation map and reading the phrase back — so a derived expectation borrowing the
+    same wording would quietly enlarge a frozen telemetry contract from inside a diagnostic string.
+    """
     found = [
-        f"{field} was authorised as {args.get(arg_name)!r} but the result carries "
-        f"{getattr(result, field)!r}"
-        for field, arg_name in fields.items()
-        if getattr(result, field) != args.get(arg_name)
+        f"{field} was {'derived as' if name in derived else 'authorised as'} "
+        f"{expected.get(name)!r} but the result carries {getattr(result, field)!r}"
+        for field, name in fields.items()
+        if getattr(result, field) != expected.get(name)
     ]
     if not getattr(result, identifier, ""):
         found.append(f"{identifier} is empty; the executor recorded no identifier for the effect")
@@ -235,10 +331,12 @@ _EMAIL_COMPARISON: Final[Mapping[str, str]] = {"to": "to", "subject": "subject"}
 _EMAIL_IDENTIFIER: Final[str] = "message_id"
 
 
-def _verify_email(args: Mapping[str, str], result: ActionResult) -> list[str]:
+def _verify_email(expected: Mapping[str, str], result: ActionResult) -> list[str]:
     if not isinstance(result, EmailSent):
         return [f"expected EmailSent, the action recorded a {type(result).__name__}"]
-    return _mismatches(result, args, _EMAIL_COMPARISON, _EMAIL_IDENTIFIER)
+    return _mismatches(
+        result, expected, _EMAIL_COMPARISON, _EMAIL_IDENTIFIER, derived_names("send_email")
+    )
 
 
 #: Which booking result field is compared against which authorised argument.
@@ -259,7 +357,7 @@ _BOOKING_COMPARISON: Final[Mapping[str, str]] = {
 _BOOKING_IDENTIFIER: Final[str] = "confirmation_id"
 
 
-def _verify_booking(args: Mapping[str, str], result: ActionResult) -> list[str]:
+def _verify_booking(expected: Mapping[str, str], result: ActionResult) -> list[str]:
     """Every declared booking argument, compared the same way.
 
     ``reason`` joined the other three this session. It carries no ``trust_key`` and no rule requires
@@ -271,7 +369,13 @@ def _verify_booking(args: Mapping[str, str], result: ActionResult) -> list[str]:
     """
     if not isinstance(result, AppointmentBooked):
         return [f"expected AppointmentBooked, the action recorded a {type(result).__name__}"]
-    return _mismatches(result, args, _BOOKING_COMPARISON, _BOOKING_IDENTIFIER)
+    return _mismatches(
+        result,
+        expected,
+        _BOOKING_COMPARISON,
+        _BOOKING_IDENTIFIER,
+        derived_names("book_appointment"),
+    )
 
 
 _UPLOAD_COMPARISON: Final[Mapping[str, str]] = {
@@ -282,10 +386,12 @@ _UPLOAD_COMPARISON: Final[Mapping[str, str]] = {
 _UPLOAD_IDENTIFIER: Final[str] = "upload_id"
 
 
-def _verify_upload(args: Mapping[str, str], result: ActionResult) -> list[str]:
+def _verify_upload(expected: Mapping[str, str], result: ActionResult) -> list[str]:
     if not isinstance(result, DocumentUploaded):
         return [f"expected DocumentUploaded, the action recorded a {type(result).__name__}"]
-    return _mismatches(result, args, _UPLOAD_COMPARISON, _UPLOAD_IDENTIFIER)
+    return _mismatches(
+        result, expected, _UPLOAD_COMPARISON, _UPLOAD_IDENTIFIER, derived_names("upload_document")
+    )
 
 
 _GRANT_COMPARISON: Final[Mapping[str, str]] = {
@@ -297,10 +403,12 @@ _GRANT_COMPARISON: Final[Mapping[str, str]] = {
 _GRANT_IDENTIFIER: Final[str] = "grant_id"
 
 
-def _verify_grant(args: Mapping[str, str], result: ActionResult) -> list[str]:
+def _verify_grant(expected: Mapping[str, str], result: ActionResult) -> list[str]:
     if not isinstance(result, AccessGranted):
         return [f"expected AccessGranted, the action recorded a {type(result).__name__}"]
-    return _mismatches(result, args, _GRANT_COMPARISON, _GRANT_IDENTIFIER)
+    return _mismatches(
+        result, expected, _GRANT_COMPARISON, _GRANT_IDENTIFIER, derived_names("grant_portal_access")
+    )
 
 
 #: Every argument each effect tool's verifier compares, keyed by tool name.
@@ -313,11 +421,33 @@ def _verify_grant(args: Mapping[str, str], result: ActionResult) -> list[str]:
 #: whole identity declaration rests on: an argument may leave the idempotency key only if something
 #: independent still checks it afterwards, so narrowing identity can never be a way of narrowing
 #: scrutiny.
+def compared_arguments(
+    action_type: str,
+    comparison: Mapping[str, str],
+    declared: Mapping[str, tuple[DerivedExpectation, ...]] | None = None,
+) -> frozenset[str]:
+    """The expectation names in ``comparison`` that an **argument** supplies.
+
+    A comparison map refers to expectations, and since :class:`DerivedExpectation` exists those are
+    two populations rather than one. Every reader below wants the argument half specifically —
+    :func:`check_non_identifying_arguments_are_verified` asks whether an argument dropped from the
+    idempotency key is still checked, and a derived name is not an answer to that; and
+    :data:`OBSERVABLE_STATE` is indexed into the authorised arguments by
+    :func:`careloop.graph.witness._authorised_state`, so a derived name there would look up an
+    argument nothing supplies.
+
+    Filtering rather than requiring a second declaration, so a comparison map stays the one place a
+    tool says what it compares.
+    """
+    derived = derived_names(action_type, declared)
+    return frozenset(name for name in comparison.values() if name not in derived)
+
+
 COMPARED_ARGUMENTS: Final[Mapping[str, frozenset[str]]] = {
-    "send_email": frozenset(_EMAIL_COMPARISON.values()),
-    "book_appointment": frozenset(_BOOKING_COMPARISON.values()),
-    "upload_document": frozenset(_UPLOAD_COMPARISON.values()),
-    "grant_portal_access": frozenset(_GRANT_COMPARISON.values()),
+    "send_email": compared_arguments("send_email", _EMAIL_COMPARISON),
+    "book_appointment": compared_arguments("book_appointment", _BOOKING_COMPARISON),
+    "upload_document": compared_arguments("upload_document", _UPLOAD_COMPARISON),
+    "grant_portal_access": compared_arguments("grant_portal_access", _GRANT_COMPARISON),
 }
 
 VERIFIERS: Final[Mapping[str, Verifier]] = {
@@ -495,9 +625,17 @@ def check_observable_state_matches_verification() -> None:
 
     A type with no entry in :data:`_EXTERNAL_COMPARISONS` — a declaration nothing corroborates.
 
-    A field set that is not exactly what the verifier compares. This is the one that matters: the
-    read-back's comparison universe *is* the definition of the externally held state, and a digest
-    taken over a different set would produce an inequality that means nothing about the world.
+    A field set that is not exactly the **argument-sourced** half of what the verifier compares.
+    This is the one that matters: the read-back's comparison universe is the definition of the
+    externally held state, and a digest taken over a different set would produce an inequality that
+    means nothing about the world.
+
+    A field that is a :class:`DerivedExpectation` name. That is the same defect said in the
+    direction this session opened: :func:`careloop.graph.witness._authorised_state` indexes these
+    names into the arguments policy authorised, so a derived name would either resolve to nothing
+    and silently suppress the whole effect claim, or — worse, if it ever did resolve — enlarge what
+    the claim's state digest is a digest of. A verifier may check more than the effect claim
+    describes; the effect claim may never grow because a verifier did.
 
     A resource identifier that is not the one the verifier requires, or a field tuple that is
     unsorted or carries a duplicate — both of which would make the rendered field list depend on
@@ -522,10 +660,18 @@ def check_observable_state_matches_verification() -> None:
                 f"comparison corroborates; a state universe nothing compares is undefined"
             )
         compared, identifier = comparison
-        if frozenset(observable.state_fields) != frozenset(compared):
+        if leaked := sorted(frozenset(observable.state_fields) & derived_names(action_type)):
             raise UnverifiableAction(
-                f"the external state declared for {action_type!r} is not what verification "
-                f"compares: declared {sorted(observable.state_fields)}, compared {sorted(compared)}"
+                f"the external state declared for {action_type!r} names derived expectation(s) "
+                f"{leaked}; the authorised effect state is what CareLoop was allowed to send, and "
+                f"a value no argument supplies cannot be part of it"
+            )
+        arguments = compared_arguments(action_type, compared)
+        if frozenset(observable.state_fields) != arguments:
+            raise UnverifiableAction(
+                f"the external state declared for {action_type!r} is not the argument-sourced half "
+                f"of what verification compares: declared {sorted(observable.state_fields)}, "
+                f"compared {sorted(arguments)}"
             )
         if observable.state_fields != tuple(sorted(set(observable.state_fields))):
             raise UnverifiableAction(
@@ -537,6 +683,48 @@ def check_observable_state_matches_verification() -> None:
             raise UnverifiableAction(
                 f"the resource identifier declared for {action_type!r} is "
                 f"{observable.resource_id_field!r}; verification requires {identifier!r}"
+            )
+
+
+def check_derived_expectations_do_not_shadow_arguments(
+    declared: Mapping[str, tuple[DerivedExpectation, ...]] | None = None,
+    registry: ToolRegistry = REGISTRY,
+) -> None:
+    """Fail at import if a derived expectation could stand in for an authorised argument.
+
+    :func:`expectations` puts the canonical arguments in first, so a derived expectation sharing a
+    declared argument's name would overwrite it — and every comparison that reads that name would
+    then be checking a value CareLoop computed against a value CareLoop computed, with the thing
+    policy actually allowed no longer participating. A verification that cannot fail is worse than
+    none, because the timeline says it passed.
+
+    Also refuses a table entry for an action type the registry does not declare: a derived
+    expectation for an action that cannot happen is a guarantee about nothing.
+
+    The parameters exist so both refusals can be provoked against synthetic declarations rather
+    than only asserted about the shipped ones, which today declare nothing at all.
+
+    Raises:
+        UnverifiableAction: naming the action type and the colliding names.
+    """
+    table = DERIVED_EXPECTATIONS if declared is None else declared
+    for action_type, expectations_declared in table.items():
+        tool = registry.get(action_type)
+        if tool is None:
+            raise UnverifiableAction(
+                f"derived expectation(s) declared for {action_type!r}, which the registry does not "
+                f"declare; an expectation about an action that cannot happen guarantees nothing"
+            )
+        names = [expectation.name for expectation in expectations_declared]
+        if shadowed := sorted(frozenset(names) & tool.arg_names):
+            raise UnverifiableAction(
+                f"derived expectation(s) {shadowed} on {action_type!r} share a declared argument "
+                f"name; a derived value would displace the one policy authorised and the "
+                f"comparison would stop checking anything"
+            )
+        if len(frozenset(names)) != len(names):
+            raise UnverifiableAction(
+                f"derived expectation names for {action_type!r} are not distinct: {sorted(names)}"
             )
 
 
@@ -574,6 +762,7 @@ def check_non_identifying_arguments_are_verified(registry: ToolRegistry = REGIST
 
 check_verifiers_cover_the_registry()
 check_observable_tools_are_declared()
+check_derived_expectations_do_not_shadow_arguments()
 check_observable_state_matches_verification()
 check_non_identifying_arguments_are_verified()
 
@@ -591,7 +780,8 @@ def verify_action(
 
     ``args`` are the arguments the policy engine allowed, not the arguments the executor was
     handed — comparing the executor's inputs to the executor's outputs would verify nothing about
-    authority. They come from the approved proposal.
+    authority. They come from the approved proposal. What the verifier is handed is
+    :func:`expectations` over them, which for every action type CareLoop ships is the same mapping.
 
     ``observed`` is the external system's own record, fetched independently. When it is supplied
     the same per-action-type predicate runs against it as well, so every field the effect echoes
@@ -626,10 +816,10 @@ def verify_action(
         # and claim no observation: nothing was compared, whatever was read.
         problems.append(f"no verifier for action type {action_type!r}")
     else:
-        canonical = canonical_args(args)
-        problems.extend(verifier(canonical, result))
+        expected = expectations(action_type, canonical_args(args))
+        problems.extend(verifier(expected, result))
         if observed is not None:
-            disagreements = verifier(canonical, observed)
+            disagreements = verifier(expected, observed)
             problems.extend(
                 f"read back from the external system: {problem}" for problem in disagreements
             )
@@ -672,10 +862,12 @@ def verify_action(
 
 __all__ = [
     "COMPARED_ARGUMENTS",
+    "DERIVED_EXPECTATIONS",
     "INDEPENDENTLY_OBSERVABLE",
     "OBSERVABLE_STATE",
     "RESULT_TYPES",
     "VERIFIERS",
+    "DerivedExpectation",
     "ObservableEffect",
     "ObservationAbsent",
     "ObservationOutcome",
@@ -685,10 +877,14 @@ __all__ = [
     "UnverifiableAction",
     "Verification",
     "Verifier",
+    "check_derived_expectations_do_not_shadow_arguments",
     "check_non_identifying_arguments_are_verified",
     "check_observable_state_matches_verification",
     "check_observable_tools_are_declared",
     "check_verifiers_cover_the_registry",
+    "compared_arguments",
+    "derived_names",
+    "expectations",
     "rehydrate",
     "verify_action",
 ]

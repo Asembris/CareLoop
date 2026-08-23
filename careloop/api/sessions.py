@@ -458,6 +458,7 @@ class SessionWorlds:
 def demo_session_worlds(
     *,
     clinic_url: str = "",
+    upload_bucket: str = "",
     events: EventSimulator | None = None,
     witness: Witness = NO_WITNESS,
     limit: int = DEFAULT_SESSION_LIMIT,
@@ -510,10 +511,11 @@ def demo_session_worlds(
     # and a clinic client into every import of it.
     import httpx
 
-    from careloop.api.deps import simulated_context_factory
+    from careloop.api.deps import provider_context_factory
     from careloop.api.faults import booking_response_loss
     from careloop.state.sqlite_store import SqliteCaseStore
     from careloop.tools.clinic import DEFAULT_TIMEOUT, ClinicClient
+    from careloop.tools.objectstore import ObjectStoreClient
 
     shared_events = events if events is not None else EventSimulator()
 
@@ -528,15 +530,21 @@ def demo_session_worlds(
             )
             faults = booking_response_loss(clinic_url, session=session_id)
 
+        # **The session id is the object namespace.** Not a credential and not verified by anything
+        # — exactly what ``X-Demo-Session`` is to the clinic — but it is what keeps two visitors
+        # pressing the same button off one object: the frozen idempotency key is derived from the
+        # case id and the identifying arguments, both of which a demo scenario fixes, so it is
+        # byte-identical across visitors by design.
+        objects = ObjectStoreClient(upload_bucket, session=session_id) if upload_bucket else None
+
         return ApiDeps(
             store=SqliteCaseStore(":memory:"),
             events=shared_events,
-            context_factory=(
-                faults.context_factory(clinic, witness)
-                if faults is not None and clinic is not None
-                else simulated_context_factory(witness)
+            context_factory=provider_context_factory(
+                clinic=clinic, objects=objects, witness=witness, losing_clinic=faults
             ),
             clinic=clinic,
+            objects=objects,
             faults=faults,
         )
 

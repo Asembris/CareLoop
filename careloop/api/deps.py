@@ -19,7 +19,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Annotated, Final
+from typing import Annotated, Any, Final
 
 from fastapi import Depends, Header, HTTPException, Request, status
 
@@ -34,6 +34,7 @@ from careloop.graph.witness import NO_WITNESS, Witness
 from careloop.state.case import Case, CaseState
 from careloop.state.store import CaseNotFound, CaseStore
 from careloop.tools.clinic import ClinicClient
+from careloop.tools.objectstore import ObjectStoreClient
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,48 @@ def simulated_context_factory(witness: Witness = NO_WITNESS) -> ContextFactory:
 
     def build(store: CaseStore, inbound: InboundEvent, case_id: str) -> RunContext:
         return context_for(store, inbound, case_id=case_id, witness=witness)
+
+    return build
+
+
+def provider_context_factory(
+    *,
+    clinic: ClinicClient | None = None,
+    objects: ObjectStoreClient | None = None,
+    witness: Witness = NO_WITNESS,
+    losing_clinic: Any = None,
+) -> ContextFactory:
+    """A factory binding every run to whichever real providers this world has.
+
+    The composition root's only job here: which providers exist is a deployment fact, and
+    assembling them is what a factory is for. A world with none of them is the fully simulated one
+    and is not a special case — it binds nothing and every effect stays on the mock handlers.
+
+    ``losing_clinic`` is a :class:`careloop.api.faults.BookingResponseLoss`, or ``None``. Passing it
+    here rather than letting it build its own factory is what keeps a world's *other* providers from
+    disappearing the moment a recovery scenario is armable: there was one factory that knew about
+    faults and one that knew about the object store, and a world with both would have got whichever
+    branch happened to be written first. The fault still decides nothing except **which clinic
+    client** an armed case is handed, which is the whole of what it was ever allowed to decide.
+    """
+    from careloop.graph.providers import object_store_provider
+
+    others = () if objects is None else (object_store_provider(objects),)
+
+    def build(store: CaseStore, inbound: InboundEvent, case_id: str) -> RunContext:
+        # ``clinic`` is passed as itself rather than as a provider so the collaborator the rest of
+        # the system already knows about keeps its name; ``RunContext`` merges the two.
+        bound_clinic = clinic
+        if losing_clinic is not None and losing_clinic.claims(case_id):
+            bound_clinic = losing_clinic.clinic
+        return context_for(
+            store,
+            inbound,
+            case_id=case_id,
+            providers=others,
+            clinic=bound_clinic,
+            witness=witness,
+        )
 
     return build
 
@@ -175,6 +218,20 @@ class ApiDeps:
 
     Runs reach it through :attr:`context_factory`, not through this field: a route that took a
     clinic out of here and used it would be the API doing something, and the API decides nothing.
+    """
+
+    objects: ObjectStoreClient | None = None
+    """The external object store, if there is one. Held so ``POST /api/demo/reset`` can clear it.
+
+    The exact counterpart of :attr:`clinic`, and held for the same one reason: a reset has to be
+    able to remove what this world filed. Runs reach it through :attr:`context_factory` like every
+    other collaborator — a route that took the store out of here and wrote to it would be the API
+    doing something, and the API decides nothing.
+
+    **Scoped to one visitor's namespace by construction.** The client was built with this world's
+    session id and has no parameter for anybody else's, so ``remove_session_objects`` cannot reach
+    another visitor's objects even if a route asked it to. That is the same property
+    :meth:`careloop.tools.clinic.ClinicClient.end_session` has, arrived at the same way.
     """
 
     demo: bool = False
@@ -505,6 +562,7 @@ __all__ = [
     "default_context_factory",
     "deps",
     "local_graph_runner",
+    "provider_context_factory",
     "sections_from",
     "simulated_context_factory",
 ]

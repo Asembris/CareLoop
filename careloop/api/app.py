@@ -54,6 +54,7 @@ from careloop.state.case import Case
 from careloop.state.machine import IllegalTransition
 from careloop.state.store import CaseNotFound, CaseStore
 from careloop.tools.clinic import ClinicClient
+from careloop.tools.objectstore import ObjectStoreClient
 
 logger = logging.getLogger(__name__)
 
@@ -217,6 +218,7 @@ def build_dependencies(
     clinic: ClinicClient | None,
     demo: bool,
     faults: BookingResponseLoss | None = None,
+    objects: ObjectStoreClient | None = None,
 ) -> ApiDeps | SessionWorlds:
     """What an app is bound to: one set of dependencies, or one per visitor.
 
@@ -241,6 +243,7 @@ def build_dependencies(
             "graph_runner": graph_runner,
             "clinic": clinic,
             "faults": faults,
+            "objects": objects,
         }
         if named := sorted(name for name, value in per_world.items() if value is not None):
             raise ValueError(
@@ -263,6 +266,7 @@ def build_dependencies(
         context_factory=factory,
         graph_runner=graph_runner,
         clinic=clinic,
+        objects=objects,
         demo=demo,
         faults=faults,
     )
@@ -276,6 +280,7 @@ def create_app(
     context_factory: ContextFactory | None = None,
     graph_runner: GraphRunner | None = None,
     clinic: ClinicClient | None = None,
+    objects: ObjectStoreClient | None = None,
     demo: bool = False,
     static_dir: str | Path | None = None,
     faults: BookingResponseLoss | None = None,
@@ -326,6 +331,7 @@ def create_app(
         context_factory=context_factory,
         graph_runner=graph_runner,
         clinic=clinic,
+        objects=objects,
         demo=demo,
         faults=faults,
     )
@@ -858,11 +864,24 @@ def _reset_quiesced_world(deps: ApiDeps) -> dict[str, object]:
     # stopped calling it, is a silent return to two owners — and saying what happened here is
     # cheaper and narrower than a route for asking about it.
     ended = deps.clinic.put_back() if deps.clinic is not None else None
+    # And the object store's half of the same act. It is a *delete* rather than a reseed because
+    # there is nothing to reseed: an object store holds only what this world put there, and what
+    # makes it safe is that the client cannot address another visitor's namespace.
+    #
+    # **Load-bearing for the demo rather than housekeeping.** The frozen idempotency key is derived
+    # from the case id, the action type and the identifying arguments — every one of which a demo
+    # scenario fixes — so a second press of the same button addresses the *same* object. Left in
+    # place, the create-once precondition would refuse that write and the visitor would watch a
+    # reconciliation instead of a filing. The measured contract is what makes this necessary; see
+    # docs/objectstore-contract.md.
+    filed = deps.objects.remove_session_objects() if deps.objects is not None else None
     return {
         "cases_cleared": removed,
         "clinic_reset": deps.clinic is not None,
         # `null` on a single-world CareLoop, whose clinic is the default world and has no lifetime.
         "clinic_world_ended": ended,
+        # `null` on a CareLoop with no object store, which is every simulated one.
+        "objects_removed": filed,
         "scenarios": sorted(DEMO_SCENARIOS),
     }
 

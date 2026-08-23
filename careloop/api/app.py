@@ -17,7 +17,7 @@ from typing import Any, Final
 
 from fastapi import FastAPI, HTTPException, Request, Response, status
 
-from careloop.api.demo import DEMO_SCENARIOS
+from careloop.api.demo import DEMO_SCENARIOS, DemoScenario
 from careloop.api.deps import (
     CAREGIVER_HEADER,
     ApiDeps,
@@ -29,6 +29,7 @@ from careloop.api.deps import (
     default_context_factory,
     sections_from,
 )
+from careloop.api.faults import BookingResponseLoss
 from careloop.api.models import CaseDetail, CaseSections, DeliverEventRequest, RunView
 from careloop.api.projections import SECTIONS, case_detail, case_sections, run_view
 from careloop.api.runs import RunAlreadyInFlight, UnknownRun
@@ -215,6 +216,7 @@ def build_dependencies(
     graph_runner: GraphRunner | None,
     clinic: ClinicClient | None,
     demo: bool,
+    faults: BookingResponseLoss | None = None,
 ) -> ApiDeps | SessionWorlds:
     """What an app is bound to: one set of dependencies, or one per visitor.
 
@@ -238,6 +240,7 @@ def build_dependencies(
             "context_factory": context_factory,
             "graph_runner": graph_runner,
             "clinic": clinic,
+            "faults": faults,
         }
         if named := sorted(name for name, value in per_world.items() if value is not None):
             raise ValueError(
@@ -261,6 +264,7 @@ def build_dependencies(
         graph_runner=graph_runner,
         clinic=clinic,
         demo=demo,
+        faults=faults,
     )
 
 
@@ -274,6 +278,7 @@ def create_app(
     clinic: ClinicClient | None = None,
     demo: bool = False,
     static_dir: str | Path | None = None,
+    faults: BookingResponseLoss | None = None,
 ) -> FastAPI:
     """Build the app over a store, or over a world per visitor.
 
@@ -305,6 +310,11 @@ def create_app(
     replaces local execution entirely — including ``context_factory``, which a remote runner has no
     use for. See :data:`careloop.api.deps.GraphRunner`.
 
+    ``faults`` is the recovery scenario's ability to lose one clinic answer, and it is a per-world
+    collaborator exactly as ``clinic`` is — the isolated builder supplies its own, and passing one
+    here alongside ``sessions=`` is refused with the rest. ``None``, which is the default, leaves
+    the recovery scenario refusing truthfully rather than pretending to run.
+
     Raises:
         ValueError: if neither ``store`` nor ``sessions`` is given, if both are, or if a per-world
             collaborator is passed alongside ``sessions``.
@@ -317,6 +327,7 @@ def create_app(
         graph_runner=graph_runner,
         clinic=clinic,
         demo=demo,
+        faults=faults,
     )
 
     @asynccontextmanager
@@ -644,7 +655,7 @@ def create_app(
 
 
 def mount_demo(app: FastAPI) -> None:
-    """Add ``/api/demo`` to ``app``: reset the world, and press one of three scenarios.
+    """Add ``/api/demo`` to ``app``: reset the world, and press one of the scenarios.
 
     **Both routes run the normal path underneath.** The scenario route calls the same
     :func:`deliver` that ``POST /api/events`` calls, with a case id and an event id off a table —
@@ -652,6 +663,13 @@ def mount_demo(app: FastAPI) -> None:
     delivered, and ``tests/test_api_demo.py`` asserts the two are indistinguishable. There is no
     video-only branch, because a demo that does something the real flow does not is a demo that
     lies.
+
+    **One scenario arms one thing, and it is still the normal path.** ``recovery`` declares that the
+    clinic's answer to its case's booking may be discarded once, after the clinic has said it
+    created the appointment — see :func:`arm_the_lost_booking_response`. Nothing about the graph,
+    the gate, the saga, the wake or the read-back is different for it; what is different is that the
+    answer to one real request does not come back, which is a thing that happens to real
+    integrations and which CareLoop could not otherwise be watched surviving.
     """
 
     @app.post(
@@ -721,7 +739,49 @@ def mount_demo(app: FastAPI) -> None:
 
         async with deps.scenarios:
             await reset_world(deps)
+            if scenario.loses_the_booking_response:
+                arm_the_lost_booking_response(deps, scenario)
             return await deliver(deps, scenario.case_id, scenario.event_id, wait=wait)
+
+
+def arm_the_lost_booking_response(deps: ApiDeps, scenario: DemoScenario) -> None:
+    """Let one booking made by ``scenario``'s case lose the clinic's answer to it. **The one site.**
+
+    ``tests/test_demo_recovery.py::TestOnlyTheScenarioRouteArmsAnything`` sweeps the package for a
+    second caller, in the arrangement ``CaseStore.clear`` already has: an affordance that can put a
+    case into an unknown external outcome should be reachable from one place, and a sweep is what
+    keeps it that way when the next person needs one for something else.
+
+    **Between the reset and the delivery, and both halves matter.** The reset has just disarmed
+    whatever the last scenario left and removed every case, so what is armed here can only be about
+    the case the next line creates; and arming before the delivery is what makes it impossible for
+    that case's booking to be dispatched with nothing armed. Both happen under ``deps.scenarios``,
+    so a visitor pressing twice quickly gets one settled outcome rather than two half-applied ones.
+
+    **It arms a case, not a request.** The binding is
+    :meth:`careloop.api.faults.BookingResponseLoss.arm`, and it is enforced by the world's context
+    factory handing the losing client only to runs for that case — so an unrelated booking elsewhere
+    in this same visitor's world travels a transport containing no fault at all. What the transport
+    then adds is that the answer must be a ``201``, which is the provider stating it created the
+    appointment.
+
+    **A world with no clinic is told so.** Every effect there is simulated, so there is no external
+    write to be ambiguous about and no independent read to settle it with; a scenario that ran
+    anyway would show a judge a recovery that demonstrated nothing. Refusing is the truthful answer
+    and 409 is the code for it — the request is well formed and names a real scenario, and what it
+    conflicts with is how this CareLoop is wired.
+    """
+    if deps.faults is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"scenario {scenario.key!r} needs an external clinic to lose an answer from, and "
+                f"this CareLoop has none bound — every effect here is simulated, so there would be "
+                f"no external write to be uncertain about and no independent record to settle it "
+                f"against"
+            ),
+        )
+    deps.faults.arm(scenario.case_id)
 
 
 async def reset_world(deps: ApiDeps) -> dict[str, object]:
@@ -780,6 +840,13 @@ def _reset_quiesced_world(deps: ApiDeps) -> dict[str, object]:
     # not before it: everything above can still refuse, and a refusal must leave the scheduling it
     # found exactly as it was.
     deps.wakes.discard_deferred()
+    # And so does any armed loss, for the same reason and in the same direction: it names a case
+    # that no longer exists, and leaving it would have the next scenario's first booking lose an
+    # answer nobody asked to lose. The second of the two disarms — the transport consumes its own
+    # arming when it fires — so a scenario that ran to completion and one that was abandoned
+    # halfway both leave this world in the same state.
+    if deps.faults is not None:
+        deps.faults.disarm()
     # `put_back`, not `reset`: a session-scoped clinic has its world *ended*, which is the same
     # observable outcome — the next booking gets a freshly seeded world — and is also what keeps
     # this registry and Demo World's agreeing about who is still here. Which of the two happens is
@@ -919,6 +986,7 @@ async def schedule(deps: ApiDeps, case_id: str, inbound: InboundEvent, *, wait: 
 
 __all__ = [
     "API_PREFIX",
+    "arm_the_lost_booking_response",
     "build_dependencies",
     "create_app",
     "decide",

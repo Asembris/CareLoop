@@ -41,7 +41,8 @@ import os
 from pathlib import Path
 
 from careloop.api.app import create_app
-from careloop.api.deps import clinic_context_factory, simulated_context_factory
+from careloop.api.deps import simulated_context_factory
+from careloop.api.faults import booking_response_loss
 from careloop.api.sessions import DEFAULT_SESSION_LIMIT, demo_session_worlds
 from careloop.graph.witness import NullWitness
 from careloop.state.sqlite_store import SqliteCaseStore
@@ -121,16 +122,22 @@ def main() -> None:
         where = f"per visitor, in memory (up to {DEFAULT_SESSION_LIMIT} worlds)"
     else:
         clinic = ClinicClient(arguments.clinic_url) if arguments.clinic_url else None
+        # The single-world path gets the recovery scenario too, wired exactly as an isolated world
+        # is: a second client into the same clinic, handed only to runs for the case a recovery
+        # scenario armed. Leaving it out here would make the demo surface mean two different things
+        # depending on a flag, and `scripts/e2e_serve.py` drives the isolated shape anyway.
+        faults = booking_response_loss(arguments.clinic_url) if clinic is not None else None
         app = create_app(
             SqliteCaseStore(arguments.db),
             clinic=clinic,
             context_factory=(
-                clinic_context_factory(clinic, witness)
-                if clinic is not None
+                faults.context_factory(clinic, witness)
+                if faults is not None and clinic is not None
                 else simulated_context_factory(witness)
             ),
             demo=True,
             static_dir=arguments.static_dir or None,
+            faults=faults,
         )
         where = arguments.db
 

@@ -1,4 +1,4 @@
-"""The four scenarios the demo control API can trigger, and nothing else.
+"""The five scenarios the demo control API can trigger, and nothing else.
 
 Data, not behaviour. The routes live in :mod:`careloop.api.app` beside the ones they reuse, because
 the whole claim of the demo API is that a button runs **the normal application path** — the same
@@ -28,6 +28,20 @@ prompt-tuning a planner into taking bait, or building a fixture with no legitima
 calling it the normal case, would both be rigging the demo. The model is still free to propose
 nothing effectful.
 
+**``recovery`` is the one scenario that arms anything, and it arms one thing.** It delivers the
+ordinary referral to a case of its own and lets the clinic's answer to that case's booking be
+discarded once, after the clinic has said it created the appointment — so the case reaches
+``WAITING_EXTERNAL`` genuinely rather than by being put there, and the shipped saga, the shipped
+five-second wake and the shipped read-back settle it with nothing else pressed. Everything about the
+narrowing lives in :mod:`careloop.api.faults`; what lives here is the declaration that this scenario
+is the one it applies to. It exists because the property is otherwise unreachable from a browser:
+``e2e/tests/unreachable-states.spec.ts`` has to mock the post-effect states, and mocking a state the
+backend can produce for real is the thing this repository avoids everywhere else.
+
+The demo card for it says plainly that CareLoop throws the answer away. The ambiguity that
+follows is genuine — nothing above the transport received an answer — but implying a spontaneous
+outage would be claiming something that did not happen.
+
 What is here is the mapping from a scenario name to the inbound event that produces it, plus the
 load-time check that each named event exists. A scenario naming a fixture that has been renamed
 should fail when the module is imported, not in front of an audience.
@@ -55,6 +69,19 @@ class DemoScenario(BaseModel):
     title: str
     """What the scenario demonstrates. Shown by the control surface; never sent to a model."""
 
+    loses_the_booking_response: bool = False
+    """Whether pressing this arms one scoped loss of the clinic's answer to this case's booking.
+
+    **Data rather than a branch**, so the one place that arms a fault reads a scenario's own
+    declaration instead of comparing a key to a literal — the difference between a table somebody
+    extends and an ``if`` somebody copies. ``False`` for every scenario that is not about ambiguous
+    outcomes, which is the safe default and the one three of the five carry.
+
+    What it licenses is narrow and is enforced elsewhere: see
+    :class:`careloop.api.faults.BookingResponseLoss` for the case binding, the one-shot behaviour
+    and the requirement that the provider have answered ``201`` before anything is discarded.
+    """
+
 
 #: Fixed case ids, so a scenario pressed twice reopens the case it made rather than accumulating
 #: cases nobody will look at — and so a reset has a knowable set of cases to have removed.
@@ -79,6 +106,13 @@ DEMO_SCENARIOS: Final[Mapping[str, DemoScenario]] = MappingProxyType(
                 case_id="demo-resume",
                 event_id="evt-0004-appointment-instructions",
                 title="A case parks for a caregiver decision and resumes when it is made",
+            ),
+            DemoScenario(
+                key="recovery",
+                case_id="demo-recovery",
+                event_id="evt-0001-referral",
+                title="The clinic books the appointment and CareLoop is not told; it finds out",
+                loses_the_booking_response=True,
             ),
             DemoScenario(
                 key="injection_only",

@@ -55,6 +55,7 @@ from careloop.agents.triage import TriageAgent
 from careloop.api.app import create_app
 from careloop.api.demo import DEMO_SCENARIOS
 from careloop.api.deps import ApiDeps
+from careloop.api.faults import BookingResponseLoss, booking_response_loss
 from careloop.api.sessions import CLINIC_SESSION_HEADER, SessionWorlds
 from careloop.events.simulator import EventSimulator
 from careloop.graph.runner import context_for
@@ -207,6 +208,10 @@ SCRIPTS: Final[dict[str, tuple[PlannerIntent, ...]]] = {
     DEMO_SCENARIOS["referral"].case_id: (intent("book_appointment", BOOKING),),
     DEMO_SCENARIOS["injection"].case_id: (intent("book_appointment", BOOKING),),
     DEMO_SCENARIOS["resume"].case_id: (intent("send_email", EMAIL),),
+    # The recovery scenario books exactly what the referral one books. It has to: the beat it
+    # demonstrates is what happens when the answer to a perfectly ordinary booking never comes
+    # back, and a different action would make the scenario about the action instead.
+    DEMO_SCENARIOS["recovery"].case_id: (intent("book_appointment", BOOKING),),
     DEMO_SCENARIOS["injection_only"].case_id: tuple(
         intent(tool, args) for tool, args in EVERY_TOOL_REFUSED
     ),
@@ -279,22 +284,29 @@ def planner_for(case_id: str) -> PlannerAgent:
     )
 
 
-def scripted_factory(clinic: ClinicClient | None):
+def scripted_factory(clinic: ClinicClient | None, faults: BookingResponseLoss | None = None):
     """A context factory whose agents are scripted for the case being planned.
 
     No pinned clock. ``tests/`` pins one so a timeline is byte-comparable; here the dashboard
     renders relative times a caregiver reads, and freezing time would show every case as having
     been updated at the same long-ago instant.
+
+    ``faults`` is the recovery scenario's losing client, and the binding is the same one the
+    deployed composition uses: runs for the case a recovery scenario armed get that client, and
+    every other run gets the ordinary one. Written here rather than by composing
+    :meth:`careloop.api.faults.BookingResponseLoss.context_factory` because this factory also
+    supplies scripted agents, and there is only ever one context to build.
     """
 
     def build(store, inbound, case_id: str):
+        reaching = faults.clinic if faults is not None and faults.claims(case_id) else clinic
         return context_for(
             store,
             inbound,
             case_id=case_id,
             triage=triage_for(),
             planner=planner_for(case_id),
-            clinic=clinic,
+            clinic=reaching,
         )
 
     return build
@@ -328,11 +340,15 @@ def scripted_worlds(clinic_url: str) -> SessionWorlds:
             if clinic_url
             else None
         )
+        faults = (
+            booking_response_loss(clinic_url, session=session_id) if clinic is not None else None
+        )
         return ApiDeps(
             store=SqliteCaseStore(":memory:"),
             events=shared_events,
-            context_factory=scripted_factory(clinic),
+            context_factory=scripted_factory(clinic, faults),
             clinic=clinic,
+            faults=faults,
         )
 
     # A short idle TTL and a raised cap, both load-bearing for the suite rather than tuning

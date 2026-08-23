@@ -482,6 +482,20 @@ def demo_session_worlds(
     one shared and rewritten: the header is per-world state, and mutating a shared client would have
     the world built last decide which clinic every earlier one reaches.
 
+    **Two clients into one world, and the second is why an ambiguous outcome is demonstrable.**
+    :func:`careloop.api.faults.booking_response_loss` builds a second client reaching the same
+    clinic and the same world over a transport that can discard the answer to one booking. The
+    context factory hands it to runs for the case a recovery scenario armed and hands every other
+    run the ordinary client, so a booking belonging to any other case here travels a transport that
+    contains no fault at all. Two clients rather than one switched between them: which object a run
+    holds is settled when the run is built, and a shared client toggled per run would be two
+    concurrent runs racing over one flag.
+
+    With nothing armed the composed factory is
+    :func:`careloop.api.deps.clinic_context_factory` — ``tests/test_demo_recovery.py`` asserts that
+    rather than leaving it implied, for the reason ``simulated_context_factory`` is asserted equal
+    to the default one: a second way of building the same thing must not quietly become different.
+
     The event simulator *is* shared, and that is not an oversight. Its fixtures are read-only
     documents, so there is nothing there for one visitor to change under another.
 
@@ -496,7 +510,8 @@ def demo_session_worlds(
     # and a clinic client into every import of it.
     import httpx
 
-    from careloop.api.deps import clinic_context_factory, simulated_context_factory
+    from careloop.api.deps import simulated_context_factory
+    from careloop.api.faults import booking_response_loss
     from careloop.state.sqlite_store import SqliteCaseStore
     from careloop.tools.clinic import DEFAULT_TIMEOUT, ClinicClient
 
@@ -504,22 +519,25 @@ def demo_session_worlds(
 
     def build(session_id: str) -> ApiDeps:
         clinic = None
+        faults = None
         if clinic_url:
             clinic = ClinicClient(
                 clinic_url,
                 session=session_id,
                 client=httpx.Client(timeout=DEFAULT_TIMEOUT),
             )
+            faults = booking_response_loss(clinic_url, session=session_id)
 
         return ApiDeps(
             store=SqliteCaseStore(":memory:"),
             events=shared_events,
             context_factory=(
-                clinic_context_factory(clinic, witness)
-                if clinic is not None
+                faults.context_factory(clinic, witness)
+                if faults is not None and clinic is not None
                 else simulated_context_factory(witness)
             ),
             clinic=clinic,
+            faults=faults,
         )
 
     return SessionWorlds(build, limit=limit, idle_seconds=idle_seconds)

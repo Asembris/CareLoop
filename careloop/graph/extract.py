@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Final
@@ -322,6 +323,40 @@ SCHEMAS: Final[Mapping[DocumentKind, type[ExtractedFields]]] = {
 # -- cross-document checks -----------------------------------------------------------------------
 
 
+@dataclass(frozen=True, slots=True)
+class CaseEvidence:
+    """Everything a cross-check may read about one case. One object, so the answer is one thing.
+
+    It replaced a ``(values, documents)`` pair when a check first needed to ask *which document*
+    a value came from. Growing a third positional parameter would have given three call sites an
+    argument two of them ignore; naming the readable surface instead is the same arrangement
+    :class:`careloop.graph.verify.ObservableEffect` and
+    :class:`careloop.graph.context.RecheckTarget` already use.
+
+    **Excerpts are absent from both collections**, exactly as they were from the mapping this
+    replaced. A page excerpt is the untrusted text itself rather than a value lifted out of it; it
+    is never promotable, so a check that could gate on one would be gating on the attacker's prose.
+    """
+
+    values: Mapping[str, tuple[str, ...]]
+    """Structured fact values on the case, by fact key. Two values under one key means two
+    documents disagreed — which is what :func:`_patient_id_agrees` reads."""
+
+    facts: tuple[Fact, ...]
+    """The same structured facts, carrying their :class:`~careloop.provenance.facts.Provenance`.
+
+    Present so a check can ask *which document supplied this value*, which is the only way to
+    establish that a document named by a letter is one this case actually read rather than one
+    that merely exists. :attr:`values` cannot answer it: it is values alone, and a value says
+    nothing about where it came from.
+    """
+
+    documents: DocumentStore
+    """Every document CareLoop holds. **Not scoped to the case** — deliberately, because
+    "CareLoop holds this at all" and "this case read it" are two different questions and
+    :data:`CROSS_CHECKS` asks both, separately."""
+
+
 class CrossCheck(BaseModel):
     """One consistency requirement spanning more than one document.
 
@@ -334,43 +369,43 @@ class CrossCheck(BaseModel):
 
     name: str
     gates: frozenset[str]
-    check: Callable[[Mapping[str, tuple[str, ...]], DocumentStore], str | None]
+    check: Callable[[CaseEvidence], str | None]
     """Returns ``None`` when satisfied, or a diagnostic saying why it is not."""
 
 
-def _patient_id_agrees(
-    values: Mapping[str, tuple[str, ...]], _documents: DocumentStore
-) -> str | None:
+def _patient_id_agrees(evidence: CaseEvidence) -> str | None:
     """Every document naming a patient must name the same one.
 
     Facts are deduplicated on ``(key, value)``, so more than one distinct ``patient_id`` on a case
     means two documents disagreed. Promoting either would be picking a winner between an authentic
     document and something else, and there is nothing here that can tell which is which.
     """
-    found = values.get("patient_id", ())
+    found = evidence.values.get("patient_id", ())
     if len(found) > 1:
         return f"documents disagree about the patient: {', '.join(sorted(found))}"
     return None
 
 
-def _required_document_is_held(
-    values: Mapping[str, tuple[str, ...]], documents: DocumentStore
-) -> str | None:
+def _required_document_is_held(evidence: CaseEvidence) -> str | None:
     """A document demanded by a letter must be one CareLoop actually holds.
 
     Without this, a well-formatted identifier that no document answers to could be promoted and
     then uploaded — the upload would fail at the tool, but the promotion would have been granted on
     the strength of the identifier merely looking right.
+
+    **Existence only, and that was once mistaken for enough.** It asks whether CareLoop holds the
+    document *anywhere*, which is a question about the store rather than about this case; see
+    :func:`_required_document_answers_the_demand` for the relationship this one does not establish.
     """
-    missing = sorted(value for value in values.get("document_id", ()) if value not in documents)
+    missing = sorted(
+        value for value in evidence.values.get("document_id", ()) if value not in evidence.documents
+    )
     if missing:
         return f"named document(s) not held by CareLoop: {', '.join(missing)}"
     return None
 
 
-def _receipt_settles_the_balance(
-    values: Mapping[str, tuple[str, ...]], _documents: DocumentStore
-) -> str | None:
+def _receipt_settles_the_balance(evidence: CaseEvidence) -> str | None:
     """A receipt offered as proof of payment must be for the amount that was outstanding.
 
     Applies only when the case holds both figures; a case with one and not the other has nothing
@@ -378,8 +413,8 @@ def _receipt_settles_the_balance(
     the receipt does not answer the rejection, and authorising its upload as though it did would be
     the system asserting something it has not checked.
     """
-    outstanding = values.get("patient_responsibility", ())
-    paid = values.get("amount_paid", ())
+    outstanding = evidence.values.get("patient_responsibility", ())
+    paid = evidence.values.get("amount_paid", ())
     if not outstanding or not paid:
         return None
     try:
@@ -390,6 +425,79 @@ def _receipt_settles_the_balance(
             )
     except InvalidOperation:
         return "an amount could not be read as a decimal"
+    return None
+
+
+#: The structured value a document must supply to count as answering a claim rejection.
+#:
+#: A rejection demands *evidence that the member paid the amount shown as patient responsibility* —
+#: that is what the shipped rejection code says and it is the only demand CareLoop's one upload
+#: workflow answers. A document supplying no ``amount_paid`` is not proof of payment, whatever a
+#: letter calls it. Named here rather than spelled inside the check so that the relationship
+#: between this and :func:`_receipt_settles_the_balance`, which compares that same value against
+#: the outstanding balance, is one declaration read twice rather than two strings that can drift.
+#:
+#: A future demand for something other than proof of payment needs a deliberate extension. Until
+#: one is written such a demand is refused, which is the fail-closed direction: an upload CareLoop
+#: cannot show a reason for is an upload it does not make.
+DEMAND_IS_ANSWERED_BY: Final[str] = "amount_paid"
+
+
+def _required_document_answers_the_demand(evidence: CaseEvidence) -> str | None:
+    """A document a letter demands must be one **this case read**, and must answer the demand.
+
+    **The relationship the other two checks do not establish, and the reason this exists.**
+    ``document_id`` is lifted from a ``Required document:`` line printed by a ``CLAIM_REJECTION``,
+    and that line is untrusted text like every other line of every other document. Before this
+    check, everything downstream asked only whether the named identifier was *well formed*
+    (``document_id_format``) and whether CareLoop held *something* under it
+    (:func:`_required_document_is_held`) — neither of which is a statement about this case. So a
+    rejection could name any document in the entire store and have it promoted to ``CONTROLLED``
+    and authorised for autonomous upload to the trusted portal: the poisoned continuity notice, a
+    referral never attached to this case, anything at all. Reproduced against the shipped rules and
+    the shipped extractor before this was written.
+
+    That it did not happen with the shipped fixtures was an accident of what the fixture rejection
+    happens to print — exactly the kind of boundary this repository refuses to rely on.
+
+    Two clauses, and both are about *this case*:
+
+    **The demanded document contributed structured evidence here.** Matched on
+    :attr:`careloop.provenance.facts.Provenance.source_doc`, resolved through the store from the
+    demanded id, so the relationship is the evidence node's own record of what it read rather than
+    a second list somebody has to keep in step. A page excerpt does not count and cannot: excerpts
+    are absent from :attr:`CaseEvidence.facts`, so a document that was read but yielded nothing a
+    schema accepted answers nothing — which is precisely the poisoned notice's position, since
+    ``CONTINUITY_NOTICE`` maps to no patterns at all.
+
+    **What it contributed answers the demand.** It must have supplied
+    :data:`DEMAND_IS_ANSWERED_BY`. A document that was read, and agrees about the patient, and is
+    still not proof of payment is still not the document to send.
+
+    Together with :func:`_receipt_settles_the_balance`, which then requires that amount to settle
+    the outstanding balance, the chain from an untrusted line to an external effect reads: a letter
+    on this case demanded D, CareLoop holds D, this case read D, D established what was paid, and
+    what was paid settles what this case's own explanation of benefits says was owed.
+
+    Skips an id the store does not hold, so a missing document is reported once by the check whose
+    subject it is — :func:`cross_check_failures` keeps the first failure per key and
+    :data:`CROSS_CHECKS` puts that one first.
+    """
+    unanswered: list[str] = []
+    for demanded in sorted(evidence.values.get("document_id", ())):
+        if demanded not in evidence.documents:
+            continue
+        source = evidence.documents.get(demanded).source_doc
+        supplied = frozenset(
+            fact.key for fact in evidence.facts if fact.provenance.source_doc == source
+        )
+        if not supplied:
+            unanswered.append(f"{demanded} supplied no evidence to this case")
+        elif DEMAND_IS_ANSWERED_BY not in supplied:
+            unanswered.append(f"{demanded} established no {DEMAND_IS_ANSWERED_BY}")
+    if unanswered:
+        joined = "; ".join(unanswered)
+        return f"demanded document(s) do not answer the demand: {joined}"
     return None
 
 
@@ -404,6 +512,11 @@ CROSS_CHECKS: Final[tuple[CrossCheck, ...]] = (
         name="required-document-is-held",
         gates=frozenset({"document_id"}),
         check=_required_document_is_held,
+    ),
+    CrossCheck(
+        name="required-document-answers-the-demand",
+        gates=frozenset({"document_id"}),
+        check=_required_document_answers_the_demand,
     ),
     CrossCheck(
         name="receipt-settles-the-outstanding-balance",
@@ -658,15 +771,15 @@ def cross_check_failures(
     surviving values under one key means two documents genuinely disagreed.
     """
     held = documents if documents is not None else default_document_store()
+    structured = tuple(fact for fact in case.facts if not fact.key.startswith(EXCERPT_PREFIX))
     values: dict[str, tuple[str, ...]] = {}
-    for fact in case.facts:
-        if fact.key.startswith(EXCERPT_PREFIX):
-            continue
+    for fact in structured:
         values[fact.key] = (*values.get(fact.key, ()), fact.value)
+    evidence = CaseEvidence(values=values, facts=structured, documents=held)
 
     blocked: dict[str, tuple[str, str]] = {}
     for cross_check in CROSS_CHECKS:
-        why = cross_check.check(values, held)
+        why = cross_check.check(evidence)
         if why is None:
             continue
         for key in cross_check.gates:

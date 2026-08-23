@@ -343,6 +343,12 @@ def create_app(
         hope about somebody noticing. Draining is still cheap and still bounded by the SDK's own
         execution timeout, and every world drains, because they are separate stores rather than
         separate importances.
+
+        **The order inside a drain is a world's own contract** — wakes stopped and collected, then
+        runs drained — and it lives in :meth:`careloop.api.deps.ApiDeps.drain` so that one world and
+        a registry of them cannot come to answer differently. What this function must not do is
+        reach past it and drain runs itself: a wake registering a run while the drain is already
+        under way is work started after the process decided to stop.
         """
         resumed = bound.resume_unsettled()
         if resumed:
@@ -671,7 +677,7 @@ def mount_demo(app: FastAPI) -> None:
         resolved to, so on an isolated app this cannot empty anybody else's cases — not because it
         checks, but because there is no other store in reach.
         """
-        return reset_world(deps)
+        return await reset_world(deps)
 
     @app.post(
         f"{API_PREFIX}/demo/scenarios/{{key}}",
@@ -714,11 +720,11 @@ def mount_demo(app: FastAPI) -> None:
             )
 
         async with deps.scenarios:
-            reset_world(deps)
+            await reset_world(deps)
             return await deliver(deps, scenario.case_id, scenario.event_id, wait=wait)
 
 
-def reset_world(deps: ApiDeps) -> dict[str, object]:
+async def reset_world(deps: ApiDeps) -> dict[str, object]:
     """Clear one world's cases and reseed its clinic.
 
     One function rather than two call sites, because ``POST /api/demo/reset`` and the reset a
@@ -728,6 +734,30 @@ def reset_world(deps: ApiDeps) -> dict[str, object]:
     **Refused while any run is in flight.** Clearing the store underneath a live graph is a version
     conflict wearing a costume, and the run would keep going against a store nobody is reading.
     Waiting a second and pressing again is the whole remedy.
+
+    **Quiesced rather than merely checked, and the ordering is the whole of it.** A pending
+    reconciliation wake is not a run in flight, so the check below would not have seen one — and a
+    wake that fired a moment later would start a run against a store this function had just emptied.
+    :meth:`careloop.api.wake.ReconcileWaker.quiesced` closes the registration boundary, cancels
+    every pending wake and *waits until none is still running* before the body begins; the check
+    then happens inside that scope, so it also catches a run some wake registered just before the
+    gate closed. Cancelling without awaiting would establish nothing: a cancellation is delivered at
+    the task's next suspension point, and a wake that is mid-registration has none.
+
+    A run that won that race keeps the existing semantics exactly — 409, nothing cleared, the world
+    left as it was — and the gate reopens on the way out, so a refused reset leaves a working world
+    rather than a silenced one.
+    """
+    async with deps.wakes.quiesced():
+        return _reset_quiesced_world(deps)
+
+
+def _reset_quiesced_world(deps: ApiDeps) -> dict[str, object]:
+    """The reset itself, performed with no wake able to appear behind it.
+
+    Split out so the ordering above is a structure rather than a comment: everything here runs
+    inside the quiesced scope, and there is no way to call it from outside one by accident that does
+    not also mean writing this name.
     """
     if (running := deps.runs.any_in_flight()) is not None:
         raise HTTPException(

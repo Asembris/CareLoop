@@ -298,7 +298,10 @@ class SessionWorlds:
         return tuple(resumed)
 
     async def drain(self) -> None:
-        """Wait for every world's runs to finish, then end every world's clinic. Orderly shutdown.
+        """Close every world down, then end every world's clinic. Orderly shutdown.
+
+        Closing a world down is stopping its wakes and then draining its runs, in that order — see
+        :meth:`careloop.api.deps.ApiDeps.drain`, which owns it.
 
         Not :func:`serialised`, and deliberately: holding a blocking lock across an ``await``
         would stop the event loop from making the progress being waited for. The snapshot is
@@ -315,7 +318,11 @@ class SessionWorlds:
         with self._lock:
             worlds = list(self._worlds.items())
         for _, world in worlds:
-            await world.runs.drain()
+            # `ApiDeps.drain`, not `world.runs.drain()`: the order in which a world's wakes are
+            # stopped and its runs are drained is that world's own contract, and stating it in two
+            # places is how the two come apart. This is the shape the lifespan already relies on for
+            # a single-world app.
+            await world.drain()
 
         self._end_forgotten()
         for session_id, world in worlds:
@@ -333,11 +340,44 @@ class SessionWorlds:
         could be holding it, and a request that has already resolved its world *is* holding it —
         closing underneath one turns a clean re-mint into a 500 from inside SQLite. Letting the last
         reference go frees the same memory a moment later and cannot produce a half-answer.
+
+        **Busy is asked twice, and the second time is the one that matters.** The first ask is the
+        old one: a world with a run in flight is not idle and is skipped. But a pending
+        reconciliation wake is *not* a run, so between that answer and the eviction a wake could
+        start one — against a world about to be forgotten and a clinic session about to be ended.
+        Closing the wake gate in between makes the two answers mean something: after
+        :meth:`careloop.api.wake.ReconcileWaker.close` returns, no wake here can begin a
+        registration, and any wake that was already inside one has finished it — so a run that won
+        that race exists in the registry by the time the second ask happens, and this backs off and
+        leaves the world alone.
+
+        **A pending wake is deliberately not itself a reason to spare a world.** Counting one as
+        busy would make a visitor's world immortal for exactly as long as their provider stayed
+        unavailable, which is the failure mode the idle bound exists to prevent. What a stopped
+        wake may still cost is a bounded memory tail — its world stays referenced until it wakes and
+        finds the gate shut — and what it can no longer do is anything at all.
         """
         deadline = self._now() - self._idle_seconds
         for session_id in list(self._worlds):
+            world = self._worlds[session_id]
             if self._touched.get(session_id, 0.0) > deadline or self.busy(session_id):
                 continue
+
+            world.wakes.close()
+            if self.busy(session_id):
+                # A wake got its run registered before the gate shut. That run is legitimate and
+                # this is not the place to interfere with it: reopen and leave the world working,
+                # and it will be idle again on some later sweep.
+                world.wakes.reopen()
+                LOGGER.debug(
+                    "not evicting %r: a run was registered while the wake gate was closing",
+                    session_id,
+                )
+                continue
+
+            # Permanent now that the world is going. `stop` cancels nothing, because this runs in a
+            # Starlette worker thread and cancelling a task from off the event loop is not safe.
+            world.wakes.stop()
             forgotten = self._worlds.pop(session_id)
             self._touched.pop(session_id, None)
             self._orphan(session_id, forgotten)

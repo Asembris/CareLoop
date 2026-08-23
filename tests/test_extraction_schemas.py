@@ -368,11 +368,18 @@ class TestPatientIdAgreesAcrossDocuments:
         assert "INSUFFICIENT_FACT_TRUST" in (refusals[-1].diagnostic or "")
 
     def test_agreeing_documents_promote_normally(self) -> None:
+        """Scoped to the key this check gates.
+
+        It asserted an empty failure map, which was standing in for *this check is silent* and also
+        quietly asserted something about ``document_id``. It does not hold any more and should not:
+        this case reads a rejection demanding a receipt it never attached, which
+        ``required-document-answers-the-demand`` withholds. That key is another check's subject.
+        """
         case = make_case()
         case = record_document(case, held(REFERRAL), now=FIXED_NOW)
         case = record_document(case, held(REJECTION), now=FIXED_NOW)
 
-        assert cross_check_failures(case) == {}
+        assert "patient_id" not in cross_check_failures(case)
         assert (
             resolve_trust("patient_id", "PT-4417", validate_and_promote(case, now=FIXED_NOW))
             is TrustLevel.CONTROLLED
@@ -403,10 +410,27 @@ class TestTheRequiredDocumentMustBeOneCareLoopHolds:
 
         assert resolve_trust("document_id", "doc-9999-elsewhere", case) is TrustLevel.UNTRUSTED
 
-    def test_a_document_that_is_held_promotes(self) -> None:
-        case = validate_and_promote(self._demanding(RECEIPT_DOCUMENT_ID), now=FIXED_NOW)
+    def test_a_document_that_is_held_and_answers_the_demand_promotes(self) -> None:
+        """Held-ness is necessary and is no longer sufficient, so the receipt is attached here.
 
-        assert resolve_trust("document_id", RECEIPT_DOCUMENT_ID, case) is TrustLevel.CONTROLLED
+        This test used to demand the receipt without attaching it, and the identifier promoted
+        anyway — which is precisely the gap ``required-document-answers-the-demand`` closes, so the
+        assertion had to move rather than the check. What is still being pinned is this check's own
+        property: a demanded document CareLoop *holds* is not withheld by **this** check, as
+        ``test_a_document_nobody_holds_withholds_promotion`` shows one is when it does not.
+        ``tests/test_upload_authority.py`` owns the relationship half.
+        """
+        case = record_document(
+            self._demanding(RECEIPT_DOCUMENT_ID), held(RECEIPT_DOCUMENT_ID), now=FIXED_NOW
+        )
+        case = record_document(case, held(EOB), now=FIXED_NOW)
+
+        assert (
+            resolve_trust(
+                "document_id", RECEIPT_DOCUMENT_ID, validate_and_promote(case, now=FIXED_NOW)
+            )
+            is TrustLevel.CONTROLLED
+        )
 
     def test_the_store_consulted_is_the_one_passed_in(self) -> None:
         """Injectable, so a test is not asserting against whatever the process happens to ship."""
@@ -448,11 +472,21 @@ class TestTheReceiptMustSettleTheOutstandingBalance:
         assert Decimal("172.0") == Decimal("172.00")
 
     def test_a_case_with_no_receipt_at_all_is_not_made_suspicious(self) -> None:
-        """The check applies when both figures are present, and is silent otherwise."""
+        """The check applies when both figures are present, and is silent otherwise.
+
+        Named for the settlement check, so it asserts about the settlement check. ``document_id`` is
+        withheld here — by ``required-document-answers-the-demand``, because the rejection demands a
+        receipt this case never read — and that is a different finding reported by a different name.
+        Asserting an empty map conflated the two.
+        """
         case = record_document(make_case(), held(EOB), now=FIXED_NOW)
         case = record_document(case, held(REJECTION), now=FIXED_NOW)
 
-        assert cross_check_failures(case) == {}
+        blocked = cross_check_failures(case)
+
+        assert "receipt-settles-the-outstanding-balance" not in {
+            name for name, _why in blocked.values()
+        }
 
 
 class TestWithholdingLeavesARemediableDenial:

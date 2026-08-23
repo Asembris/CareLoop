@@ -43,8 +43,18 @@ from careloop.tools.clinic import (
     ClinicRefused,
     ClinicUnavailable,
 )
+from careloop.tools.documents import DocumentStore, default_document_store
 from careloop.tools.executor import Handler
-from careloop.tools.results import ActionResult
+from careloop.tools.objectstore import (
+    DOCUMENT_METADATA,
+    PORTAL_METADATA,
+    FiledObject,
+    ObjectNotFound,
+    ObjectStoreClient,
+    ObjectStoreRefused,
+    ObjectStoreUnavailable,
+)
+from careloop.tools.results import ActionResult, DocumentUploaded
 
 
 class ConflictingProviders(Exception):
@@ -178,12 +188,142 @@ def clinic_provider(client: ClinicClient) -> ExternalProvider:
     )
 
 
+#: The action type the object store is the external system for.
+OBJECT_STORE_ACTION: Final[str] = "upload_document"
+
+
+def object_store_handler(client: ObjectStoreClient, documents: DocumentStore) -> Handler:
+    """File the authorised document into the store, or settle against what the key already holds.
+
+    :data:`careloop.tools.executor.Handler`-shaped, so it drops into the executor's mapping exactly
+    as ``ClinicClient.book`` does: the ledger, the replay suppression and the key-collision guard
+    keep working unchanged, and the idempotency key is derived by ``ToolSet._effect`` before this is
+    reached.
+
+    **The bytes are resolved from the document CareLoop holds**, addressed by the ``document_id``
+    the policy engine required at ``CONTROLLED``. No model composes them, no model names the object,
+    and no model chooses the content type. What a planner decides is *which held document is filed
+    and where* — both trust-gated arguments — and nothing else about the request.
+
+    The result carries what the store is holding, not what CareLoop hoped it would hold: on a create
+    that is the bytes just written, and on a refused duplicate it is what
+    :meth:`~careloop.tools.objectstore.ObjectStoreClient.put_once` read back. Either way the digest
+    is computed from bytes rather than taken from a receipt.
+    """
+
+    def file_document(args: Mapping[str, str], idempotency_key: str) -> ActionResult:
+        object_key = client.object_key(idempotency_key)
+        body = documents.content(args["document_id"])
+        filed, _created = client.put_once(
+            object_key=object_key,
+            body=body,
+            metadata={
+                DOCUMENT_METADATA: args["document_id"],
+                PORTAL_METADATA: args["portal_id"],
+            },
+        )
+        return _uploaded(filed, idempotency_key)
+
+    return file_document
+
+
+def object_store_readback(client: ObjectStoreClient) -> ReadBack:
+    """Observe an upload by fetching the object's **bytes** back and reducing them here.
+
+    **A separate GET, keyed on the object key the effect recorded.** Not the write's response, not
+    anything CareLoop stored about the content, and emphatically not a digest the provider reports
+    about itself — that last one is the store describing its own bookkeeping, and taking it as the
+    proof would make the check as good as the store's honesty. What is compared is a digest this
+    process computed over bytes it received.
+
+    **This is the boundary where transport stops**, the object store's counterpart to
+    :func:`clinic_readback`. Two answers, and they are different facts:
+
+    ``ObjectNotFound`` — the store answered that it holds nothing under a key CareLoop chose and
+    wrote. A definite external answer contradicting the receipt CareLoop holds, so
+    :class:`~careloop.graph.verify.ObservationAbsent`. Note what is *not* here: an ``AccessDenied``
+    is a statement about the caller rather than about the object, and
+    :mod:`careloop.tools.objectstore` deliberately leaves it an ordinary refusal so that a
+    misconfigured deployment cannot be read as knowledge of absence.
+
+    Anything else — nobody answered, or what answered could not serve the read. CareLoop established
+    nothing, so :class:`~careloop.graph.verify.ObservationUnavailable`, with the originating failure
+    kept as ``__cause__``.
+
+    ``portal_id`` and ``document_id`` are read from the object's **own metadata** rather than copied
+    across from the recorded result, so the comparison is against what the store holds. The
+    identifiers come from the key that was actually fetched.
+    """
+
+    def observe(result: ActionResult) -> ActionResult:
+        try:
+            found = client.fetch(result.object_key)
+        except ObjectNotFound as absent:
+            raise ObservationAbsent(
+                f"the object store could not confirm {result.object_id}: {absent}"
+            ) from absent
+        except (ObjectStoreRefused, ObjectStoreUnavailable) as failure:
+            raise ObservationUnavailable(
+                f"the object store could not confirm {result.object_id}: {failure}"
+            ) from failure
+        return _observed(found)
+
+    return observe
+
+
+def object_store_provider(
+    client: ObjectStoreClient, documents: DocumentStore | None = None
+) -> ExternalProvider:
+    """The object store, as one provider: a real filing and the read that observes it."""
+    held = documents if documents is not None else default_document_store()
+    return ExternalProvider(
+        name="object-store",
+        handlers={OBJECT_STORE_ACTION: object_store_handler(client, held)},
+        readbacks={OBJECT_STORE_ACTION: object_store_readback(client)},
+    )
+
+
+def _uploaded(filed: FiledObject, idempotency_key: str) -> DocumentUploaded:
+    """The result of a filing, read off what the store is holding."""
+    return DocumentUploaded(
+        object_key=filed.object_key,
+        object_id=idempotency_key,
+        portal_id=filed.metadata.get(PORTAL_METADATA, ""),
+        document_id=filed.metadata.get(DOCUMENT_METADATA, ""),
+        content_sha256=filed.content_sha256,
+    )
+
+
+def _observed(found: FiledObject) -> DocumentUploaded:
+    """The same shape, valued entirely from a fresh read.
+
+    ``object_id`` is the fetched key's last segment rather than a value carried over from the
+    record: an identifier copied from the receipt would make the identifier comparison a comparison
+    of CareLoop with itself.
+
+    Metadata absent from the object yields an empty string rather than the recorded value. That is
+    the fail-closed direction — a store that lost the metadata has diverged, and filling it in from
+    the record would report the divergence as a match.
+    """
+    return DocumentUploaded(
+        object_key=found.object_key,
+        object_id=found.object_key.rsplit("/", 1)[-1],
+        portal_id=found.metadata.get(PORTAL_METADATA, ""),
+        document_id=found.metadata.get(DOCUMENT_METADATA, ""),
+        content_sha256=found.content_sha256,
+    )
+
+
 __all__ = [
     "CLINIC_ACTION",
+    "OBJECT_STORE_ACTION",
     "ConflictingProviders",
     "ExternalProvider",
     "clinic_provider",
     "clinic_readback",
     "merged_handlers",
     "merged_readbacks",
+    "object_store_handler",
+    "object_store_provider",
+    "object_store_readback",
 ]

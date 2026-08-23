@@ -46,23 +46,71 @@ from evaluators.contract import (
     Settlement,
 )
 
+#: Effect types CareLoop can independently observe that the **deployed** evaluator does not judge.
+#:
+#: A deliberate, named exclusion rather than a gap. ``CareLoopSettlementIntegrity`` is a frozen
+#: artefact: a Lambda deployed in AWS, backed by six recorded real-trace results and a campaign of
+#: 73 designated mutants. Widening it to a second effect type is not an edit to a declaration — it
+#: is a redeploy, a second mutation campaign and a second set of recorded results, and doing it as a
+#: side effect of shipping an integration would put booking's existing proof at risk to add a claim
+#: nobody has measured.
+#:
+#: ``upload_document`` is therefore covered by offline deterministic tests and by the same nine
+#: telemetry attributes, and is **not** covered by AWS evaluation. ``docs/judges.md`` says so in
+#: those words, and ``tests/test_evaluator_upload_scope.py`` proves the deployed evaluator answers
+#: an upload trace ``NOT_APPLICABLE`` rather than ``PASS``.
+NOT_EVALUATED_IN_AWS: frozenset[str] = frozenset({"upload_document"})
+
 
 class TestWhatCanBeIndependentlyObserved:
     """``OBSERVABLE_EFFECT_TYPES`` against ``INDEPENDENTLY_OBSERVABLE``.
 
-    An **equality**, not a subset relation in either direction. An effect type the evaluator
-    thinks is observable but CareLoop does not would make the evaluator demand a read-back that
-    can never happen; one CareLoop can observe but the evaluator does not know about would be
-    silently answered ``NOT_APPLICABLE`` -- a real external booking leaving no number behind,
-    which is the HIGH escape class the mutation ledger exists to prevent.
+    **A subset with a named exclusion**, which is what this always meant. It was an equality while
+    booking was the only real provider, and that equality bundled two different claims:
+
+    *The evaluator names nothing CareLoop cannot observe.* A correctness property — an effect type
+    the evaluator thought observable but CareLoop does not would make it demand a read-back that can
+    never happen. That half is unchanged and is asserted below as a subset.
+
+    *CareLoop observes nothing the evaluator misses.* A **coverage** property, and one that was true
+    incidentally rather than by decision. Stating it as an equality meant that the day a second real
+    provider arrived, the only way to keep the suite green would be to widen a frozen AWS artefact —
+    which is the tail wagging the dog. It is replaced by :data:`NOT_EVALUATED_IN_AWS`, an explicit
+    list of what is knowingly outside the evaluator's scope, so the gap is *declared* rather than
+    discovered.
+
+    The escape class the old equality guarded against is still guarded: an observable type that is
+    neither evaluated nor named as excluded fails ``test_nothing_is_silently_unevaluated``.
     """
 
-    def test_the_two_declarations_agree(self) -> None:
-        assert OBSERVABLE_EFFECT_TYPES == INDEPENDENTLY_OBSERVABLE
+    def test_the_evaluator_names_nothing_careloop_cannot_observe(self) -> None:
+        """The correctness half, unchanged."""
+        assert OBSERVABLE_EFFECT_TYPES <= INDEPENDENTLY_OBSERVABLE
+
+    def test_nothing_is_silently_unevaluated(self) -> None:
+        """The coverage half, stated. Every observable type is judged in AWS or listed as not.
+
+        This is what the equality was really protecting, and it is now impossible to satisfy by
+        accident: a third provider becomes visible here the moment it is declared observable, and
+        whoever adds it has to decide which side of the line it is on.
+        """
+        assert INDEPENDENTLY_OBSERVABLE - OBSERVABLE_EFFECT_TYPES == NOT_EVALUATED_IN_AWS
+
+    def test_the_exclusion_names_nothing_the_evaluator_also_covers(self) -> None:
+        """A type cannot be both judged and declared unjudged."""
+        assert frozenset() == NOT_EVALUATED_IN_AWS & OBSERVABLE_EFFECT_TYPES
+
+    def test_the_exclusion_names_only_observable_types(self) -> None:
+        """Excluding something nothing can observe would be a note about nothing."""
+        assert NOT_EVALUATED_IN_AWS <= INDEPENDENTLY_OBSERVABLE
 
     def test_the_declaration_is_not_empty(self) -> None:
-        """An empty set on either side would make the equality above vacuously true."""
+        """An empty set on either side would make the subset above vacuously true."""
         assert OBSERVABLE_EFFECT_TYPES
+
+    def test_booking_is_still_what_the_evaluator_judges(self) -> None:
+        """The scope did not move. Adding a provider added nothing to the deployed artefact."""
+        assert frozenset({"book_appointment"}) == OBSERVABLE_EFFECT_TYPES
 
     def test_every_observable_type_is_an_effect_tool_the_registry_declares(self) -> None:
         assert REGISTRY.external_effect_tools >= OBSERVABLE_EFFECT_TYPES
@@ -258,10 +306,18 @@ class TestTheClaimVocabulariesTheApplicationNowEmits:
     def test_the_declared_external_state_is_the_evaluators_expected_field_set(self) -> None:
         assert OBSERVABLE_STATE["book_appointment"].state_fields == EXPECTED_FIELDS
 
-    def test_the_declared_state_covers_exactly_what_the_evaluator_thinks_is_observable(
+    def test_the_declared_state_covers_everything_the_evaluator_thinks_is_observable(
         self,
     ) -> None:
-        assert frozenset(OBSERVABLE_STATE) == OBSERVABLE_EFFECT_TYPES
+        """A subset, for :class:`TestWhatCanBeIndependentlyObserved`'s reason.
+
+        What must hold is that the evaluator never judges a type CareLoop declares no state for —
+        its two digests would be over nothing and ``FIELD_SET_UNEXPECTED`` would be the only thing
+        standing between that and a vacuous ``PASS``. CareLoop declaring state for a type the
+        evaluator does not judge is the deliberate case, and is
+        :data:`NOT_EVALUATED_IN_AWS`.
+        """
+        assert frozenset(OBSERVABLE_STATE) >= OBSERVABLE_EFFECT_TYPES
 
 
 class TestTheEvaluatorStillImportsNothingFromTheApplication:

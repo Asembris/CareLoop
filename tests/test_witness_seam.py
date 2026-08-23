@@ -215,13 +215,15 @@ class TestTheEffectProjection:
         assert claim is not None and reference is not None
         assert claim.state_digest == reference.state_digest
 
-    @pytest.mark.parametrize(
-        "action_type", ["send_email", "upload_document", "grant_portal_access", "unknown_tool"]
-    )
+    @pytest.mark.parametrize("action_type", ["send_email", "grant_portal_access", "unknown_tool"])
     def test_an_action_type_with_no_externally_held_state_claims_nothing(
         self, action_type: str
     ) -> None:
-        """Three effects are simulated by design, so a claim about one could never be checked."""
+        """Two effects are simulated by design, so a claim about one could never be checked.
+
+        ``upload_document`` left this list when it gained a real provider — see
+        ``test_the_upload_claims_only_its_argument_sourced_state`` for what it claims instead.
+        """
         assert (
             _effect_claim(
                 action_type=action_type,
@@ -383,9 +385,7 @@ class TestTheObservationProjection:
         assert claim is not None
         assert claim.resource_id == CONFIRMATION
 
-    @pytest.mark.parametrize(
-        "action_type", ["send_email", "upload_document", "grant_portal_access", "unknown_tool"]
-    )
+    @pytest.mark.parametrize("action_type", ["send_email", "grant_portal_access", "unknown_tool"])
     def test_an_action_type_with_no_externally_held_state_claims_nothing(
         self, action_type: str
     ) -> None:

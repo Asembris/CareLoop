@@ -103,11 +103,58 @@ class AppointmentBooked(ActionResult):
 
 
 class DocumentUploaded(ActionResult):
-    """A document was delivered to a provider portal."""
+    """A document was filed into a provider's object store.
 
-    upload_id: str
+    Every field is something an independent read of the store can establish, which is what
+    distinguishes this from the receipt it used to be. ``upload_id`` — a synthetic identifier
+    CareLoop minted from the idempotency key — is gone: the provider never held it, so comparing it
+    against an observation compared CareLoop against itself.
+
+    **A record written before those fields existed cannot be rehydrated**, exactly as
+    :attr:`AppointmentBooked.reason` documents for a booking, and for the same reason: such a record
+    was never checked against a store's own bytes and cannot truthfully satisfy an invariant that
+    says it was. There is no default and no migration. Reads and API projections are unaffected,
+    because :attr:`careloop.state.case.ActionRecord.result` is opaque text to everything except
+    :func:`careloop.graph.verify.rehydrate`.
+    """
+
+    object_key: str
+    """Where the store holds it. **Chosen by CareLoop from the durable action identity**, which is
+    what lets a reconciliation address the object a crashed attempt would have made.
+
+    Carried so the independent read-back has something to be keyed on — the analogue of a clinic's
+    ``confirmation_id``, except that the provider mints nothing and CareLoop names the resource.
+    """
+
+    object_id: str
+    """The key's last segment: the frozen idempotency key, and the bounded resource identifier.
+
+    Separate from :attr:`object_key` because the two are read by different consumers with different
+    constraints. The read-back needs the whole key; settlement telemetry needs one bounded token
+    matching ``careloop.graph.witness.RESOURCE_ID_PATTERN``, which a key carrying separators does
+    not. Deriving the short form here rather than letting a projection parse the long one keeps the
+    parsing in one place.
+    """
+
     portal_id: str
+    """Which portal the document was filed for, **as the store reports it back**."""
+
     document_id: str
+    """Which held document was filed, as the store reports it back."""
+
+    content_sha256: str
+    """Lowercase hexadecimal SHA-256 of the object's bytes.
+
+    On a read-back it is computed from **the bytes the store returned to a fresh read**, and never
+    from a digest the store reports about itself. That is the difference between observing an object
+    and believing a receipt, and it is why this field exists rather than a provider-reported
+    checksum.
+
+    Compared against a :class:`careloop.graph.verify.DerivedExpectation` — a digest computed from
+    the document CareLoop holds — rather than against a tool argument. There is no
+    ``content_sha256`` argument and there must not be: it would enter the proposal, the authority
+    path, ``args_digest`` and the outbound payload in order to answer a question about scrutiny.
+    """
 
 
 class AccessGranted(ActionResult):

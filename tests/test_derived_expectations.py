@@ -144,11 +144,17 @@ def slot_is_derived(monkeypatch: pytest.MonkeyPatch):
 class TestTheExpectationsAreTheArgumentsUntilSomethingSaysOtherwise:
     """A. Booking is unchanged, and the way it is unchanged is worth pinning."""
 
-    def test_nothing_shipped_declares_a_derived_expectation(self) -> None:
-        """An empty table is the honest state. An entry would be a guarantee nobody is making."""
-        assert DERIVED_EXPECTATIONS == {}
+    def test_only_the_upload_declares_a_derived_expectation(self) -> None:
+        """One entry, and it is the one a content-shaped provider forced.
 
-    @pytest.mark.parametrize("action_type", sorted({BOOKING, "send_email", "upload_document"}))
+        ``upload_document`` has to compare what a store is holding against the document CareLoop
+        was authorised to send, and that digest is not something a proposal carries or a rule
+        reads. Every other action type still compares arguments alone.
+        """
+        assert set(DERIVED_EXPECTATIONS) == {"upload_document"}
+        assert derived_names("upload_document") == frozenset({"content_sha256"})
+
+    @pytest.mark.parametrize("action_type", sorted({BOOKING, "send_email", "grant_portal_access"}))
     def test_the_expectations_are_exactly_the_canonical_arguments(self, action_type: str) -> None:
         canonical = canonical_args(ARGS)
 
@@ -296,6 +302,7 @@ class TestPuttingADerivedValueIntoTheEffectStateIsRefused:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(verification, "DERIVED_EXPECTATIONS", {BOOKING: (FAITHFUL,)})
+        monkeypatch.setattr(verification, "INDEPENDENTLY_OBSERVABLE", frozenset({BOOKING}))
         monkeypatch.setattr(
             verification,
             "OBSERVABLE_STATE",
@@ -381,8 +388,8 @@ class TestWithoutTheSeamTheDerivedComparisonStopsWorking:
 class TestTheDeclarationsStayWhereTheyAre:
     """The observable types did not move, so no evaluator or telemetry contract is in question."""
 
-    def test_only_booking_is_independently_observable(self) -> None:
-        assert frozenset({BOOKING}) == INDEPENDENTLY_OBSERVABLE
+    def test_the_two_real_providers_are_what_is_observable(self) -> None:
+        assert frozenset({BOOKING, "upload_document"}) == INDEPENDENTLY_OBSERVABLE
 
     def test_the_booking_field_set_is_unchanged(self) -> None:
         assert OBSERVABLE_STATE[BOOKING].state_fields == (

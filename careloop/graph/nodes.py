@@ -792,6 +792,25 @@ class ReconcileNode(DeterministicNode):
                 "the prepared action and the current proposal are different actions",
             )
 
+        # **The frozen digest, checked beside the frozen key, and it is not the same check.** The
+        # key covers the arguments the registry declares *identifying*; the digest covers all of
+        # them. Since ``book_appointment.reason`` identifies nothing, a proposal whose descriptive
+        # text had drifted would satisfy the clause above and then be re-issued under the recorded
+        # key with different details — which Demo World answers ``409 KeyReused``, an external
+        # service's own consistency rule standing where CareLoop's should.
+        #
+        # Unreachable under the shipped flow: a second ``PLAN_PROPOSED`` needs ``PLANNING``, and no
+        # post-effect state reaches it. That is a property of today's writers rather than a
+        # boundary, which is exactly the shape this repository has closed before, so it is a guard
+        # against a persisted or tampered case and against future drift. ``Preparation`` has carried
+        # ``args_digest`` since it was written; nothing read it until now.
+        if args_digest(proposal.args) != prepared.args_digest:
+            return self._fail(
+                case,
+                base,
+                "the prepared action and the current proposal carry different arguments",
+            )
+
         # Structurally unreachable while ``_record_action`` and the transition to ``VERIFYING``
         # share one commit, which they do. Kept because "unreachable" is a property of today's
         # writers, and this is what converges a case whose result was recorded without its

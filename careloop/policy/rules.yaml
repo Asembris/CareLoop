@@ -252,6 +252,7 @@ rules:
         - arg: patient_id
           level: CONTROLLED
           arg_class: VALUE
+      args_system_authored: [reason]
     diagnostic: >-
       Booking against a provider from trusted config, at a validated time, for a patient the case's
       own evidence establishes, with the case cleared for execution. This is the autonomous path,
@@ -262,6 +263,24 @@ rules:
       argument the call omits resolves UNTRUSTED, and no fact can carry an empty value under
       patient_id because patient_id_format requires PT-0000. Keeping both would leave two conditions
       where one is stronger, and the weaker one is what let an invented identifier through.
+      The `args_system_authored` clause is the authorship half and is a different dimension from
+      every clause above it. `reason` is SYSTEM-authored: CareLoop composes it from a fixed literal
+      in careloop/tools/registry.py, the model-facing propose_book_appointment schema does not
+      carry the field at all, and this clause requires the supplied value to be byte-identical to
+      that literal. It resolves no trust, mints no fact and moves no trust level — `reason` still
+      resolves UNTRUSTED here, and a rule requiring its trust would still fail at load, because it
+      declares no trust_key and is not a fact.
+      Two enforcement points, deliberately, and the second is not redundant. The schema is the
+      primary boundary and a model cannot express the field through it; this clause is what stops
+      the positive path depending on the schema being the thing that catches it, so a hand-built
+      intent, a replayed corpus entry or a future seam that supplies its own text matches no ALLOW
+      rule and is refused NO_RULE_MATCH by deny-by-default. Same reasoning as the portal_id clause
+      on allow-approved-portal-access-grant, one dimension over.
+      There is no matching DENY rule and that is a decision. A distinct model-visible reason code
+      would tell a planner that the *content* of a descriptive field is what was refused, which is
+      exactly the probe hint invariant 6 exists to withhold, and the field is not in the model's
+      schema so the refusal is unreachable from it. NO_RULE_MATCH is what an incomplete or
+      malformed capability already gets.
 
   - id: allow-upload-to-trusted-portal
     effect: ALLOW

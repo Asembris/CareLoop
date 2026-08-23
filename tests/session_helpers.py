@@ -19,7 +19,7 @@ from __future__ import annotations
 import httpx
 from api_helpers import EMAIL, intent, planner_proposing, triage_agent
 from fastapi.testclient import TestClient
-from helpers import FIXED_NOW
+from helpers import BOOKING_REASON, FIXED_NOW
 
 from careloop.api.app import create_app
 from careloop.api.demo import DEMO_SCENARIOS
@@ -33,7 +33,7 @@ BOOKING = {
     "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
     "patient_id": "PT-4417",
     "slot_start": "2026-09-03T09:30:00",
-    "reason": "cardiology review",
+    "reason": BOOKING_REASON,
 }
 
 #: What the planner proposes, by the case it is planning for.

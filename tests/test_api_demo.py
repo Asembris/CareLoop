@@ -26,7 +26,7 @@ from api_helpers import (
     triage_agent,
 )
 from fastapi.testclient import TestClient
-from helpers import FIXED_NOW
+from helpers import BOOKING_REASON, FIXED_NOW
 
 import careloop
 from careloop.api import app as app_module
@@ -46,7 +46,7 @@ BOOKING = {
     "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
     "patient_id": "PT-4417",
     "slot_start": "2026-09-03T09:30:00",
-    "reason": "cardiology review",
+    "reason": BOOKING_REASON,
 }
 
 

@@ -658,7 +658,11 @@ class TestAnIdentityMismatchIsRefused:
 
         parked, store = park(ChangesTheReason, world, base_url)
         case = store.get(CASE_ID)
-        drifted = {**BOOKING, "reason": "a different reason entirely"}
+        # A different *slot* rather than a different reason. ``reason`` is declared non-identifying,
+        # so rewording it no longer moves the key — which is the whole of the identity patch and
+        # would make this guard's instrument a no-op. A time is an identifying coordinate, and the
+        # clinic's own slot table agrees that it names a different appointment.
+        drifted = {**BOOKING, "slot_start": "2026-09-04T14:00:00"}
         store.save(
             append_event(
                 case,

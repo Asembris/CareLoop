@@ -41,12 +41,13 @@ import os
 from pathlib import Path
 
 from careloop.api.app import create_app
-from careloop.api.deps import simulated_context_factory
+from careloop.api.deps import provider_context_factory
 from careloop.api.faults import booking_response_loss
 from careloop.api.sessions import DEFAULT_SESSION_LIMIT, demo_session_worlds
 from careloop.graph.witness import NullWitness
 from careloop.state.sqlite_store import SqliteCaseStore
 from careloop.tools.clinic import ClinicClient
+from careloop.tools.objectstore import ObjectStoreClient
 from scripts.observability import install_telemetry_redaction
 from scripts.witness_span import span_witness
 
@@ -80,6 +81,14 @@ def main() -> None:
     parser.add_argument("--db", default="demo.sqlite3", help="case store path")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument(
+        "--upload-bucket",
+        default=os.environ.get("CARELOOP_UPLOAD_BUCKET", ""),
+        help=(
+            "S3 bucket the second real effect files documents into. Without it every upload is "
+            "simulated, exactly as every booking is without --clinic-url."
+        ),
+    )
     parser.add_argument(
         "--clinic-url",
         default=os.environ.get("CARELOOP_CLINIC_URL", ""),
@@ -115,7 +124,11 @@ def main() -> None:
 
     if arguments.isolate_sessions:
         app = create_app(
-            sessions=demo_session_worlds(clinic_url=arguments.clinic_url, witness=witness),
+            sessions=demo_session_worlds(
+                clinic_url=arguments.clinic_url,
+                upload_bucket=arguments.upload_bucket,
+                witness=witness,
+            ),
             demo=True,
             static_dir=arguments.static_dir or None,
         )
@@ -127,13 +140,15 @@ def main() -> None:
         # scenario armed. Leaving it out here would make the demo surface mean two different things
         # depending on a flag, and `scripts/e2e_serve.py` drives the isolated shape anyway.
         faults = booking_response_loss(arguments.clinic_url) if clinic is not None else None
+        # The single world files under the default namespace, which is what a CareLoop with one
+        # store for everybody means. Session isolation is where a per-visitor prefix matters.
+        objects = ObjectStoreClient(arguments.upload_bucket) if arguments.upload_bucket else None
         app = create_app(
             SqliteCaseStore(arguments.db),
             clinic=clinic,
-            context_factory=(
-                faults.context_factory(clinic, witness)
-                if faults is not None and clinic is not None
-                else simulated_context_factory(witness)
+            objects=objects,
+            context_factory=provider_context_factory(
+                clinic=clinic, objects=objects, witness=witness, losing_clinic=faults
             ),
             demo=True,
             static_dir=arguments.static_dir or None,
@@ -143,6 +158,7 @@ def main() -> None:
 
     print(f"case store    {where}")
     print(f"clinic        {arguments.clinic_url or '(simulated)'}")
+    print(f"upload bucket {arguments.upload_bucket or '(simulated)'}")
     print(f"frontend      {arguments.static_dir or '(API only)'}")
     print(f"triage model  {os.environ.get('CARELOOP_MODEL_TRIAGE', '(mock)')}")
     print(f"planner model {os.environ.get('CARELOOP_MODEL_PLANNER', '(mock)')}")

@@ -115,6 +115,12 @@ DEMO_SCENARIOS: Final[Mapping[str, DemoScenario]] = MappingProxyType(
                 loses_the_booking_response=True,
             ),
             DemoScenario(
+                key="records",
+                case_id="demo-records",
+                event_id="evt-0003-claim-rejection",
+                title="A rejected claim asks for the receipt; it is filed and verified externally",
+            ),
+            DemoScenario(
                 key="injection_only",
                 case_id="demo-injection-only",
                 event_id="evt-0005-continuity-notice-only",

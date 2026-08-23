@@ -7,6 +7,14 @@ from pydantic import ValidationError
 
 from careloop.provenance import ArgClass
 from careloop.tools import REGISTRY, ArgSpec, DuplicateToolName, ToolRegistry, ToolSpec
+from careloop.tools.registry import (
+    AUTHORED_VALUES,
+    ArgAuthor,
+    UndeclaredAuthorship,
+    UnidentifiableAction,
+    check_authorship_is_declared,
+    check_identity_is_usable,
+)
 
 
 def _spec(name: str = "t", external_effect: bool = False) -> ToolSpec:
@@ -111,3 +119,171 @@ class TestShippedRegistry:
             "grant_portal_access",
         }
         assert REGISTRY.get("fetch_document").external_effect is False
+
+
+class TestAuthorshipMetadata:
+    """Who composes a value is declared here, and it is not a trust level."""
+
+    def test_every_shipped_argument_is_model_authored_today(self) -> None:
+        for tool in REGISTRY:
+            assert tool.system_authored_args == frozenset(), tool.name
+            assert tool.model_authored_args == tool.arg_names, tool.name
+
+    def test_the_shipped_authored_table_is_empty_while_nothing_uses_it(self) -> None:
+        assert AUTHORED_VALUES == {}
+        assert REGISTRY.system_authored == frozenset()
+
+    def test_author_defaults_to_model_so_a_new_argument_behaves_as_an_old_one(self) -> None:
+        assert ArgSpec(name="a", arg_class=ArgClass.VALUE).author is ArgAuthor.MODEL
+
+    def test_author_reads_the_declaration(self) -> None:
+        spec = ToolSpec(
+            name="t",
+            external_effect=True,
+            args=(
+                ArgSpec(name="a", arg_class=ArgClass.VALUE),
+                ArgSpec(name="b", arg_class=ArgClass.VALUE, author=ArgAuthor.SYSTEM),
+            ),
+        )
+        assert spec.author("a") is ArgAuthor.MODEL
+        assert spec.author("b") is ArgAuthor.SYSTEM
+        assert spec.author("nope") is None
+        assert spec.system_authored_args == {"b"}
+        assert spec.model_authored_args == {"a"}
+
+    def test_a_system_authored_argument_with_no_declared_value_is_refused(self) -> None:
+        registry = ToolRegistry(
+            [
+                ToolSpec(
+                    name="t",
+                    external_effect=True,
+                    args=(ArgSpec(name="a", arg_class=ArgClass.VALUE, author=ArgAuthor.SYSTEM),),
+                )
+            ]
+        )
+        with pytest.raises(UndeclaredAuthorship, match="have no declared value"):
+            check_authorship_is_declared(registry, {})
+
+    def test_a_declared_value_for_a_model_authored_argument_is_refused(self) -> None:
+        registry = ToolRegistry(
+            [
+                ToolSpec(
+                    name="t",
+                    external_effect=True,
+                    args=(ArgSpec(name="a", arg_class=ArgClass.VALUE),),
+                )
+            ]
+        )
+        with pytest.raises(UndeclaredAuthorship, match="which no tool declares SYSTEM-authored"):
+            check_authorship_is_declared(registry, {("t", "a"): "text"})
+
+    @pytest.mark.parametrize("arg_class", [ArgClass.DESTINATION, ArgClass.AUTHORITY])
+    def test_careloop_may_never_compose_a_destination_or_an_authority(
+        self, arg_class: ArgClass
+    ) -> None:
+        registry = ToolRegistry(
+            [
+                ToolSpec(
+                    name="t",
+                    external_effect=True,
+                    args=(ArgSpec(name="a", arg_class=arg_class, author=ArgAuthor.SYSTEM),),
+                )
+            ]
+        )
+        with pytest.raises(UndeclaredAuthorship, match="must come from trusted config"):
+            check_authorship_is_declared(registry, {("t", "a"): "text"})
+
+    def test_a_value_class_system_authored_argument_is_accepted(self) -> None:
+        registry = ToolRegistry(
+            [
+                ToolSpec(
+                    name="t",
+                    external_effect=True,
+                    args=(ArgSpec(name="a", arg_class=ArgClass.VALUE, author=ArgAuthor.SYSTEM),),
+                )
+            ]
+        )
+        check_authorship_is_declared(registry, {("t", "a"): "text"})
+
+    def test_the_shipped_registry_satisfies_the_check(self) -> None:
+        check_authorship_is_declared()
+
+
+class TestIdentityMetadata:
+    """Which values define the same logical action is declared here too, and separately."""
+
+    def test_every_shipped_argument_identifies_today(self) -> None:
+        for tool in REGISTRY:
+            assert tool.identifying_args == tool.arg_names, tool.name
+
+    def test_identifies_defaults_to_true_so_a_new_argument_behaves_as_an_old_one(self) -> None:
+        assert ArgSpec(name="a", arg_class=ArgClass.VALUE).identifies is True
+
+    def test_identifying_args_excludes_what_opted_out(self) -> None:
+        spec = ToolSpec(
+            name="t",
+            external_effect=True,
+            args=(
+                ArgSpec(name="a", arg_class=ArgClass.VALUE),
+                ArgSpec(name="b", arg_class=ArgClass.VALUE, identifies=False),
+            ),
+        )
+        assert spec.identifying_args == {"a"}
+        assert spec.arg_names == {"a", "b"}
+
+    def test_the_registry_answers_for_a_named_tool_and_empties_for_an_unknown_one(self) -> None:
+        assert REGISTRY.identifying_args("book_appointment") == {
+            "provider_id",
+            "patient_id",
+            "slot_start",
+            "reason",
+        }
+        assert REGISTRY.identifying_args("no_such_tool") == frozenset()
+
+    def test_a_tool_that_identifies_nothing_is_refused(self) -> None:
+        registry = ToolRegistry(
+            [
+                ToolSpec(
+                    name="t",
+                    external_effect=True,
+                    args=(ArgSpec(name="a", arg_class=ArgClass.VALUE, identifies=False),),
+                )
+            ]
+        )
+        with pytest.raises(UnidentifiableAction, match="declares no identifying argument"):
+            check_identity_is_usable(registry)
+
+    @pytest.mark.parametrize("arg_class", [ArgClass.DESTINATION, ArgClass.AUTHORITY])
+    def test_a_destination_or_authority_may_never_leave_identity(self, arg_class: ArgClass) -> None:
+        registry = ToolRegistry(
+            [
+                ToolSpec(
+                    name="t",
+                    external_effect=True,
+                    args=(
+                        ArgSpec(name="keep", arg_class=ArgClass.VALUE),
+                        ArgSpec(name="a", arg_class=arg_class, identifies=False),
+                    ),
+                )
+            ]
+        )
+        with pytest.raises(UnidentifiableAction, match="not the same logical action"):
+            check_identity_is_usable(registry)
+
+    def test_a_value_class_argument_may_leave_identity(self) -> None:
+        registry = ToolRegistry(
+            [
+                ToolSpec(
+                    name="t",
+                    external_effect=True,
+                    args=(
+                        ArgSpec(name="keep", arg_class=ArgClass.VALUE),
+                        ArgSpec(name="a", arg_class=ArgClass.VALUE, identifies=False),
+                    ),
+                )
+            ]
+        )
+        check_identity_is_usable(registry)
+
+    def test_the_shipped_registry_satisfies_the_check(self) -> None:
+        check_identity_is_usable()

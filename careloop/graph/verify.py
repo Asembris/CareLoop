@@ -258,7 +258,30 @@ def expectations(action_type: str, canonical: Mapping[str, str]) -> dict[str, st
 
 #: A read-back fetches the external system's *current* record of a performed effect.
 ReadBack = Callable[[ActionResult], ActionResult]
-"""Takes the recorded result — for its identifier — and returns what the system holds now."""
+"""Takes the recorded result — **for its identifier, and for nothing else** — and returns what the
+system holds now.
+
+Three requirements, and the first is the one the whole arrangement rests on.
+
+**The returned values must come from a fresh request.** Not from the response the effect itself
+produced, not from anything CareLoop stored, and not from the argument it was handed beyond reading
+the resource identifier out of it. A read-back that echoes its input verifies that CareLoop agrees
+with CareLoop. ``tests/test_verify_readback.py::TestTheIndependenceProof`` is what fails when the
+clinic's does, and ``tests/test_content_integrity.py`` holds the generic form.
+
+**An observed value may be *derived from the content the provider returned*, not only echoed from
+metadata it reports.** For a record-shaped provider the two coincide: the clinic states a patient
+id and the read-back carries it across. For a content-shaped provider they do not, and derivation
+is the stronger evidence — bytes fetched back and reduced by
+:func:`careloop.tools.content.content_digest` are a fact this process established about what the
+provider is holding, where a digest the provider *reports* is a claim to be taken on trust. Where
+both are available, prefer the one computed here.
+
+**What it may not do is decide anything.** A read-back returns an observation or raises a
+:class:`ReadBackFailed`; the verdict belongs to :func:`verify_action` and the lifecycle to
+:class:`careloop.graph.nodes.VerifyNode`. In particular it never consults the write's status, its
+receipt, or whether the effect "should" be there.
+"""
 
 
 class ReadBackFailed(Exception):

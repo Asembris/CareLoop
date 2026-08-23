@@ -858,6 +858,56 @@ class TestTheStartupSweepIsStillTheCrashFallback:
         return runner
 
 
+class TestEveryWaitingCaseCanBeCarriedForward:
+    """The one refusal that would end a case's scheduling, and why half of it cannot happen.
+
+    :attr:`~careloop.api.wake.RecoveryOutcome.RECOVERY_CONTEXT_UNAVAILABLE` does not re-arm — the
+    next wake would find exactly the same thing — so it is worth knowing when it can occur at all.
+
+    **The missing-delivery half is structurally unreachable.**
+    :func:`careloop.graph.context.latest_delivery` reads the ``CASE_CREATED`` and ``CASE_REOPENED``
+    entries, and :func:`careloop.graph.runner.open_case` writes the first of those before the case
+    is persisted at all — so a case that exists has a delivery, and a case in ``WAITING_EXTERNAL``
+    has been through a run, which needs one.
+
+    **The unknown-event half is reachable and is deliberately left alone.** A process whose event
+    fixtures no longer hold the id a case names cannot carry that case forward under anything, and
+    inventing a delivery would be this layer manufacturing the context a recovery reads its
+    arguments from. It is the startup sweep's existing behaviour — log and move on — and the case
+    stays durable, stays swept at the next start, and is re-armed by the next run to settle on it.
+    """
+
+    def test_a_case_always_carries_the_delivery_a_recovery_needs(self) -> None:
+        from careloop.graph.context import latest_delivery
+        from careloop.graph.runner import open_case
+
+        store = InMemoryCaseStore()
+        opened = open_case(store, SAGA_EVENT, case_id="case-fresh", now=FIXED_NOW)
+
+        assert latest_delivery(opened) is not None
+        assert latest_delivery(opened).event_id == SAGA_EVENT.event_id
+        # And the one built the way every saga test builds one, which is the shape that waits.
+        executing_with_a_prepared_action(store, case_id=CASE_ID)
+        assert latest_delivery(store.get(CASE_ID)) is not None
+
+    def test_an_event_this_process_does_not_hold_is_reported_rather_than_invented(self) -> None:
+        async def scenario():
+            store = InMemoryCaseStore()
+            world = waiting_world(store)
+            world.deps.events = EventSimulator({})
+
+            outcome = world.deps.register_recovery(CASE_ID)
+            await world.aclose()
+            return outcome, world
+
+        outcome, world = asyncio.run(scenario())
+
+        assert outcome is RecoveryOutcome.RECOVERY_CONTEXT_UNAVAILABLE
+        assert world.deps.runs._records == {}
+        # Left exactly as it was: reported, not repaired and not guessed at.
+        assert world.case().state is CaseState.WAITING_EXTERNAL
+
+
 # -- T11: providers that may never be re-sent
 # -------------------------------------------------------
 

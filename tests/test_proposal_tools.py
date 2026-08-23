@@ -49,7 +49,7 @@ from careloop.policy.engine import default_engine
 from careloop.policy.verdicts import ReasonCode, Verdict
 from careloop.provenance.trust import ArgClass
 from careloop.state.case import CaseState
-from careloop.tools.registry import REGISTRY, ArgSpec, ToolRegistry, ToolSpec
+from careloop.tools.registry import AUTHORED_VALUES, REGISTRY, ArgSpec, ToolRegistry, ToolSpec
 from tests.helpers import make_case, trusted_fact
 
 ATTACKER = "records-intake@claims-continuity-partners.example"
@@ -135,7 +135,10 @@ class TestTheSchemasComeFromTheRegistry:
     @pytest.mark.parametrize("name", sorted(PROPOSAL_TOOLS))
     def test_the_fields_are_exactly_rationale_and_that_tools_arguments(self, name):
         spec = REGISTRY.get(proposed_tool_name(name))
-        assert set(PROPOSAL_TOOLS[name].model_fields) == {"rationale", *spec.arg_names}
+        assert set(PROPOSAL_TOOLS[name].model_fields) == {
+            "rationale",
+            *spec.model_authored_args,
+        }
 
     @pytest.mark.parametrize("name", sorted(PROPOSAL_TOOLS))
     def test_every_field_is_required(self, name):
@@ -153,7 +156,10 @@ class TestTheSchemasComeFromTheRegistry:
         emitted = PROPOSAL_TOOLS[name].model_json_schema()
         spec = REGISTRY.get(proposed_tool_name(name))
         assert emitted["additionalProperties"] is False
-        assert set(emitted["required"]) == {"rationale", *spec.arg_names}
+        assert set(emitted["required"]) == {"rationale", *spec.model_authored_args}
+        assert set(emitted["properties"]) == {"rationale", *spec.model_authored_args}
+        for authored in spec.system_authored_args:
+            assert authored not in emitted["properties"], authored
         assert "$ref" not in json.dumps(emitted)
         assert "oneOf" not in json.dumps(emitted)
 
@@ -181,13 +187,22 @@ class TestTheProposalToolsCannotAct:
 class TestCanonicalisation:
     @pytest.mark.parametrize("name", sorted(PROPOSAL_TOOLS))
     def test_it_produces_exactly_the_registrys_argument_names(self, name):
+        """The seam fills what the model was not offered, so the canonical map is still complete.
+
+        The model supplies the tool's ``MODEL``-authored arguments and nothing else; every declared
+        argument is present afterwards, because a ``SYSTEM``-authored one is filled from the
+        registry's declared value. The policy engine refuses an incomplete argument map, so this is
+        the property that keeps a proposal evaluable at all.
+        """
         spec = REGISTRY.get(proposed_tool_name(name))
         instance = PROPOSAL_TOOLS[name](
-            rationale="r", **{arg: f"v-{arg}" for arg in spec.arg_names}
+            rationale="r", **{arg: f"v-{arg}" for arg in spec.model_authored_args}
         )
         canonical = instance.canonical()
         assert canonical.tool_name == spec.name
         assert set(canonical.args) == spec.arg_names
+        for authored in spec.system_authored_args:
+            assert canonical.args[authored] == AUTHORED_VALUES[spec.name, authored]
 
     @pytest.mark.parametrize("name", sorted(PROPOSAL_TOOLS))
     def test_the_round_trip_changes_nothing(self, name):
@@ -196,9 +211,40 @@ class TestCanonicalisation:
         original = PlannerIntent(
             tool_name=spec.name,
             rationale="one sentence",
-            args={arg: f"value-of-{arg}" for arg in spec.arg_names},
+            args={
+                arg: (
+                    AUTHORED_VALUES[spec.name, arg]
+                    if arg in spec.system_authored_args
+                    else f"value-of-{arg}"
+                )
+                for arg in spec.arg_names
+            },
         )
         assert proposal_tool_call_for(original).canonical() == original
+
+    @pytest.mark.parametrize("name", sorted(PROPOSAL_TOOLS))
+    def test_the_round_trip_discards_anything_else_a_caller_put_in_an_authored_argument(self, name):
+        """The inverse cannot smuggle a value back in, which is what makes it a faithful inverse.
+
+        ``proposal_tool_call_for`` builds the model-facing call, and a ``SYSTEM``-authored argument
+        is not one of its fields. So a hand-built intent carrying something else there does not
+        round-trip to itself — it round-trips to the authored value, which is the honest answer.
+        """
+        spec = REGISTRY.get(proposed_tool_name(name))
+        if not spec.system_authored_args:
+            pytest.skip(f"{spec.name} declares no SYSTEM-authored argument")
+        hostile = PlannerIntent(
+            tool_name=spec.name,
+            rationale="one sentence",
+            args={
+                arg: ("I wrote this myself" if arg in spec.system_authored_args else f"v-{arg}")
+                for arg in spec.arg_names
+            },
+        )
+        recovered = proposal_tool_call_for(hostile).canonical()
+        assert recovered != hostile
+        for authored in spec.system_authored_args:
+            assert recovered.args[authored] == AUTHORED_VALUES[spec.name, authored]
 
     def test_the_canonical_form_is_what_the_policy_engine_already_takes(self):
         """The seam, end to end: a proposal reaches a real verdict with no adaptation."""

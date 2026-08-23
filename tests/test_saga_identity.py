@@ -141,17 +141,27 @@ class TestTheIdentityIsReconstructibleWithoutTheModel:
             args_digest=args_digest(BOOKING_ARGS),
         )
 
-    def test_free_text_drift_would_change_the_identity_which_is_why_it_is_frozen(self) -> None:
-        """The measured production hazard, and the reason recovery reads the stored proposal.
+    def test_free_text_drift_no_longer_changes_the_identity_and_still_changes_the_digest(
+        self,
+    ) -> None:
+        """The measured production hazard, and what closing it did and did not change.
 
-        ``reason`` is planner-authored free text and has been observed differing by one full stop
-        between reproposals. That moves the digest, moves the key, and defeats duplicate suppression
-        at both layers. Recovery never asks for a new proposal, so the drift cannot occur on that
-        path — but the sensitivity is real and is asserted here rather than assumed.
+        ``reason`` was planner-authored free text and was observed differing by one full stop
+        between reproposals. That moved the digest, moved the key, defeated duplicate suppression at
+        both layers, and sent a second booking that only Demo World's slot rule refused.
+
+        The key is now derived from the arguments the registry declares *identifying*, and
+        ``reason`` is not one of them, so the drift moves nothing. The digest still moves,
+        because it answers the other question — which exact call was approved, and did the
+        executor receive what policy
+        authorised — and narrowing it would have traded one defect for a worse one. Both directions
+        are asserted, because a test that only checked the key would pass if the digest had been
+        narrowed too.
         """
         drifted = {**BOOKING_ARGS, "reason": BOOKING_ARGS["reason"] + "."}
 
-        assert idempotency_key(CASE_ID, "book_appointment", drifted) != booking_key()
+        assert idempotency_key(CASE_ID, "book_appointment", drifted) == booking_key()
+        assert args_digest(drifted) != args_digest(BOOKING_ARGS)
 
     def test_every_effect_tool_keys_from_its_own_durable_proposal(self) -> None:
         """Not a spelling of one tool: the property is registry-wide."""

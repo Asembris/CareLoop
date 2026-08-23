@@ -26,7 +26,7 @@ value-only resolution and requires these tests to notice.
 from __future__ import annotations
 
 import pytest
-from helpers import make_case, make_fact, trusted_fact
+from helpers import BOOKING_REASON, make_case, make_fact, trusted_fact
 
 from careloop.graph.trusted import TRUSTED_CONFIG, configured, trusted_facts
 from careloop.policy import PolicyConfigError, ReasonCode, Verdict, load_rules_from_text
@@ -121,7 +121,7 @@ class TestCrossFieldCollisionsAreRefused:
                 "provider_id": PROVIDER,
                 "patient_id": PATIENT,
                 "slot_start": DOCUMENT,
-                "reason": "cardiology review",
+                "reason": BOOKING_REASON,
             },
             case,
         )
@@ -182,7 +182,7 @@ class TestCrossFieldCollisionsAreRefused:
                 "provider_id": CARER,
                 "patient_id": PATIENT,
                 "slot_start": SLOT,
-                "reason": "cardiology review",
+                "reason": BOOKING_REASON,
             },
             case,
         )
@@ -203,7 +203,7 @@ class TestTheCorrectlyKeyedFactStillSatisfies:
                 "provider_id": PROVIDER,
                 "patient_id": PATIENT,
                 "slot_start": SLOT,
-                "reason": "cardiology review",
+                "reason": BOOKING_REASON,
             },
             case,
         )
@@ -244,7 +244,7 @@ class TestTheCorrectlyKeyedFactStillSatisfies:
                 "provider_id": PROVIDER,
                 "patient_id": PATIENT,
                 "slot_start": datetime.fromisoformat(SLOT),
-                "reason": "cardiology review",
+                "reason": BOOKING_REASON,
             },
             case,
         )
@@ -284,7 +284,7 @@ class TestLowestWinsIsScopedToOneKey:
                 "provider_id": PROVIDER,
                 "patient_id": PATIENT,
                 "slot_start": SLOT,
-                "reason": "cardiology review",
+                "reason": BOOKING_REASON,
             },
             case,
         )
@@ -318,7 +318,7 @@ class TestLowestWinsIsScopedToOneKey:
                 "provider_id": PROVIDER,
                 "patient_id": PATIENT,
                 "slot_start": SLOT,
-                "reason": "cardiology review",
+                "reason": BOOKING_REASON,
             },
             case,
         )
@@ -538,7 +538,7 @@ class TestTheOldSemanticsAreDetected:
                 "provider_id": PROVIDER,
                 "patient_id": PATIENT,
                 "slot_start": DOCUMENT,
-                "reason": "cardiology review",
+                "reason": BOOKING_REASON,
             },
             case,
         )
@@ -582,7 +582,7 @@ class TestTheOldSemanticsAreDetected:
                 "provider_id": PROVIDER,
                 "patient_id": PATIENT,
                 "slot_start": SLOT,
-                "reason": "cardiology review",
+                "reason": BOOKING_REASON,
             },
             case,
         )
@@ -612,7 +612,7 @@ class TestTheOldSemanticsAreDetected:
                 "provider_id": PROVIDER,
                 "patient_id": PATIENT,
                 "slot_start": SLOT,
-                "reason": "cardiology review",
+                "reason": BOOKING_REASON,
             },
             case,
         )

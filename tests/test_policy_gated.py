@@ -9,7 +9,7 @@ executor rather than about the gate.
 from __future__ import annotations
 
 import pytest
-from helpers import FIXED_NOW, make_case, make_fact, trusted_fact
+from helpers import BOOKING_REASON, FIXED_NOW, make_case, make_fact, trusted_fact
 
 from careloop.policy.gate import PolicyDenied, PolicyGate
 from careloop.policy.gated import (
@@ -43,7 +43,7 @@ BOOKING = {
     "provider_id": PROVIDER,
     "patient_id": PATIENT,
     "slot_start": SLOT,
-    "reason": "cardiology review",
+    "reason": BOOKING_REASON,
 }
 
 #: The three payloads the poisoned continuity notice asks for, as tool calls.

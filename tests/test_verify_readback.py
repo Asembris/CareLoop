@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from helpers import FIXED_NOW
+from helpers import BOOKING_REASON, FIXED_NOW
 
 from careloop.agents.planner import PlannerAgent
 from careloop.agents.prompts import planner_user_prompt
@@ -51,7 +51,7 @@ BOOKING = {
     "provider_id": PROVIDER,
     "patient_id": "PT-4417",
     "slot_start": SLOT,
-    "reason": "cardiology review",
+    "reason": BOOKING_REASON,
 }
 
 KEY = idempotency_key(CASE_ID, "book_appointment", BOOKING)

@@ -382,7 +382,12 @@ REGISTRY: Final[ToolRegistry] = ToolRegistry(
                 ),
                 ArgSpec(name="patient_id", arg_class=ArgClass.VALUE, trust_key="patient_id"),
                 ArgSpec(name="slot_start", arg_class=ArgClass.VALUE, trust_key="slot_start"),
-                ArgSpec(name="reason", arg_class=ArgClass.VALUE),
+                ArgSpec(
+                    name="reason",
+                    arg_class=ArgClass.VALUE,
+                    author=ArgAuthor.SYSTEM,
+                    identifies=False,
+                ),
             ),
         ),
         ToolSpec(
@@ -440,10 +445,21 @@ REGISTRY: Final[ToolRegistry] = ToolRegistry(
 #: legitimately declare an argument of the same name, and a table keyed on the name would make one
 #: tool's outbound text the other's.
 #:
-#: Empty in the commit that introduced it, on purpose. The metadata arrives with no shipped
-#: argument using it, so nothing about the running system moves; declaring the first
-#: ``SYSTEM``-authored argument is a separate, deliberate change.
-AUTHORED_VALUES: Final[Mapping[tuple[str, str], str]] = {}
+#: **``book_appointment.reason`` is the one entry, and what it says is the whole of what CareLoop
+#: can prove.** It was planner-authored free text: no ``trust_key``, named by no rule, no length
+#: bound, no vocabulary, and — on the only tool with an autonomous ``ALLOW`` path — no caregiver
+#: ever saw it. Raw document pages are recorded as ``excerpt:*`` facts and rendered verbatim into
+#: the planner's prompt, so any span of an attacker-authored document could be copied into it and
+#: transmitted to the clinic over HTTP, where the clinic persists it and echoes it back.
+#:
+#: The sentence deliberately makes **no clinical or purpose claim**. CareLoop holds no
+#: ``CONTROLLED`` fact for why an appointment is needed — there is no ``purpose`` key, no validator
+#: and no promotion — so anything richer would be inventing information, and "see the referral on
+#: file" would be asserting a link nothing establishes. A richer vocabulary is a later change that
+#: has to begin with a promotable structured purpose fact, not here.
+AUTHORED_VALUES: Final[Mapping[tuple[str, str], str]] = {
+    ("book_appointment", "reason"): "CareLoop appointment scheduling request.",
+}
 
 
 def check_authorship_is_declared(

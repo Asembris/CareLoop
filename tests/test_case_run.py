@@ -26,7 +26,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from helpers import FIXED_NOW
+from helpers import BOOKING_REASON, FIXED_NOW
 
 from careloop.agents.planner import PlannerAgent
 from careloop.agents.schemas import (
@@ -41,7 +41,7 @@ from careloop.events.inbound import POISONED_EVENT, REFERRAL_EVENT
 from careloop.graph.runner import approve, context_for, open_case, run_case
 from careloop.llm.mock import mock_model
 from careloop.policy.verdicts import ReasonCode
-from careloop.provenance import TrustLevel
+from careloop.provenance import Fact, Provenance, TrustLevel
 from careloop.state import Case, CaseState, InMemoryCaseStore, TimelineKind
 from careloop.state.case import Approval, ApprovalStatus
 from careloop.tools import POISONED_DOCUMENT_ID
@@ -60,7 +60,7 @@ BOOKING = {
     "provider_id": PROVIDER,
     "patient_id": "PT-4417",
     "slot_start": SLOT,
-    "reason": "cardiology review",
+    "reason": BOOKING_REASON,
 }
 
 #: The three things the poisoned document asks for, as tool calls.
@@ -90,6 +90,19 @@ def triage_agent() -> TriageAgent:
                 )
             ]
         )
+    )
+
+
+def controlled_slot(value: str) -> Fact:
+    """A second validated appointment time, as the evidence node would leave one."""
+    return Fact(
+        key="slot_start",
+        value=value,
+        trust_level=TrustLevel.CONTROLLED,
+        provenance=Provenance(
+            source_doc="doc-0001-referral", page=1, extractor="regex", validated_by="iso_datetime"
+        ),
+        extracted_at=FIXED_NOW,
     )
 
 
@@ -637,27 +650,56 @@ class TestT3Idempotency:
     def test_a_genuinely_different_action_is_not_suppressed(self) -> None:
         """Suppression keys on the arguments, not on the tool.
 
-        The second booking differs only in ``reason`` — a ``VALUE``-class argument no rule
-        conditions on, so the verdict is unchanged and the only thing that moves is the key. If
-        suppression keyed on the tool name, or on some subset of the arguments, this would be
-        silently swallowed as a duplicate and the second appointment would never be booked.
+        The second booking differs in ``slot_start`` — a different time is a different appointment,
+        and the clinic agrees: its slot table is keyed on ``(provider_id, slot_start)``. If
+        suppression keyed on the tool name alone, or on the case, this would be silently swallowed
+        as a duplicate and the second appointment would never be booked.
+
+        It used to differ in ``reason`` instead, which no longer moves the key at all — see
+        ``test_a_reworded_reason_is_the_same_action`` below. Swapping the instrument is the point of
+        this patch rather than a concession to it: a rewording was never a second appointment, and
+        keying on it sent one.
         """
         _store, result, _context = self._completed()
         revived = Case.model_validate_json(result.case.model_dump_json())
+        # The second time is CONTROLLED the same way the first was, so the only thing separating
+        # the two bookings is which appointment they are. Without it the booking would be refused
+        # for an unvalidated slot and this would prove nothing about suppression.
+        second_slot = "2026-09-03T11:15:00"
+        revived = revived.model_copy(
+            update={
+                "state": CaseState.PLANNING,
+                "facts": (*revived.facts, controlled_slot(second_slot)),
+            }
+        )
         store = InMemoryCaseStore()
-        store.create(revived.model_copy(update={"state": CaseState.PLANNING}))
+        store.create(revived)
 
         second, context = run(
             store,
             REFERRAL_EVENT,
-            planner_proposing(
-                intent("book_appointment", **{**BOOKING, "reason": "follow-up review"})
-            ),
+            planner_proposing(intent("book_appointment", **{**BOOKING, "slot_start": second_slot})),
         )
 
         assert context.executor.invocation_count == 1
         assert len(second.case.actions) == 2
         assert second.case.state is CaseState.DONE
+
+    def test_a_reworded_reason_is_the_same_action(self) -> None:
+        """The other half, and the one the previous test used to assert the opposite of.
+
+        ``reason`` is ``SYSTEM``-authored, so a proposal cannot carry different wording through the
+        production seam at all — but the identity property is asserted here directly rather than
+        left resting on that, because the two are separate guarantees with separate mutants.
+        """
+        from careloop.tools.idempotency import args_digest, idempotency_key
+
+        reworded = {**BOOKING, "reason": BOOKING["reason"].rstrip(".").upper() + " "}
+
+        assert idempotency_key(CASE_ID, "book_appointment", reworded) == idempotency_key(
+            CASE_ID, "book_appointment", BOOKING
+        )
+        assert args_digest(reworded) != args_digest(BOOKING)
 
 
 # =================================================================================================

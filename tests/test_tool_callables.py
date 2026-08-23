@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from helpers import BOOKING_REASON
 
 from careloop.tools import callables as callables_module
 from careloop.tools.callables import (
@@ -56,7 +57,7 @@ EFFECT_CALLS: dict[str, dict[str, object]] = {
         "provider_id": "PROV-77",
         "patient_id": "PT-4417",
         "slot_start": datetime(2026, 9, 3, 10, 0, tzinfo=UTC),
-        "reason": "cardiology review",
+        "reason": BOOKING_REASON,
     },
     "upload_document": {"portal_id": "PORTAL-9", "document_id": "doc-0001-referral"},
     "grant_portal_access": {

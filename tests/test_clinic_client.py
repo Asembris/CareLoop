@@ -16,6 +16,7 @@ from typing import ClassVar
 
 import httpx
 import pytest
+from helpers import BOOKING_REASON
 
 from careloop.tools.callables import ToolSet
 from careloop.tools.clinic import (
@@ -38,7 +39,7 @@ BOOKING = {
     "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
     "patient_id": "PT-4417",
     "slot_start": "2026-09-03T09:30:00",
-    "reason": "cardiology review",
+    "reason": BOOKING_REASON,
 }
 
 KEY = idempotency_key(CASE_ID, "book_appointment", BOOKING)
@@ -300,7 +301,7 @@ class TestTheBoundaryIsNarrow:
         "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
         "patient_id": "PT-4417",
         "slot_start": "2026-09-03T09:30:00",
-        "reason": "cardiology review",
+        "reason": BOOKING_REASON,
         "booked_at": "2026-08-12T10:00:00+00:00",
         "queue_position": 4,
     }
@@ -322,7 +323,7 @@ class TestTheBoundaryIsNarrow:
         """The half the field set alone does not say: it is carried, not merely named."""
         result = _appointment(httpx.Response(200, json=self.RESPONSE))
 
-        assert result.reason == "cardiology review"
+        assert result.reason == BOOKING_REASON
 
     def test_the_result_type_forbids_the_extra_field_outright(self) -> None:
         """Vacuity: the mapping is narrow *and* the model would refuse the field anyway."""

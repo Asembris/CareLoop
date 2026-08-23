@@ -28,7 +28,7 @@ from collections.abc import Sequence
 
 import pytest
 from clinic_helpers import clinic_server
-from helpers import FIXED_NOW
+from helpers import BOOKING_REASON, FIXED_NOW
 from test_post_effect_lifecycle import _planner, _triage, count, entries
 from test_verify_readback import (
     BOOKING,
@@ -825,7 +825,20 @@ class TestNothingSensitiveSurvivesARealRun:
                     parts.append(str(value))
         return " ".join(parts)
 
-    def test_a_hostile_reason_reaches_the_clinic_and_never_the_witness(self) -> None:
+    def test_a_hostile_reason_reaches_neither_the_clinic_nor_the_witness(self) -> None:
+        """It used to reach the clinic, and the assertion below used to say so in as many words.
+
+        ``book_appointment.reason`` is ``SYSTEM``-authored now: the proposal seam fills it from the
+        registry's fixed literal, so a scripted proposal carrying somebody's name, address and NHS
+        number does not get to put any of it in the request. What the clinic holds is CareLoop's own
+        sentence, asserted here against the clinic's *own* record rather than against the receipt.
+
+        The telemetry half is unchanged and still checked. It is now weaker evidence than it was —
+        the marker never leaves the process, so its absence downstream proves less — which is why
+        ``test_no_diagnostic_text_or_clinic_words_appear`` below stays: that one puts text CareLoop
+        does not control into the *clinic* and requires it never to reach a claim, and nothing about
+        authorship makes it vacuous.
+        """
         with clinic_server() as (base_url, world):
             witness = RecordingWitness()
             result, _ = run_booking(
@@ -834,7 +847,8 @@ class TestNothingSensitiveSurvivesARealRun:
             held = world.appointments()
 
         assert result.case.state is CaseState.DONE
-        assert held[0].reason == HOSTILE_BOOKING["reason"], "the marker must really have travelled"
+        assert held[0].reason == BOOKING_REASON
+        assert held[0].reason != HOSTILE_BOOKING["reason"]
 
         rendered = self._rendered(witness)
         for marker in ("Margaret", "Okonjo", "900123", "943 476", "example.test"):

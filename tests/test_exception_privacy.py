@@ -34,6 +34,7 @@ import httpx
 import pytest
 import uvicorn
 from clinic_helpers import SHUTDOWN_TIMEOUT, STARTUP_TIMEOUT
+from helpers import BOOKING_REASON
 from opentelemetry import trace as trace_api
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -53,7 +54,7 @@ BOOKING = {
     "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
     "patient_id": "PT-4417",
     "slot_start": "2026-09-03T09:30:00",
-    "reason": "cardiology review",
+    "reason": BOOKING_REASON,
 }
 
 KEY = idempotency_key(CASE_ID, "book_appointment", BOOKING)

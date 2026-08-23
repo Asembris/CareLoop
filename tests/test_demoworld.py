@@ -21,6 +21,7 @@ from typing import ClassVar
 
 import pytest
 from fastapi.testclient import TestClient
+from helpers import BOOKING_REASON
 
 import demoworld
 from careloop.graph.trusted import configured
@@ -41,7 +42,7 @@ BOOKING = {
     "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
     "patient_id": "PT-4417",
     "slot_start": "2026-09-03T09:30:00",
-    "reason": "cardiology review",
+    "reason": BOOKING_REASON,
 }
 
 

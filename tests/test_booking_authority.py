@@ -41,7 +41,7 @@ from typing import Any
 
 import pytest
 import yaml
-from helpers import make_case, make_fact, trusted_fact
+from helpers import BOOKING_REASON, make_case, make_fact, trusted_fact
 
 from careloop.graph.trusted import configured, trusted_facts
 from careloop.policy import (
@@ -99,7 +99,7 @@ def booking(**overrides: object) -> dict[str, object]:
         "provider_id": PROVIDER,
         "patient_id": PATIENT,
         "slot_start": SLOT,
-        "reason": "cardiology review",
+        "reason": BOOKING_REASON,
     }
     args.update(overrides)
     return args

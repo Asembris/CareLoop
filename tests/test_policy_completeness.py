@@ -51,7 +51,7 @@ from __future__ import annotations
 from typing import Final
 
 import pytest
-from helpers import make_case, make_fact, trusted_fact
+from helpers import BOOKING_REASON, make_case, make_fact, trusted_fact
 
 from careloop.policy.engine import PolicyEngine, default_engine
 from careloop.policy.schema import Condition, Rule, RuleSet
@@ -111,7 +111,7 @@ COMPLETE: Final[dict[str, dict[str, str]]] = {
         "provider_id": PROVIDER,
         "patient_id": PATIENT,
         "slot_start": SLOT,
-        "reason": "cardiology follow-up",
+        "reason": BOOKING_REASON,
     },
     "upload_document": {"portal_id": PORTAL, "document_id": DOCUMENT},
     "grant_portal_access": {"grantee": CAREGIVER, "role": ROLE, "portal_id": PORTAL},
@@ -581,7 +581,13 @@ EMPTY_VALUE_VERDICTS: Final[dict[tuple[str, str], tuple[Verdict, str | None]]] =
     ("book_appointment", "provider_id"): (Verdict.DENY, None),
     ("book_appointment", "patient_id"): (Verdict.DENY, "deny-booking-for-unverified-patient"),
     ("book_appointment", "slot_start"): (Verdict.DENY, "deny-booking-on-unvalidated-slot"),
-    ("book_appointment", "reason"): (Verdict.ALLOW, "allow-booking-on-validated-slot"),
+    # Was ``(ALLOW, "allow-booking-on-validated-slot")``, and the change is deliberate rather than
+    # collateral. ``reason`` is SYSTEM-authored now, and the booking ALLOW rule requires the
+    # supplied value to be byte-identical to the literal CareLoop composes; the empty string is
+    # not that literal, so the booking matches no ALLOW rule and deny-by-default refuses it. Note
+    # what has *not* changed: this is still a **complete** call, so it is refused on its content and
+    # not as malformed, which is what the marker assertion above keeps distinct.
+    ("book_appointment", "reason"): (Verdict.DENY, None),
     ("send_email", "to"): (Verdict.DENY, "deny-email-to-untrusted-recipient"),
     ("send_email", "subject"): (Verdict.REQUIRE_HUMAN, "require-human-for-outbound-email"),
     ("send_email", "body"): (Verdict.REQUIRE_HUMAN, "require-human-for-outbound-email"),
@@ -634,12 +640,15 @@ class TestAnEmptyValueIsASuppliedValue:
         assert decision.verdict is verdict
         assert decision.matched_rule_id == rule_id
 
-    def test_an_empty_booking_reason_still_books(self, engine: PolicyEngine) -> None:
-        """Called out explicitly because it is the one empty value that still reaches ``ALLOW``.
+    def test_an_empty_booking_reason_no_longer_books(self, engine: PolicyEngine) -> None:
+        """It used to, and this docstring used to call that the open content question.
 
-        Whether an empty, planner-authored reason should book at all is the open content and
-        provenance question — separate from this patch and deliberately untouched by it. What is
-        settled here is only that the call is *complete*.
+        It is closed. ``reason`` is ``SYSTEM``-authored: CareLoop composes it from a fixed literal
+        and ``allow-booking-on-validated-slot`` requires exactly that value, so an empty one matches
+        no ``ALLOW`` rule. Nothing about *completeness* moved — the call still supplies the key, so
+        it is refused for what its value says rather than as a malformed capability, which is the
+        distinction the marker assertion above keeps and which this test would lose if it only
+        checked the verdict.
         """
         decision = engine.evaluate(
             "book_appointment",
@@ -647,8 +656,9 @@ class TestAnEmptyValueIsASuppliedValue:
             favourable_case("book_appointment"),
         )
 
-        assert decision.verdict is Verdict.ALLOW
-        assert decision.matched_rule_id == "allow-booking-on-validated-slot"
+        assert decision.verdict is Verdict.DENY
+        assert decision.matched_rule_id is None
+        assert COMPLETENESS_MARKER not in decision.diagnostic
 
     def test_an_empty_email_body_still_asks_the_caregiver(self, engine: PolicyEngine) -> None:
         decision = engine.evaluate(

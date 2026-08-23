@@ -90,13 +90,19 @@ from demoworld.clinic import Clinic
 #: The seven-node path a case takes when nothing sends it round again.
 STRAIGHT_THROUGH = ("dispatch", "triage", "evidence", "plan", "gate", "execute", "verify")
 
-#: A second booking differing from the first in nothing but its reason.
+#: A second booking that is genuinely a different appointment.
 #:
-#: The whole severity argument in one constant. ``reason`` declares no ``trust_key``, so no rule may
-#: require its trust and none does; it is free text the planner writes. Changing it changes the
-#: canonical argument map, so ``args_digest`` and therefore ``idempotency_key`` both move, and
-#: neither CareLoop's ``ActionRecord`` suppression nor Demo World's server-side key layer applies.
-REBOOKING = {**BOOKING, "reason": "rebooking after the clinic record could not be confirmed"}
+#: The severity argument in one constant, and it used to be spelled ``{**BOOKING, "reason": ...}``.
+#: That was the measured production hazard: ``reason`` was planner-authored free text, so changing
+#: it moved the canonical argument map, moved ``args_digest`` and therefore ``idempotency_key``, and
+#: neither CareLoop's ``ActionRecord`` suppression nor Demo World's server-side key layer applied.
+#:
+#: It no longer moves the key — ``reason`` is declared non-identifying — which would have quietly
+#: made every test below pass for the wrong reason: idempotency, not the lifecycle, would be what
+#: refused the second effect. So the instrument moved to a *time*, which really is a different
+#: appointment and which the clinic's own slot table agrees names one.
+#: ``TestAReasonOnlyReproposalIsNowSuppressible`` is where the closed hazard is pinned.
+REBOOKING = {**BOOKING, "slot_start": "2026-09-04T14:00:00"}
 
 
 # -- driving one run -----------------------------------------------------------------------------
@@ -498,6 +504,35 @@ class TestNoSecondEffectFollowsAFailedCertification:
         assert idempotency_key(CASE_ID, "book_appointment", REBOOKING) != idempotency_key(
             CASE_ID, "book_appointment", BOOKING
         )
+
+
+class TestAReasonOnlyReproposalIsNowSuppressible:
+    """The hazard this file was written about, closed one layer lower down.
+
+    The lifecycle is still the thing that refuses a second effect after a failed certification, and
+    every test above still proves that. What changed is that a reproposal differing *only* in
+    descriptive wording is no longer a second logical action at all, so the two layers now agree
+    instead of the lifecycle carrying it alone.
+
+    Deliberately asserted on the key and the digest rather than through a run: the run cannot
+    produce a reworded proposal any more, because ``reason`` is ``SYSTEM``-authored and the model is
+    not offered the field. Two guarantees, two pieces of evidence.
+    """
+
+    def test_rewording_moves_the_digest_and_not_the_key(self) -> None:
+        from careloop.tools.idempotency import args_digest, idempotency_key
+
+        for reworded in (
+            BOOKING["reason"] + " ",
+            BOOKING["reason"].upper(),
+            BOOKING["reason"].rstrip("."),
+            "rebooking after the clinic record could not be confirmed",
+        ):
+            drifted = {**BOOKING, "reason": reworded}
+            assert idempotency_key(CASE_ID, "book_appointment", drifted) == idempotency_key(
+                CASE_ID, "book_appointment", BOOKING
+            ), reworded
+            assert args_digest(drifted) != args_digest(BOOKING), reworded
 
 
 # -- the parked case carries no authority ----------------------------------------------------------

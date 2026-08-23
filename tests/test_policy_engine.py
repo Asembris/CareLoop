@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
-from helpers import make_case, make_fact, trusted_fact
+from helpers import BOOKING_REASON, make_case, make_fact, trusted_fact
 
 from careloop.policy import (
     Decision,
@@ -39,7 +39,7 @@ PATIENT = "pat-1"
 #: reaches the rule the test is about.
 #: They are supplied here to keep each test testing what its name says;
 #: ``tests/test_policy_completeness.py`` owns the completeness property itself.
-REASON = "cardiology follow-up"
+REASON = BOOKING_REASON
 SUBJECT = "Referral"
 BODY = "Booked."
 

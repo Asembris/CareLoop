@@ -11,7 +11,7 @@ crashing the graph to set up a test about crashing the graph.
 
 from __future__ import annotations
 
-from helpers import FIXED_NOW
+from helpers import BOOKING_REASON, FIXED_NOW
 
 from careloop.events.inbound import InboundEvent
 from careloop.graph.runner import open_case
@@ -32,7 +32,7 @@ BOOKING_ARGS: dict[str, str] = {
     "provider_id": PROVIDER,
     "patient_id": PATIENT,
     "slot_start": SLOT,
-    "reason": "cardiology review",
+    "reason": BOOKING_REASON,
 }
 
 EMAIL_ARGS: dict[str, str] = {

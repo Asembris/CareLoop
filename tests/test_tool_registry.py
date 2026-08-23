@@ -124,14 +124,27 @@ class TestShippedRegistry:
 class TestAuthorshipMetadata:
     """Who composes a value is declared here, and it is not a trust level."""
 
-    def test_every_shipped_argument_is_model_authored_today(self) -> None:
+    def test_exactly_one_shipped_argument_is_system_authored(self) -> None:
+        """``book_appointment.reason`` and nothing else, which is the whole shipped claim."""
+        assert REGISTRY.system_authored == {("book_appointment", "reason")}
         for tool in REGISTRY:
-            assert tool.system_authored_args == frozenset(), tool.name
-            assert tool.model_authored_args == tool.arg_names, tool.name
+            expected = {"reason"} if tool.name == "book_appointment" else frozenset()
+            assert tool.system_authored_args == expected, tool.name
+            assert tool.model_authored_args == tool.arg_names - expected, tool.name
 
-    def test_the_shipped_authored_table_is_empty_while_nothing_uses_it(self) -> None:
-        assert AUTHORED_VALUES == {}
-        assert REGISTRY.system_authored == frozenset()
+    def test_the_authored_text_makes_no_claim_careloop_cannot_prove(self) -> None:
+        """A fixed literal, and one that asserts nothing clinical.
+
+        Nothing in CareLoop produces a ``CONTROLLED`` fact for *why* an appointment is needed —
+        there is no ``purpose`` key, no validator and no promotion — so a richer sentence would be
+        inventing information. The interpolation check is the one that matters: a value assembled
+        from case content would be a value a document could steer.
+        """
+        assert AUTHORED_VALUES == {
+            ("book_appointment", "reason"): "CareLoop appointment scheduling request."
+        }
+        for text in AUTHORED_VALUES.values():
+            assert "{" not in text and "}" not in text and "%" not in text
 
     def test_author_defaults_to_model_so_a_new_argument_behaves_as_an_old_one(self) -> None:
         assert ArgSpec(name="a", arg_class=ArgClass.VALUE).author is ArgAuthor.MODEL
@@ -212,9 +225,11 @@ class TestAuthorshipMetadata:
 class TestIdentityMetadata:
     """Which values define the same logical action is declared here too, and separately."""
 
-    def test_every_shipped_argument_identifies_today(self) -> None:
+    def test_exactly_one_shipped_argument_does_not_identify(self) -> None:
+        """``book_appointment.reason``, and the other twelve arguments are unchanged."""
         for tool in REGISTRY:
-            assert tool.identifying_args == tool.arg_names, tool.name
+            excluded = {"reason"} if tool.name == "book_appointment" else frozenset()
+            assert tool.identifying_args == tool.arg_names - excluded, tool.name
 
     def test_identifies_defaults_to_true_so_a_new_argument_behaves_as_an_old_one(self) -> None:
         assert ArgSpec(name="a", arg_class=ArgClass.VALUE).identifies is True
@@ -236,7 +251,6 @@ class TestIdentityMetadata:
             "provider_id",
             "patient_id",
             "slot_start",
-            "reason",
         }
         assert REGISTRY.identifying_args("no_such_tool") == frozenset()
 

@@ -15,8 +15,18 @@ from careloop.policy import ReasonCode, Verdict, default_rules
 from careloop.provenance import ArgClass, Fact, Provenance, TrustLevel
 from careloop.state import Case, CaseState
 from careloop.tools import REGISTRY
+from careloop.tools.registry import AUTHORED_VALUES
 
 FIXED_NOW = datetime(2026, 8, 11, 12, 0, 0, tzinfo=UTC)
+
+#: The exact text CareLoop composes for ``book_appointment.reason``.
+#:
+#: Read from the registry rather than spelled here, so a fixture and the shipped declaration cannot
+#: drift: ``allow-booking-on-validated-slot`` requires this exact value through
+#: ``args_system_authored``, so a booking fixture carrying anything else matches no ALLOW rule and
+#: is refused — which is the property, not an inconvenience. Tests that mean to supply something
+#: else say so at the call site.
+BOOKING_REASON = AUTHORED_VALUES["book_appointment", "reason"]
 
 
 def make_case(

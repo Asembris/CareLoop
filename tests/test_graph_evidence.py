@@ -17,7 +17,7 @@ executor's inputs to its own outputs would always pass.
 from __future__ import annotations
 
 import pytest
-from helpers import FIXED_NOW, make_case, make_fact
+from helpers import BOOKING_REASON, FIXED_NOW, make_case, make_fact
 
 from careloop.graph.extract import (
     PATTERNS,
@@ -52,7 +52,7 @@ BOOKING = {
     "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
     "patient_id": "PT-4417",
     "slot_start": "2026-09-03T09:30:00",
-    "reason": "cardiology review",
+    "reason": BOOKING_REASON,
 }
 
 

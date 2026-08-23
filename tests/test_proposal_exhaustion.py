@@ -60,7 +60,7 @@ import contextlib
 from collections.abc import Sequence
 
 import pytest
-from helpers import FIXED_NOW
+from helpers import BOOKING_REASON, FIXED_NOW
 from strands.multiagent.base import Status
 
 from careloop.agents.invoke import (
@@ -115,7 +115,7 @@ BOOKING = {
     "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
     "patient_id": "PT-4417",
     "slot_start": "2026-09-03T09:30:00",
-    "reason": "cardiology review",
+    "reason": BOOKING_REASON,
 }
 
 #: A proposal the shipped rules refuse: an email to an address no trusted configuration names.

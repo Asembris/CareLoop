@@ -538,10 +538,33 @@ class TestTheScenarioTableIsCoherent:
         case_ids = [scenario.case_id for scenario in DEMO_SCENARIOS.values()]
         assert len(case_ids) == len(set(case_ids))
 
-    def test_event_ids_are_distinct(self) -> None:
-        """Two scenarios on one event are two buttons that do the same thing."""
-        event_ids = [scenario.event_id for scenario in DEMO_SCENARIOS.values()]
-        assert len(event_ids) == len(set(event_ids))
+    def test_no_two_scenarios_are_the_same_button(self) -> None:
+        """Two scenarios that differ in nothing a judge can perceive are one scenario twice.
+
+        This was ``event_ids are distinct``, and the event id was standing in for the property
+        rather than being it. ``referral`` and ``recovery`` deliver the *same* inbound event on
+        purpose — the beat ``recovery`` demonstrates is what happens when the answer to a perfectly
+        ordinary booking never comes back, and giving it a different referral would make the
+        scenario about the document instead. What separates them is that one of them declares the
+        loss, which is a difference the judge watches happen.
+
+        So the assertion is the one that was always meant: no two scenarios agree on *everything*
+        except their key and their title.
+        """
+        distinguishing = [
+            (scenario.event_id, scenario.loses_the_booking_response)
+            for scenario in DEMO_SCENARIOS.values()
+        ]
+        assert len(distinguishing) == len(set(distinguishing))
+
+    def test_a_scenario_that_shares_an_event_differs_in_what_it_does(self) -> None:
+        """The vacuity proof for the assertion above, spelled out on the pair that exercises it."""
+        referral, recovery = DEMO_SCENARIOS["referral"], DEMO_SCENARIOS["recovery"]
+
+        assert referral.event_id == recovery.event_id
+        assert referral.case_id != recovery.case_id
+        assert referral.loses_the_booking_response is False
+        assert recovery.loses_the_booking_response is True
 
     def test_the_key_is_the_mapping_key(self) -> None:
         assert all(key == scenario.key for key, scenario in DEMO_SCENARIOS.items())

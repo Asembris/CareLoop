@@ -23,6 +23,7 @@ from typing import Annotated, Final
 
 from fastapi import Depends, Header, HTTPException, Request, status
 
+from careloop.api.faults import BookingResponseLoss
 from careloop.api.runs import RunAlreadyInFlight, RunRecord, RunRegistry
 from careloop.api.wake import ReconcileWaker, RecoveryOutcome
 from careloop.events.inbound import InboundEvent
@@ -178,6 +179,22 @@ class ApiDeps:
 
     demo: bool = False
     """Whether the demo control surface is mounted. Read at build time; no route consults it."""
+
+    faults: BookingResponseLoss | None = None
+    """This world's ability to lose the answer to one recovery scenario's booking, if it has one.
+
+    ``None`` on every CareLoop with no external clinic, which is the default and is why nothing has
+    to remember to switch this off. Where it exists it is armed by exactly one thing — the recovery
+    demo scenario, which declares itself as arming it — and disarmed by a reset.
+
+    **Per world**, exactly as :attr:`runs` and :attr:`wakes` are, and for the same reason: it is
+    reached through the dependencies the presented session resolved to, so there is no way to
+    express arming somebody else's.
+
+    Runs reach the losing client through :attr:`context_factory`, never through this field: the
+    factory is handed a ``case_id``, which is what binds a discarded answer to the scenario that
+    armed it, and a route reaching in here to book something would be the API deciding something.
+    """
 
     scenarios: asyncio.Lock = field(default_factory=asyncio.Lock)
     """Held while a scenario puts this world back and starts it again.

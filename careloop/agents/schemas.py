@@ -67,7 +67,7 @@ from typing import Annotated, Any, ClassVar, Final, Literal, NoReturn
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, create_model, model_validator
 
-from careloop.tools.registry import REGISTRY, ToolRegistry
+from careloop.tools.registry import AUTHORED_VALUES, REGISTRY, ArgAuthor, ToolRegistry
 
 #: The empty string, meaning "the source did not state this" or "this tool does not take it".
 NOT_SUPPLIED: Final[str] = ""
@@ -307,6 +307,35 @@ def proposed_tool_name(proposal_tool: str) -> str:
     return proposal_tool[len(PROPOSAL_TOOL_PREFIX) :]
 
 
+class UnauthoredArgument(Exception):
+    """Raised when a ``SYSTEM``-authored argument has no value CareLoop declared for it.
+
+    Unreachable while :func:`careloop.tools.registry.check_authorship_is_declared` holds, which it
+    does at import. It is kept because the alternative at this seam is substituting something — an
+    empty string, the model's answer — and a value nobody wrote down is exactly what declaring an
+    argument ``SYSTEM``-authored exists to prevent.
+    """
+
+
+def authored_value(tool_name: str, arg_name: str) -> str:
+    """The exact text CareLoop composes for one ``SYSTEM``-authored argument.
+
+    A lookup and nothing more: no interpolation, no case content, no defaulting. Read from
+    :data:`careloop.tools.registry.AUTHORED_VALUES`, which is the only place any of these strings
+    is written down.
+
+    Raises:
+        UnauthoredArgument: if no value is declared for ``(tool_name, arg_name)``.
+    """
+    try:
+        return AUTHORED_VALUES[tool_name, arg_name]
+    except KeyError as missing:
+        raise UnauthoredArgument(
+            f"{tool_name}.{arg_name} is SYSTEM-authored and no value is declared for it; "
+            f"substituting one here would be CareLoop transmitting text nobody chose"
+        ) from missing
+
+
 class ProposalToolBase(BaseModel):
     """One closed, tool-specific proposal schema. **Presented to a model; never executed.**
 
@@ -348,15 +377,30 @@ class ProposalToolBase(BaseModel):
         received before, because this returns exactly what the planner used to return.
 
         The argument names come from the registry, not from the model's answer: the schema was
-        generated from ``spec.arg_names`` and forbids extras, so the two agree by construction.
-        Rebuilding the map from the spec rather than from ``model_dump()`` keeps that true even if
-        a future edit adds a non-argument field to a generated schema.
+        generated from the tool's **model-authored** arguments and forbids extras, so the two agree
+        by construction. Rebuilding the map from the spec rather than from ``model_dump()`` keeps
+        that true even if a future edit adds a non-argument field to a generated schema.
+
+        **``SYSTEM``-authored arguments are filled here, and this is the single production seam
+        where that happens.** It is the one function every production proposal passes through —
+        ``PlannerAgent.propose`` returns ``proposal.canonical()`` and nothing else builds a
+        production :class:`~careloop.graph.context.Proposal` — so a value CareLoop composes is
+        supplied once, from :data:`careloop.tools.registry.AUTHORED_VALUES`, and never from the
+        model's answer, the case, a document or anything a document can steer. The model was not
+        offered the field, so there is nothing here to override and nothing to silently ignore.
         """
         dumped = self.model_dump()
         return PlannerIntent(
             tool_name=self.tool_name,
             rationale=self.rationale,
-            args={name: dumped[name] for name in sorted(self.TOOL.arg_names)},
+            args={
+                arg.name: (
+                    authored_value(self.TOOL.name, arg.name)
+                    if arg.author is ArgAuthor.SYSTEM
+                    else dumped[arg.name]
+                )
+                for arg in sorted(self.TOOL.args, key=lambda declared: declared.name)
+            },
         )
 
 
@@ -379,6 +423,12 @@ def build_proposal_tool(spec: Any) -> type[ProposalToolBase]:
         )
     }
     for arg in sorted(spec.args, key=lambda declared: declared.name):
+        if arg.author is ArgAuthor.SYSTEM:
+            # **Omitted, not ignored.** ``extra="forbid"`` on the generated model means a provider
+            # that emits this field anyway fails validation rather than having its value quietly
+            # dropped, so "the model cannot author this" is enforced by the schema the provider is
+            # handed rather than by a filter applied afterwards.
+            continue
         fields[arg.name] = (
             str,
             Field(description=arg.description or f"Argument {arg.name!r} of {spec.name}."),
@@ -418,7 +468,11 @@ def proposal_tool_call_for(
     """
     catalogue = PROPOSAL_TOOLS if tools is None else tools
     schema = catalogue[proposal_tool_name(intent.tool_name)]
-    return schema(rationale=intent.rationale, **dict(intent.args))
+    offered = schema.TOOL.model_authored_args
+    return schema(
+        rationale=intent.rationale,
+        **{name: value for name, value in intent.args.items() if name in offered},
+    )
 
 
 def build_proposal_tools(registry: ToolRegistry = REGISTRY) -> dict[str, type[ProposalToolBase]]:
@@ -543,8 +597,10 @@ __all__ = [
     "ProposalToolBase",
     "TriageCategory",
     "TriageResult",
+    "UnauthoredArgument",
     "Urgency",
     "argument_names",
+    "authored_value",
     "build_planner_intent",
     "build_proposal_tool",
     "build_proposal_tools",

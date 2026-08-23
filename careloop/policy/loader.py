@@ -43,7 +43,7 @@ from pydantic import ValidationError
 from careloop.policy.schema import RuleSet
 from careloop.policy.verdicts import Verdict
 from careloop.provenance.trust import ArgClass, TrustLevel, at_least
-from careloop.tools.registry import REGISTRY, ToolRegistry
+from careloop.tools.registry import REGISTRY, ArgAuthor, ToolRegistry
 
 #: The shipped rules file.
 RULES_PATH: Final[Path] = Path(__file__).with_name("rules.yaml")
@@ -127,6 +127,16 @@ def validate_rules_resolve(ruleset: RuleSet, registry: ToolRegistry) -> None:
                         f"the rule could only ever resolve UNTRUSTED and never match"
                     )
 
+            for arg_name in rule.when.args_system_authored:
+                if arg_name not in spec.arg_names:
+                    continue  # already reported as an undeclared argument above
+                if spec.author(arg_name) is not ArgAuthor.SYSTEM:
+                    problems.append(
+                        f"rule {rule.id!r} requires {tool_name}.{arg_name} to carry the value "
+                        f"CareLoop composes, but the registry declares it {spec.author(arg_name)}"
+                        f"-authored; there is no such value, so the clause could never hold"
+                    )
+
             for predicate in rule.when.arg_class_assertions:
                 declared = spec.arg_class(predicate.arg)
                 if declared is None:
@@ -193,15 +203,55 @@ def validate_authority_coverage(ruleset: RuleSet, registry: ToolRegistry) -> Non
     )
 
 
+def validate_authored_coverage(ruleset: RuleSet, registry: ToolRegistry) -> None:
+    """Raise :class:`PolicyConfigError` if an ``ALLOW`` rule ignores a ``SYSTEM``-authored argument.
+
+    The same shape as :func:`validate_authority_coverage`, one question over: every argument the
+    registry declares ``SYSTEM``-authored must be required to carry CareLoop's own value by
+    **every** ``ALLOW`` rule that could authorise a call to that tool.
+
+    The reason it is a load-time invariant rather than a note is the reason session N's was. The
+    primary boundary is the model-facing schema, which omits the field entirely — but that is a
+    fact about one seam, and an ``ALLOW`` rule that did not read authorship would authorise whatever
+    a *different* seam put there. Requiring both means the positive path does not depend on the
+    schema being the thing that catches it.
+
+    Not covered by :func:`validate_authority_coverage`, and it could not be: that check reads
+    ``arg_trust_at_least`` and applies only to ``DESTINATION`` and ``AUTHORITY``, whereas a
+    ``SYSTEM``-authored argument is ``VALUE``-class by construction and has no trust to require.
+    Authorship and trust are different dimensions, and this is the second one.
+    """
+    uncovered = uncovered_authored_arguments(registry, ruleset)
+    if not uncovered:
+        return
+
+    problems = [
+        f"rule {rule_id!r} can authorise {tool_name}, but does not require "
+        f"{tool_name}.{arg_name} to carry the value CareLoop composes; it is SYSTEM-authored, so "
+        f"nothing else stops a model-supplied string being transmitted under it"
+        for rule_id, tool_name, arg_name in sorted(uncovered)
+    ]
+    raise PolicyConfigError(
+        "rules leave a system-authored argument uncovered:\n  "
+        + "\n  ".join(problems)
+        + "\n  Every ALLOW rule that can authorise a tool must name every "
+        "SYSTEM-authored argument of that tool in args_system_authored. args_present and "
+        "args_approved do not satisfy this: presence is not authorship, and a caregiver's "
+        "approval says a person was asked about one call, never who composed the text "
+        "inside it."
+    )
+
+
 def load_rules_from_mapping(raw: Any, registry: ToolRegistry) -> RuleSet:
     """Validate an already-parsed rules document against ``registry``.
 
-    The normal production entry point, and the one every other loader here funnels into. Three
-    steps, all of them: schema, registry resolution, authority coverage.
+    The normal production entry point, and the one every other loader here funnels into. Four
+    steps, all of them: schema, registry resolution, authority coverage, authorship coverage.
     """
     ruleset = parse_rules(raw)
     validate_rules_resolve(ruleset, registry)
     validate_authority_coverage(ruleset, registry)
+    validate_authored_coverage(ruleset, registry)
     return ruleset
 
 
@@ -252,6 +302,30 @@ def uncovered_external_tools(registry: ToolRegistry, ruleset: RuleSet) -> frozen
 def unknown_rule_tools(registry: ToolRegistry, ruleset: RuleSet) -> frozenset[str]:
     """Tool names mentioned by rules that the registry does not declare."""
     return frozenset(ruleset.tools_named - registry.names)
+
+
+def uncovered_authored_arguments(
+    registry: ToolRegistry, ruleset: RuleSet
+) -> frozenset[tuple[str, str, str]]:
+    """``(rule id, tool, argument)`` for a ``SYSTEM``-authored argument an ``ALLOW`` rule ignores.
+
+    Per rule and not per ruleset, for the reason :func:`uncovered_authority_arguments` gives: a
+    union-of-all-rules reading would be satisfied by one strict rule sitting beside one permissive
+    one, and the permissive rule is the one that fires.
+
+    A tool with no ``SYSTEM``-authored argument is vacuously covered, which is every tool in the
+    shipped registry until one declares otherwise.
+    """
+    uncovered: set[tuple[str, str, str]] = set()
+    for rule in ruleset.by_effect(Verdict.ALLOW):
+        for tool_name in rule.tools:
+            spec = registry.get(tool_name)
+            if spec is None or not spec.external_effect:
+                continue
+            for arg_name in sorted(spec.system_authored_args):
+                if arg_name not in rule.when.args_system_authored:
+                    uncovered.add((rule.id, tool_name, arg_name))
+    return frozenset(uncovered)
 
 
 def uncovered_authority_arguments(
@@ -316,9 +390,11 @@ __all__ = [
     "load_rules_from_mapping",
     "load_rules_from_text",
     "parse_rules",
+    "uncovered_authored_arguments",
     "uncovered_authority_arguments",
     "uncovered_external_tools",
     "unknown_rule_tools",
+    "validate_authored_coverage",
     "validate_authority_coverage",
     "validate_rules_resolve",
 ]

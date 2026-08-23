@@ -4,13 +4,14 @@
 narrowing. This file holds the narrowings that are about the *scenario* — where it may be pressed,
 what it binds to, and what survives a reset. The narrowings that are about the transport are in
 ``tests/test_faults.py``, and the end-to-end proof that a real clinic really commits and a real case
-really recovers is in :class:`TestTheJudgeVisibleRecovery` below.
+really recovers is in ``tests/test_recovery_proof.py``.
 
 **The containment claim, stated once.** A booking may lose its answer only if all of these hold: the
 demo surface is mounted at all; the scenario that declares the loss was pressed; the world has a
 real clinic; the run belongs to the case that scenario named; the request is a booking creation; and
-the provider answered ``201``. The first three are here, the fourth is the binding this file proves
-end to end with a second case booking in the same world, and the last two are the transport's.
+the provider answered ``201``. The first three are here, the fourth is here at the seam and proved
+end to end in ``tests/test_recovery_proof.py`` with a second case really booking in the same world,
+and the last two are the transport's.
 """
 
 from __future__ import annotations

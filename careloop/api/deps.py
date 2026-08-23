@@ -24,6 +24,7 @@ from typing import Annotated, Final
 from fastapi import Depends, Header, HTTPException, Request, status
 
 from careloop.api.runs import RunAlreadyInFlight, RunRegistry
+from careloop.api.wake import ReconcileWaker
 from careloop.events.inbound import InboundEvent
 from careloop.events.simulator import EventSimulator
 from careloop.graph.context import RunContext, latest_delivery
@@ -132,6 +133,18 @@ class ApiDeps:
     context_factory: ContextFactory = default_context_factory
     runs: RunRegistry = field(default_factory=RunRegistry)
 
+    wakes: ReconcileWaker = field(default_factory=ReconcileWaker)
+    """Reconciliation wakes pending in this world. Execution context, exactly as :attr:`runs` is.
+
+    **Nothing arms one yet.** The object is here so the lifecycles that tear a world down — the demo
+    reset, idle eviction and shutdown — already close the boundary a wake would have to cross, and
+    so that closing it is reviewable on its own rather than arriving underneath the scheduling
+    policy that will use it. See :mod:`careloop.api.wake`.
+
+    Per world for the reason :attr:`runs` is: a reset reaches the wakes belonging to the store it is
+    about to clear and has no way to express reaching another visitor's.
+    """
+
     graph_runner: GraphRunner | None = None
     """How a run is performed. ``None`` builds the local one over :attr:`context_factory`.
 
@@ -166,12 +179,23 @@ class ApiDeps:
             self.graph_runner = local_graph_runner(self.context_factory)
 
     async def drain(self) -> None:
-        """Wait for this world's runs to finish.
+        """Close this world down: stop its wakes, then wait for its runs to finish.
 
         Here so that shutdown asks the same question of one world and of a registry of them —
         :meth:`careloop.api.sessions.SessionWorlds.drain` is the same method over every world it
         holds, and the lifespan does not have to know which shape it got.
+
+        **The order is the contract and it is not interchangeable.** ``aclose`` establishes the stop
+        boundary before anything is awaited, so no wake can register a run while
+        :meth:`careloop.api.runs.RunRegistry.drain` is already draining — which would be work
+        started after the process decided to stop, on a store whose resources are about to be
+        released. Draining first and stopping afterwards would leave exactly that window open, and
+        it is wide: a drain waits for whole graph runs.
+
+        A run a wake registered *before* the boundary is not cancelled and is not meant to be. It is
+        an ordinary in-flight run, and the drain below is what waits for it.
         """
+        await self.wakes.aclose()
         await self.runs.drain()
 
     def resume_unsettled(self) -> tuple[str, ...]:

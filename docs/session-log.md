@@ -6510,11 +6510,15 @@ the top of the node body: a case that has moved on is not an inconsistency.
 
 ### Open decisions
 
-37. **New.** `WAITING_EXTERNAL` is exited by the next run of the case, and the only trigger today is
-    process startup. A case that lands there while the process stays up waits until the next
-    restart. That is a scheduling gap rather than a correctness one — the identity is frozen, the
-    state is honest, and the next run converges — and it is exactly where the roadmap's background
-    scheduler plugs in. The semantics are settled so that item is later a *trigger*, not a design.
+37. **Closed.** `WAITING_EXTERNAL` is exited by the next run of the case, and process startup was
+    the only trigger — so a case that landed there while the process stayed up waited for a restart.
+    The semantics were settled well enough that closing it really was a *trigger* rather than a
+    design: `ApiDeps.register_recovery` is now the one recovery body, the startup sweep loops over
+    it and a process-local wake calls it for one case, and nothing about the saga, the rules, the
+    state machine, the telemetry or the persisted shape moved. Delays are `5/15/45/120/300`s,
+    process-local and unbounded, and no case is ever escalated because time passed. See
+    `tests/test_reconcile_liveness.py` and the *"A waiting case wakes itself"* section of
+    `CLAUDE.md`.
 
 38. **New.** A first-attempt `ClinicRefused` still ends the case `FAILED`, leaving an unsettled
     `ACTION_PREPARED` on a terminal case. Safe — the clinic is *answering* that it did not make the

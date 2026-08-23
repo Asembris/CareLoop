@@ -1216,12 +1216,13 @@ before the guard was written.
 `COMMIT`. `dispatch → verify` has routed a case persisted mid-verification since long before this
 work. The saga's scope is exactly A–E.
 
-**The startup sweep is the trigger, and it is the smallest one that works.** `resume_unsettled`
+**The startup sweep is one trigger, and it is the smallest one that works.** `resume_unsettled`
 sweeps `EXECUTING` and `WAITING_EXTERNAL` and schedules a run for each. **Anything in one of those
 states when a process starts is orphaned by definition**, because that process has scheduled nothing
 yet — which is the whole safety argument. It schedules and decides nothing: no tool, no argument and
-no key is read there. No EventBridge, no SQS, no worker, no background loop; a real scheduler is a
-later *trigger*, not a later design.
+no key is read there. No EventBridge, no SQS, no worker; a real scheduler is a later *trigger*, not
+a later design. The second trigger — a wake inside the living process — is below, and it is exactly
+that: another *when*, over the same body.
 
 **Reconciliation adds no cycle, so invariant 5 needs nothing.** `outgoing(reconcile)` is the single
 edge to `verify`; its other three endings satisfy no condition and end the run. Retries happen
@@ -1254,6 +1255,97 @@ rule refused, ending the case `FAILED` on `ClinicRefused`. This is the session-Q
 live rather than inferred, and it is why the suppressed and diverged rows each needed retries. Both
 halves are closed below: the wording can no longer vary, and a variation would no longer be a second
 action if it did.
+
+## A waiting case wakes itself
+
+**`WAITING_EXTERNAL` was recoverable and not live, and that is now closed.** The saga froze the
+identity, gave the state a producer and a meaning, and made `ReconcileNode` converge on any later
+run. What it did not supply was a later run: `resume_unsettled` fires at process startup and nothing
+else ever did, so a case that landed there at nine in the morning sat until somebody restarted
+CareLoop — correct, durable, rendered as "Waiting for a reply", and stuck. Open decision 37.
+
+**The wake decides exactly one thing: *when* another run happens.** Not what is attempted, not
+whether it is authorised, not which arguments or which key, not whether the effect succeeded and not
+whether the case may be certified. It schedules an ordinary graph run over durable state that
+already exists, so every guarantee it leans on is the saga's — the same `PLAN_PROPOSED`, the same
+`ACTION_PREPARED`, the same idempotency key, the same `args_digest`, the same policy verdict, the
+same independent read-back. **No rule, state, transition, `ReasonCode`, timeline kind, telemetry
+attribute, schema or persisted field changed**, and there is no durable retry field anywhere.
+
+**Two triggers, one body.** `ApiDeps.register_recovery(case_id)` is the single recovery
+registration; the startup sweep loops over it and a wake calls it for one case, so *"what a recovery
+does"* has one definition and the triggers differ only in *when*. It reads no tool name, no
+argument, no digest and no key — a case id and the `Delivery` that case is carried forward under —
+and `ApiDeps.start_run` is the only way any run begins, which is what makes a run's consequences one
+statement rather than five.
+
+**The arming decision reads the store, never the exception.** `start_run` wraps the runner and, in a
+`finally`, re-reads the case: `WAITING_EXTERNAL` arms a wake, anything else withdraws one and clears
+the backoff. A run ends five ways — rest, park, fail, the SDK's bound, a raising node — and none of
+them is the question; the durable state afterwards is. `finally` rather than `else` because a run
+that lost a compare-and-set race *raised*, and the case the winner left behind may well be waiting.
+
+**Delays are `5s, 15s, 45s, 120s, 300s`, the last repeating, and the counter is operational only.**
+No jitter, no random source, no persisted attempt count, no retry timestamp, no maximum. The count
+advances **only** on a registration that really started a run — a wake that was deferred, that found
+another run in flight, or that found the case already settled attempted nothing and moves nothing.
+A restart begins the schedule again, which is correct: a new process has new information, and the
+sweep has just asked for itself.
+
+**Nothing escalates because time passed.** A timeout is not evidence about the outside world, so
+there is no attempt budget whose exhaustion parks the case and no path from *"this has taken a long
+time"* to `AWAITING_HUMAN`. A provider that stays away costs a bounded number of attempts per hour
+and a case that goes on saying, truthfully, that it is waiting. The visible cost is two
+`STATE_TRANSITION` entries per attempt — roughly 576 a day at the ceiling — which is the honest
+price of an append-only trail that records every attempt, and if it ever matters the fix is a
+store-level timeline bound and **not** a fabricated verdict.
+
+**A wake cannot exist for an effect that may not be re-sent**, and that needs no new guard.
+`WAITING_EXTERNAL` is written only where `may_replay` says yes, which requires an
+`IDEMPOTENT_REPLAYABLE` class *and* a bound independent observer — so `send_email`,
+`upload_document` and `grant_portal_access` park with `EXTERNAL_OUTCOME_NOT_ESTABLISHED` and the
+state a wake is armed for is unreachable for them. `RECOVERY_CLASS` did not change and must not.
+
+**Stopping a wake is the hard part, and it is a linearization point rather than a check.** A wake
+races three teardowns — a demo reset clearing the store, an idle eviction ending the visitor's
+clinic, and shutdown — and one that registered a run *after* its world was destroyed would drive the
+graph against an emptied store or a clinic session Demo World had been told to forget. So the gate
+check and the registration happen inside one lock: **once `ReconcileWaker.stop()` returns, no wake
+it holds can register another run**, and a wake already inside the critical section finishes first —
+`stop()` cannot return until it has — which is why every lifecycle that stops a waker then *looks
+again* for an active run instead of assuming there is none. `stop` cancels nothing, deliberately:
+eviction runs in a Starlette worker thread, where cancelling a task is not safe, so a stopped wake
+sleeps out its delay and finds the gate shut, leaving a bounded memory tail and **no capability**.
+
+**Stopping is permanent; closing is not, and that distinction is where liveness lives.** An eviction
+that finds a run in flight backs off and a refused reset changes nothing, so both close the gate
+*reversibly* — and a wake that falls due inside such a window is **deferred, not spent**. It keeps
+its intent, counts as no attempt, and is restored when the gate reopens; `reopen` hands the re-arming
+back to the captured loop through `call_soon_threadsafe`, because arming creates a task and the
+caller may be a worker thread. Consuming it instead would have a momentary lifecycle event silently
+cost a still-waiting case the only opportunity it had scheduled. A **successful** reset calls
+`discard_deferred` after clearing, because only the body of that scope can tell whether the cases
+those intents named still exist.
+
+`tests/test_reconcile_liveness.py` carries the property and
+`tests/test_reconcile_wake.py::TestTheStopBoundaryIsLinearized` the boundary. The judge-facing proof
+is `TestTheCaseWakesUpWithoutAnybodyAskingIt`: a real Demo World on a loopback socket behind a
+transport that can be switched off, a real booking that nobody answers, **no restart and no human or
+API action**, the clinic coming back, a wake CareLoop scheduled for itself, one appointment, one
+`ActionRecord`, the original key, an independent `GET` returning `MATCHED`, and `DONE` — with the
+planner and triage seams raising if either is so much as asked. It complements the hard-crash proof
+in `tests/test_saga_chaos.py` rather than replacing it: that one earns *"a process can die mid-effect
+and a later one converges"*, and this one earns *"nothing had to die, and nobody had to notice"*.
+Eighteen mutants each turn their own tests red, including a wake that routes to the planner, one that
+mints a fresh key, one that bypasses `ReconcileNode`, a due wake consumed by a temporary close, a
+reopened gate that restores nothing, and a startup sweep removed altogether.
+
+**What this does not do.** It creates no durable scheduler and claims none: the schedule is in
+memory, dies with the process, and is not a business fact — invariant 8 is untouched. It does not
+cover a *visitor's* world across a restart, because those stores are `:memory:` and never could.
+There is no queue, no worker, no lease, no claim table and no distributed lock; two processes over
+one durable case are still made safe by the store's compare-and-set and the provider's own
+idempotency, exactly as before, and the per-case dedupe claim is scoped to one waker and says so.
 
 ## Four questions about one argument
 

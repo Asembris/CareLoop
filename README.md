@@ -188,12 +188,16 @@ One page of caption, including what each zone means and why there are exactly tw
 ## Honest limits
 
 - Approval expiry is unmodelled — a case can sit in `AWAITING_HUMAN` indefinitely.
-- **`WAITING_EXTERNAL` means one thing and CareLoop will not leave it on its own.** It is entered
-  only when a dispatch of a durably prepared action got no answer at all, and it is exited by the
-  next run of that case — which today means process startup, since there is no scheduler. A case
-  that lands there while the process stays up waits until the next restart. That is a *scheduling*
-  gap rather than a correctness one: the identity is frozen, the state is honest, and the next run
-  converges. It was previously reserved with no producer at all.
+- **`WAITING_EXTERNAL` means one thing, and CareLoop now leaves it on its own.** It is entered only
+  when a dispatch of a durably prepared action got no answer at all, and it is exited by the next
+  run of that case. That run used to come only from process startup, so a case that landed there
+  while the process stayed up waited until the next restart; it now also comes from a bounded
+  process-local wake — 5s, 15s, 45s, 120s, then every 300s — that re-enters the *same*
+  reconciliation with the same frozen identity and asks no model anything. The startup sweep is
+  unchanged and still covers a process that died. **The retries never end and never escalate**: a
+  timeout is not evidence about the outside world, so a case whose provider stays away goes on
+  saying it is waiting rather than being marked failed or handed to a person because time passed.
+  The schedule is in memory, so a restart begins it again — which the sweep is what makes safe.
 - **Only `book_appointment` can be autonomously recovered after an ambiguous outcome**, because it
   is the only effect with a measured durable idempotency contract and an independent read-back.
   `send_email`, `upload_document` and `grant_portal_access` park for a person with

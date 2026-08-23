@@ -23,15 +23,15 @@ from typing import Annotated, Final
 
 from fastapi import Depends, Header, HTTPException, Request, status
 
-from careloop.api.runs import RunAlreadyInFlight, RunRegistry
-from careloop.api.wake import ReconcileWaker
+from careloop.api.runs import RunAlreadyInFlight, RunRecord, RunRegistry
+from careloop.api.wake import ReconcileWaker, RecoveryOutcome
 from careloop.events.inbound import InboundEvent
 from careloop.events.simulator import EventSimulator
 from careloop.graph.context import RunContext, latest_delivery
 from careloop.graph.runner import RunResult, context_for, run_case
 from careloop.graph.witness import NO_WITNESS, Witness
 from careloop.state.case import Case, CaseState
-from careloop.state.store import CaseStore
+from careloop.state.store import CaseNotFound, CaseStore
 from careloop.tools.clinic import ClinicClient
 
 logger = logging.getLogger(__name__)
@@ -41,6 +41,20 @@ logger = logging.getLogger(__name__)
 #: Named here rather than spelled inline so the message below, the schema declaration in
 #: :func:`careloop.api.app.declare_required_headers` and the tests all read one spelling.
 CAREGIVER_HEADER: Final[str] = "X-Caregiver"
+
+#: The states a reconciliation opportunity means anything for.
+#:
+#: The two post-effect states in which a durably prepared action has no recorded result:
+#: ``EXECUTING`` is a process that died mid-dispatch, ``WAITING_EXTERNAL`` is a provider that did
+#: not answer. Both
+#: route to :class:`careloop.graph.nodes.ReconcileNode`, which is why both are swept and why a wake
+#: that finds a case anywhere else has found a stale opportunity rather than a problem.
+#:
+#: Named once and read by the sweep and by the wake, so the two triggers cannot come to disagree
+#: about what is recoverable.
+RECOVERABLE_STATES: Final[frozenset[CaseState]] = frozenset(
+    {CaseState.EXECUTING, CaseState.WAITING_EXTERNAL}
+)
 
 #: Builds the run context one graph run is driven through.
 #:
@@ -225,44 +239,98 @@ class ApiDeps:
         A case with no durable delivery is skipped rather than raising: it cannot be carried forward
         under any event, and a startup that failed because one row was odd would take the whole
         process down for a case nobody can run anyway.
+
+        **The per-case work is :meth:`register_recovery`'s**, which is also what a wake calls. One
+        body rather than two, because a second implementation of "give this case another
+        reconciliation opportunity" is a second place the answer could differ — and the two triggers
+        differ only in *when*, which is the whole design.
         """
         scheduled: list[str] = []
         for state in (CaseState.EXECUTING, CaseState.WAITING_EXTERNAL):
             for case in self.store.list_by_state(state):
-                delivery = latest_delivery(case)
-                if delivery is None:
-                    logger.warning(
-                        "case %s is %s with no recorded delivery; it cannot be resumed",
-                        case.case_id,
-                        state,
-                    )
-                    continue
-                try:
-                    inbound = self.events.get(delivery.event_id)
-                except KeyError:
-                    logger.warning(
-                        "case %s names event %s, which this process does not have",
-                        case.case_id,
-                        delivery.event_id,
-                    )
-                    continue
-                case_id = case.case_id
-
-                # Bound as defaults rather than captured, because the thunk is invoked by an
-                # ``asyncio`` task that starts after this loop has moved on — late binding would
-                # resume every case under the last one's event.
-                def start(event: InboundEvent = inbound, target: str = case_id):
-                    return self.graph_runner(self.store, event, target)
-
-                try:
-                    self.runs.start(case_id, start)
-                except RunAlreadyInFlight:
-                    # Not reachable from a startup sweep, which runs before anything is scheduled.
-                    # Reachable if this is ever called on a live process, and skipping is right
-                    # there too: something is already working on this case.
-                    continue
-                scheduled.append(case_id)
+                if self.register_recovery(case.case_id) is RecoveryOutcome.STARTED:
+                    scheduled.append(case.case_id)
         return tuple(scheduled)
+
+    def register_recovery(self, case_id: str) -> RecoveryOutcome:
+        """Give one case another reconciliation opportunity, and say what came of it.
+
+        **The single recovery registration seam.** The startup sweep loops over it; a reconciliation
+        wake calls it for one case. Neither can reach the graph any other way, so "what a recovery
+        does" has one definition and "when a recovery happens" is the only thing the two triggers
+        disagree about.
+
+        **It schedules and decides nothing**, which is the whole of what this layer is allowed to
+        do. It reads no tool name, no argument, no digest and no idempotency key; it asks no model
+        and touches no provider. What may be re-issued is
+        :func:`careloop.graph.recovery.may_replay`'s answer, read inside
+        :class:`careloop.graph.nodes.ReconcileNode` from a declared provider contract, and what is
+        re-issued is the identity the case froze before anything left the process. All this supplies
+        is a case id and the event that case is carried forward under.
+
+        **Called under the waker's lock, so nothing here may block.** A store read, a timeline read
+        and a task creation — no network, no graph execution, no await. See
+        :meth:`careloop.api.wake.ReconcileWaker._wake`.
+
+        Every refusal is a *return value* rather than an exception, because the caller's next
+        decision depends on which one it was: only
+        :attr:`~careloop.api.wake.RecoveryOutcome.STARTED` counts as an attempt, and a case that has
+        moved on is forgotten rather than retried.
+        """
+        try:
+            case = self.store.get(case_id)
+        except CaseNotFound:
+            logger.debug("recovery skipped: case %s is no longer in the store", case_id)
+            return RecoveryOutcome.CASE_GONE
+
+        if case.state not in RECOVERABLE_STATES:
+            # Something else settled it — another run, a caregiver, a sweep in another process.
+            # A stale opportunity rather than a mistake.
+            logger.debug("recovery skipped: case %s is %s", case_id, case.state)
+            return RecoveryOutcome.STATE_MOVED
+
+        delivery = latest_delivery(case)
+        if delivery is None:
+            logger.warning(
+                "case %s is %s with no recorded delivery; it cannot be resumed",
+                case_id,
+                case.state,
+            )
+            return RecoveryOutcome.RECOVERY_CONTEXT_UNAVAILABLE
+        try:
+            inbound = self.events.get(delivery.event_id)
+        except KeyError:
+            logger.warning(
+                "case %s names event %s, which this process does not have",
+                case_id,
+                delivery.event_id,
+            )
+            return RecoveryOutcome.RECOVERY_CONTEXT_UNAVAILABLE
+
+        try:
+            self.start_run(case_id, inbound)
+        except RunAlreadyInFlight:
+            # Not reachable from a startup sweep, which runs before anything is scheduled. Reachable
+            # from a wake, and skipping is right there too: something is already working on this
+            # case, and when it finishes it will decide for itself whether the case still waits.
+            logger.debug("recovery skipped: case %s already has a run in flight", case_id)
+            return RecoveryOutcome.RUN_ALREADY_IN_FLIGHT
+
+        logger.info("reconciliation run registered for case %s", case_id)
+        return RecoveryOutcome.STARTED
+
+    def start_run(self, case_id: str, inbound: InboundEvent) -> RunRecord:
+        """Start one graph run for ``case_id`` under ``inbound``. **The only way a run begins.**
+
+        Every production path that drives the graph — a delivered event, a caregiver decision, a
+        re-check, the startup sweep, a reconciliation wake — comes through here. That is what makes
+        "what happens when a run finishes" one statement rather than five, and it is the seam the
+        wake scheduling hangs off.
+
+        Raises:
+            RunAlreadyInFlight: if this case already has an unsettled run.
+        """
+        return self.runs.start(case_id, lambda: self.graph_runner(self.store, inbound, case_id))
 
 
 def deps(

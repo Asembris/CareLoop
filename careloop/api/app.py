@@ -903,9 +903,14 @@ async def schedule(deps: ApiDeps, case_id: str, inbound: InboundEvent, *, wait: 
     run does, and — since :data:`~careloop.api.deps.GraphRunner` — nothing about where: the runner
     supplies the collaborators and performs the run, and all this knows is that it got a
     :class:`~careloop.graph.runner.RunResult` back.
+
+    Through :meth:`~careloop.api.deps.ApiDeps.start_run` rather than the registry directly, because
+    that is where a finished run's consequences are decided — a case left waiting on an external
+    system is given another reconciliation opportunity there, and a route that started a run its own
+    way would be a run whose ending nobody was watching.
     """
     try:
-        record = deps.runs.start(case_id, lambda: deps.graph_runner(deps.store, inbound, case_id))
+        record = deps.start_run(case_id, inbound)
     except RunAlreadyInFlight as clash:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(clash)) from None
 

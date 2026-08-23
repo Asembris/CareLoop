@@ -8,6 +8,7 @@ import {
   factSummary,
   isExcerptFact,
   isRenderedOnTheSpine,
+  recoveryTransitionText,
   observedLabel,
   orderedArgs,
   outcomeCopy,
@@ -72,6 +73,16 @@ describe("status copy", () => {
       expect(copy.statusText).not.toBe(state);
       expect(copy.headline).not.toBe(state);
     }
+  });
+
+  it("says what a case waiting on an unanswered request is actually waiting for", () => {
+    // "Waiting for the other side" read like a polite queue. What has happened is that CareLoop
+    // sent a real request to an outside system and got no answer at all, so it does not know
+    // whether the thing happened — which is the whole situation the saga exists for.
+    const copy = status({ state: "WAITING_EXTERNAL" });
+
+    expect(copy.statusLabel).toBe("NO ANSWER FROM THE CLINIC");
+    expect(copy.headline).toBe("The booking was sent and no answer came back");
   });
 
   it("names the failure reason on a FAILED case rather than soothing it", () => {
@@ -221,6 +232,52 @@ describe("the timeline", () => {
     expect(isRenderedOnTheSpine("STATE_TRANSITION")).toBe(false);
     expect(isRenderedOnTheSpine("POLICY_DENY")).toBe(false);
     expect(isRenderedOnTheSpine("ACTION_EXECUTED")).toBe(true);
+  });
+
+  it("names exactly two state changes as things that happened rather than narration", () => {
+    // The backend writes no timeline entry of its own for either, so these two rows *are* the
+    // record. Every other transition is the machine narrating itself and stays off the spine.
+    expect(recoveryTransitionText("EXECUTING", "WAITING_EXTERNAL")).toBeTruthy();
+    expect(recoveryTransitionText("WAITING_EXTERNAL", "EXECUTING")).toBeTruthy();
+
+    for (const [from, to] of [
+      ["NEW", "GATHERING_EVIDENCE"],
+      ["GATHERING_EVIDENCE", "PLANNING"],
+      ["PLANNING", "READY_TO_EXECUTE"],
+      ["READY_TO_EXECUTE", "EXECUTING"],
+      ["EXECUTING", "VERIFYING"],
+      ["WAITING_EXTERNAL", "VERIFYING"],
+      ["VERIFYING", "DONE"],
+      ["AWAITING_HUMAN", "VERIFYING"],
+      ["EXECUTING", "AWAITING_HUMAN"]
+    ]) {
+      expect(recoveryTransitionText(from, to)).toBeNull();
+    }
+  });
+
+  it("gives the recovery rows and the frozen identity a tone that does not cry wolf", () => {
+    expect(toneFor("ACTION_PREPARED")).toBe("neutral");
+    expect(toneFor("EXTERNAL_RECHECK_REQUESTED")).toBe("decision");
+  });
+
+  it("keeps the request-count claim out of the copy, because the true one is different", () => {
+    // The load-bearing wording rule, asserted where the strings live. Reconciliation issues a
+    // second POST under the identity frozen before the first, which is why the provider returns
+    // the appointment it already made. `tests/test_recovery_copy.py` sweeps the whole product for
+    // this; here it is pinned on the two strings most likely to acquire it.
+    const lines = [
+      recoveryTransitionText("EXECUTING", "WAITING_EXTERNAL") ?? "",
+      recoveryTransitionText("WAITING_EXTERNAL", "EXECUTING") ?? "",
+      status({ state: "WAITING_EXTERNAL" }).headline,
+      status({ state: "WAITING_EXTERNAL" }).statusText
+    ];
+
+    for (const line of lines) {
+      expect(line.toLowerCase()).not.toContain("not send");
+      expect(line.toLowerCase()).not.toContain("never send");
+      expect(line.toLowerCase()).not.toContain("twice");
+      expect(line.toLowerCase()).not.toContain("resent");
+    }
   });
 
   it("says what was blocked and why, using the real reason code", () => {

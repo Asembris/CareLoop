@@ -546,7 +546,7 @@ terminal, bounded, and it books nothing twice — but it reaches `FAILED` the lo
 out of scope.** It is the reason divergence 1 cannot resolve to B.
 
 > **Closed in the backend, 2026-08-15, and the cost was worse than a node budget.** "It books nothing
-> twice" was true only because the reproposal was *identical*. `book_appointment.reason` is
+> twice" was true only because the reproposal was *identical*. `book_appointment.reason` was then
 > planner-authored free text carrying no `trust_key` and named by no rule, so a reproposal changing
 > only that keyed differently, defeated duplicate suppression in CareLoop and in Demo World, reached
 > `POLICY_ALLOW` and dispatched — measured as two real bookings against a clinic that could not

@@ -447,12 +447,11 @@ persisted mid-`VERIFYING` and a reopened `DONE` case reproposing the identical b
 closed. There is no migration and no legacy adapter, because a record written before the reason was
 ever observed cannot truthfully satisfy an invariant that says it was.
 
-**What this does not claim.** `reason` remains planner-authored free text with no trust key, no
-content constraint, no length bound and no human review before an autonomous booking, and it can be
-influenced by document evidence. This patch verifies external fidelity, not provenance or
-appropriateness; whether the reason should additionally be templated from controlled facts,
-constrained, or removed is still open and deliberately untouched, so the two properties keep
-independent causal evidence.
+**What that patch did not claim, and what this one closes.** `reason` remained planner-authored
+free text with no trust key, no content constraint, no length bound and no human review before an
+autonomous booking, and it could be influenced by document evidence. That patch verified external
+fidelity, not provenance. The provenance half and the identity half are both closed under *Four
+questions about one argument* below, and each keeps its own causal evidence.
 
 **Once an external effect has been attempted, a failed verification cannot return the case to
 autonomous planning.** `VerifyNode` parks it in `AWAITING_HUMAN` through a manual handoff carrying
@@ -466,9 +465,9 @@ node budget but books nothing twice" — was **true only because the reproposal 
 entry into `VERIFYING` is post-effect: it is reachable only from `EXECUTING` and `WAITING_EXTERNAL`,
 `ExecuteNode` transitions there after recording an action or suppressing a duplicate of one, and
 `VerifyNode` fails the case outright when no `ActionRecord` exists. So "a proposal that did not verify
-deserves another attempt" was never a description of a reachable state. `book_appointment.reason` is
-planner-authored free text carrying no `trust_key` and named by no rule, so a reproposal changing only
-*that* moved the argument digest, moved the idempotency key, and defeated duplicate suppression in
+deserves another attempt" was never a description of a reachable state. `book_appointment.reason` was
+then planner-authored free text carrying no `trust_key` and named by no rule, so a reproposal changing
+only *that* moved the argument digest, moved the idempotency key, and defeated duplicate suppression in
 CareLoop **and** in Demo World. Measured through the real graph on a loopback clinic: against a clinic
 that could not confirm the first booking, **two `ACTION_EXECUTED` entries, two `ActionRecord`s, two
 executor invocations, two confirmation ids** — a second autonomous external booking issued after
@@ -1247,12 +1246,173 @@ independent read and `DONE`. A mutant that mints a fresh key on recovery turns f
 and the failure it produces is `ClinicRefused 409`, which is Demo World's own slot-collision rule
 standing where an authority decision should be, exactly as session Q measured.
 
-**`book_appointment.reason` is unstable at the punctuation level, and Patch E measured the cost.**
+**`book_appointment.reason` was unstable at the punctuation level, and Patch E measured the cost.**
 Reproposals alternated between `"…for cardiology review"` and `"…for cardiology review."`, which
-moves the argument digest, moves the idempotency key and defeats duplicate suppression at both
+moved the argument digest, moved the idempotency key and defeated duplicate suppression at both
 layers — reproduced in production, where each miss sent a second booking that only Demo World's slot
 rule refused, ending the case `FAILED` on `ClinicRefused`. This is the session-Q hazard observed
-live rather than inferred, and it is why the suppressed and diverged rows each needed retries.
+live rather than inferred, and it is why the suppressed and diverged rows each needed retries. Both
+halves are closed below: the wording can no longer vary, and a variation would no longer be a second
+action if it did.
+
+## Four questions about one argument
+
+**An argument answers four questions, and folding any two of them together is how each of the last
+several defects happened.** They are declared in four places on purpose:
+
+```
+AUTHORITY      which values permit the action    ArgSpec.arg_class + ArgSpec.trust_key, read by rules.yaml
+PAYLOAD        which values are transmitted      ToolSpec.arg_names, in full
+IDENTITY       which values are the same action  ToolSpec.identifying_args
+VERIFICATION   which values must match after     graph/verify.py COMPARED_ARGUMENTS / OBSERVABLE_STATE
+```
+
+For `book_appointment` after this session:
+
+| Field | Authority | Payload | Identity | Verification |
+| --- | --- | ---: | ---: | ---: |
+| `provider_id` | `DESTINATION`, `TRUSTED` required by DENY and ALLOW | yes | **yes** | yes |
+| `patient_id` | `VALUE`, `CONTROLLED` required by DENY and ALLOW | yes | **yes** | yes |
+| `slot_start` | `VALUE`, `CONTROLLED` required by DENY and ALLOW | yes | **yes** | yes |
+| `reason` | `VALUE`, no `trust_key`; `args_system_authored` on the ALLOW | yes | **no** | yes |
+
+**Two new declarations, both on `ArgSpec`, both defaulting to today's behaviour.**
+`author: ArgAuthor` says who composes the value — `MODEL` is the default, so a newly declared
+argument behaves exactly as one declared last year. `identifies: bool` says whether the argument is
+part of *which logical action this is* — `True` is the default, for the same reason. Opting out of
+either is the deliberate act, and each is checked at import.
+
+### `reason` is composed by CareLoop, not by a model
+
+**`book_appointment.reason` is `SYSTEM`-authored and its value is one fixed literal**,
+`AUTHORED_VALUES["book_appointment", "reason"] == "CareLoop appointment scheduling request."`, never
+interpolated. It was the last free-text field on the one tool whose effect really leaves the process
+*and* the only tool with an autonomous `ALLOW` path, so nobody saw it before it was sent. Raw
+document pages are recorded verbatim as `excerpt:*` facts and rendered into the planning prompt, so
+any span of an attacker-authored page could be copied into it, sent to the clinic over HTTP,
+persisted there and echoed back on every read. Reproduced end to end against Demo World on a
+loopback socket before the repair; `tests/test_outbound_content.py` is where the canaries are now
+required to be absent from the **clinic's own record**.
+
+The sentence makes **no clinical or purpose claim**, deliberately. Nothing in CareLoop produces a
+`CONTROLLED` fact for why an appointment is needed — no `purpose` key, no validator, no promotion —
+so anything richer would be inventing information, and *"see the referral on file"* would assert a
+link nothing establishes. A richer vocabulary must begin with a promotable structured purpose fact;
+it is not this patch.
+
+**Two enforcement points, and they are independent.** *Structural, primary:* a `SYSTEM`-authored
+argument is omitted from every model-facing proposal schema, so `propose_book_appointment` carries
+exactly `rationale`, `provider_id`, `patient_id`, `slot_start` — a model that emits `reason` anyway
+is refused by `extra="forbid"` rather than having its value dropped. `ProposalToolBase.canonical()`
+is the single production seam that fills it, from the registry and from nothing else.
+*Deterministic, at the authority layer:* `allow-booking-on-validated-slot` carries
+`args_system_authored: [reason]`, so a hand-built `PlannerIntent`, a replayed corpus entry or a
+future seam supplying its own text matches no `ALLOW` rule. Measured independent: a mutant reverting
+authorship turns 21 red including the clinic-side canaries, while a mutant removing only the rule
+clause plus its loader check turns 13 red and leaves every end-to-end canary green.
+
+**Authorship is not trust, and no `Fact` is minted anywhere.** `reason` still declares no
+`trust_key`, still resolves `UNTRUSTED` in every `Decision`, and a rule requiring its trust still
+fails at load. `args_system_authored` asks *did a model write this string* and is answered before
+any rule is matched — the same separation `args_approved` has from `arg_trust_at_least`.
+
+**No new `ReasonCode`, and no `DENY` rule.** A refused wording gets `NO_RULE_MATCH` from
+deny-by-default, which is what a malformed capability already gets. A distinct code would tell a
+planner that the *content* of a descriptive field is what decided the refusal — precisely the probe
+hint invariant 6 exists to withhold — and the field is not in the model's schema, so the refusal is
+unreachable from it.
+
+**The loader refuses a ruleset that leaves an authored argument unguarded.**
+`load_rules_from_mapping` is four named steps now: `parse_rules`, `validate_rules_resolve`,
+`validate_authority_coverage`, `validate_authored_coverage`. There is no parameter that turns the
+fourth off, and `evals/replay.py::permissive_engine` still omits only the third — its violation is
+the property that mutant exists to measure, and authorship is not what it measures.
+
+**One deliberate behaviour change beyond the hole itself.** An *empty* `reason` used to reach
+`ALLOW` and book autonomously; this file called that the open content question. It is closed — the
+empty string is not the authored literal. Nothing about *completeness* moved: the call still
+supplies the key, so it is refused for what its value says rather than as a malformed capability,
+and `tests/test_policy_completeness.py` keeps the two distinguishable.
+
+### `reason` does not identify the appointment
+
+**`idempotency_key` covers exactly the arguments the registry declares identifying; `args_digest`
+still covers every one of them.** For a booking that is `(case_id, action_type, provider_id,
+patient_id, slot_start)`. The provider proves the semantics rather than a docstring asserting them:
+Demo World's `Clinic._taken` is keyed on `(provider_id, slot_start)`, so one slot is one appointment
+however it is described. CareLoop's identity is deliberately *finer* — it adds `patient_id` and the
+case — because booking a different patient into one slot is a different action and CareLoop must not
+depend on the clinic's slot rule to say so.
+
+**The two digests are never folded together, and there is no identity-only digest exposed
+anywhere.** `args_digest` is the human-consent capability identity
+(`Case.approval_for(tool_name, args_digest)`) and the executor-received-what-policy-authorised check
+in `verify_action`; narrowing it would trade one defect for a worse one. Every test that asserts key
+invariance under rewording asserts digest divergence beside it, so a mutant that narrowed both would
+still turn red.
+
+**Nothing is normalised.** `canonical_value` still takes a `str` verbatim — no case-folding, no
+trimming, no unicode normalisation — because normalisation is a laundering surface and the
+exact-match trust rule that refuses `"PT-4417 "` depends on its absence. `"review"`, `"review."`,
+`"Review"` and `" review "` key alike because the argument is *declared* non-identifying, not
+because the strings were made equal.
+
+**An argument may leave identity only where verification still compares it.**
+`check_non_identifying_arguments_are_verified` is an import-time coupling check over
+`COMPARED_ARGUMENTS`, so narrowing identity can never become a way of narrowing scrutiny. It would
+refuse `send_email.body` — which no verifier compares — and a mutant removing `reason` from both the
+comparison map and `OBSERVABLE_STATE` makes the package fail to import rather than turning a test
+red. Two further import-time checks sit beside it: every `DESTINATION` and `AUTHORITY` argument
+identifies, and no tool may identify nothing.
+
+**Reconciliation now requires the frozen key *and* the frozen argument digest to agree.**
+`Preparation.args_digest` has been recorded since the saga was written and nothing read it. With the
+key narrowed, a proposal whose descriptive text had drifted would satisfy the key clause and then be
+re-issued under the recorded key carrying different details — Demo World answers `409 KeyReused`,
+which is an external service's consistency rule standing where an authority decision should be.
+Measured: a mutant removing only that clause sends the write and parks on the clinic's refusal.
+Unreachable under the shipped flow, since a second `PLAN_PROPOSED` needs `PLANNING` and no
+post-effect state reaches it — which is exactly why it is written down.
+
+**Recovery is otherwise untouched and still reads what was frozen.** No planner, no triage, no new
+identity, no reconstruction from `AUTHORED_VALUES`: the arguments come from the durable
+`PLAN_PROPOSED` entry that produced the preparation, and `tests/test_reconcile_writers.py`'s sweep
+is unchanged. Every recovery test runs against model seams that raise if touched.
+
+**Which layer actually acts on the reopen path, stated exactly.** `DONE` → `reopen_case` →
+`GATHERING_EVIDENCE` → a fresh planning pass is the one surviving route to a second proposal over a
+completed booking, and it was the reachable form of the punctuation hazard. On the shipped
+configuration **authorship** is what neutralises it: a scripted planner that tries to repropose
+`"review."` has the wording dropped at the seam, so `PLAN_PROPOSED` carries CareLoop's own sentence
+and the reproposal is byte-identical. Identity narrowing is defence in depth *there* and
+load-bearing on the reconciliation path and for any future descriptive argument that is not
+`SYSTEM`-authored. `tests/test_action_identity.py` asserts the layer that acts rather than the one
+the test is named after — one `DUPLICATE_SUPPRESSED`, one clinic write, one appointment, one
+consumed slot, all read off Demo World.
+
+### The rollout boundary
+
+**Changing the identity definition changes the key for every historical booking, and there is no
+migration.** Historical keys are probably reconstructible from timeline data — the arguments are on
+`PLAN_PROPOSED` and the old derivation is in git — so the honest statement is not that migration is
+impossible. It is **deliberately rejected**: deployed state is synthetic, and a clean reset is safer
+than maintaining two booking-identity eras. There is no legacy-key fallback and there must never be
+one; a second identity algorithm is a second answer to one question, which is the shape this
+repository has closed three times.
+
+**A clean demo-state reset is required immediately before the first deployment containing this
+boundary**, and was deliberately *not* performed in the session that wrote it. Without it, three
+paths break, and the third is the one that matters: a case persisted `EXECUTING` or
+`WAITING_EXTERNAL` fails closed, a case persisted `VERIFYING` fails closed, and a `DONE` case booked
+before the boundary and reopened after it **misses suppression and sends a real second `POST`**,
+refused only by Demo World's slot rule.
+
+**What did not change.** `CareLoopSettlementIntegrity` is untouched and the nine telemetry
+attributes are still nine — `reason` stays in `Proposal.args`, in the provider payload, in
+`args_digest`, in `_BOOKING_COMPARISON`, in `OBSERVABLE_STATE` and therefore in both settlement
+state digests, so `careloop.effect.fields` still renders `patient_id,provider_id,reason,slot_start`
+and the frozen evaluator's `EXPECTED_FIELDS` still matches. No AWS infrastructure, no evaluator
+code, no observability adapter, no Demo World semantics, no prompt and no email content moved.
 
 
 ## Commands

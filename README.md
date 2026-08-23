@@ -212,10 +212,12 @@ One page of caption, including what each zone means and why there are exactly tw
   store is `SqliteCaseStore(":memory:")` — a restart destroys the cases along with the process.
   The durable claim lives in single-store mode (`scripts/demo_serve.py --db demo.sqlite3`) and in
   `tests/test_saga_chaos.py`, which kills a real child process over a real socket.
-- `book_appointment`'s `reason` is planner-authored free text. It carries no trust key, no content
-  constraint and no human review before an autonomous booking, and document evidence can influence
-  it. Verification compares it against the clinic's record, which is fidelity rather than
-  provenance.
+- `book_appointment`'s `reason` is composed by CareLoop, not by the planner: one fixed literal,
+  declared in the tool registry, never interpolated. It is not a field of the model-facing
+  `propose_book_appointment` schema, and the autonomous booking rule requires exactly that value.
+  So it carries no document-derived content — but it also carries no clinical information, because
+  CareLoop holds no validated fact for *why* an appointment is needed. A richer reason would have
+  to start with one.
 - The offline suite only ever sees the mock model, so green means the spine is correct, not that a
   provider is well-behaved. Three separate sessions found bugs that no offline test could catch.
 - **A proposal the provider cannot form twice running parks the case for a person, and there is no

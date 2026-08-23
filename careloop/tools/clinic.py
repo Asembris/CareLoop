@@ -42,6 +42,7 @@ from typing import Final
 import httpx
 
 from careloop.tools.executor import DEFAULT_HANDLERS, Handler, MockExternalExecutor
+from careloop.tools.provider import ProviderRefused, ProviderUnavailable
 from careloop.tools.results import AppointmentBooked
 
 #: How long any single clinic call may take. Small, and not configurable per call: a graph node
@@ -73,17 +74,21 @@ IDEMPOTENCY_HEADER: Final[str] = "Idempotency-Key"
 CLINIC_SESSION_HEADER: Final[str] = "X-Demo-Session"
 
 
-class ClinicUnavailable(Exception):
+class ClinicUnavailable(ProviderUnavailable):
     """Raised when the clinic could not be reached at all.
 
     Distinct from :class:`ClinicRefused` because the two mean different things about the world: a
     refusal is the clinic answering, and this is nobody answering. Neither is recoverable inside a
     run — a node raising fails the case loudly, which is the right outcome for an integration that
     is down.
+
+    A :class:`~careloop.tools.provider.ProviderUnavailable`, so the recovery layer translates it
+    without naming this clinic. Everything that already caught this type is unaffected: widening a
+    base class adds callers, it does not remove any.
     """
 
 
-class ClinicRefused(Exception):
+class ClinicRefused(ProviderRefused):
     """Raised when the clinic answered and declined.
 
     An unknown slot, a slot somebody else holds, or a key already recorded against a different

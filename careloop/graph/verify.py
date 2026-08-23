@@ -49,7 +49,7 @@ from pydantic import BaseModel, ConfigDict
 
 from careloop.state.case import ActionRecord
 from careloop.tools.idempotency import args_digest, canonical_args, idempotency_key
-from careloop.tools.registry import REGISTRY
+from careloop.tools.registry import REGISTRY, ToolRegistry
 from careloop.tools.results import (
     AccessGranted,
     ActionResult,
@@ -224,10 +224,21 @@ def _mismatches(
     return found
 
 
+#: Which email result field is compared against which authorised argument.
+#:
+#: ``body`` is deliberately absent: :class:`~careloop.tools.results.EmailSent` does not echo it, so
+#: there is nothing to compare it against. That absence is now load-bearing rather than incidental —
+#: :func:`check_non_identifying_arguments_are_verified` reads this table, so ``send_email.body``
+#: cannot be declared non-identifying while nothing checks it.
+_EMAIL_COMPARISON: Final[Mapping[str, str]] = {"to": "to", "subject": "subject"}
+
+_EMAIL_IDENTIFIER: Final[str] = "message_id"
+
+
 def _verify_email(args: Mapping[str, str], result: ActionResult) -> list[str]:
     if not isinstance(result, EmailSent):
         return [f"expected EmailSent, the action recorded a {type(result).__name__}"]
-    return _mismatches(result, args, {"to": "to", "subject": "subject"}, "message_id")
+    return _mismatches(result, args, _EMAIL_COMPARISON, _EMAIL_IDENTIFIER)
 
 
 #: Which booking result field is compared against which authorised argument.
@@ -263,24 +274,51 @@ def _verify_booking(args: Mapping[str, str], result: ActionResult) -> list[str]:
     return _mismatches(result, args, _BOOKING_COMPARISON, _BOOKING_IDENTIFIER)
 
 
+_UPLOAD_COMPARISON: Final[Mapping[str, str]] = {
+    "portal_id": "portal_id",
+    "document_id": "document_id",
+}
+
+_UPLOAD_IDENTIFIER: Final[str] = "upload_id"
+
+
 def _verify_upload(args: Mapping[str, str], result: ActionResult) -> list[str]:
     if not isinstance(result, DocumentUploaded):
         return [f"expected DocumentUploaded, the action recorded a {type(result).__name__}"]
-    return _mismatches(
-        result, args, {"portal_id": "portal_id", "document_id": "document_id"}, "upload_id"
-    )
+    return _mismatches(result, args, _UPLOAD_COMPARISON, _UPLOAD_IDENTIFIER)
+
+
+_GRANT_COMPARISON: Final[Mapping[str, str]] = {
+    "grantee": "grantee",
+    "role": "role",
+    "portal_id": "portal_id",
+}
+
+_GRANT_IDENTIFIER: Final[str] = "grant_id"
 
 
 def _verify_grant(args: Mapping[str, str], result: ActionResult) -> list[str]:
     if not isinstance(result, AccessGranted):
         return [f"expected AccessGranted, the action recorded a {type(result).__name__}"]
-    return _mismatches(
-        result,
-        args,
-        {"grantee": "grantee", "role": "role", "portal_id": "portal_id"},
-        "grant_id",
-    )
+    return _mismatches(result, args, _GRANT_COMPARISON, _GRANT_IDENTIFIER)
 
+
+#: Every argument each effect tool's verifier compares, keyed by tool name.
+#:
+#: The values of each map are argument names; the keys are the result fields they are compared
+#: against. Assembled from the four comparison tables rather than restated, so a verifier that stops
+#: comparing something cannot leave this table saying it still does.
+#:
+#: Its one reader is :func:`check_non_identifying_arguments_are_verified`. That is the coupling the
+#: whole identity declaration rests on: an argument may leave the idempotency key only if something
+#: independent still checks it afterwards, so narrowing identity can never be a way of narrowing
+#: scrutiny.
+COMPARED_ARGUMENTS: Final[Mapping[str, frozenset[str]]] = {
+    "send_email": frozenset(_EMAIL_COMPARISON.values()),
+    "book_appointment": frozenset(_BOOKING_COMPARISON.values()),
+    "upload_document": frozenset(_UPLOAD_COMPARISON.values()),
+    "grant_portal_access": frozenset(_GRANT_COMPARISON.values()),
+}
 
 VERIFIERS: Final[Mapping[str, Verifier]] = {
     "send_email": _verify_email,
@@ -502,9 +540,42 @@ def check_observable_state_matches_verification() -> None:
             )
 
 
+def check_non_identifying_arguments_are_verified(registry: ToolRegistry = REGISTRY) -> None:
+    """Fail at import if an argument left out of the action's identity is checked by nothing.
+
+    **The coupling that makes narrowing identity safe**, and the reason it is expressed as a check
+    rather than as a paragraph. Excluding an argument from
+    :func:`careloop.tools.idempotency.idempotency_key` says two calls differing only there are the
+    same logical action; it says nothing whatever about the value being harmless, and it must never
+    become a way to stop looking at one. So an argument may leave identity only where a verifier
+    still compares it against what the action actually did — and, for an independently observable
+    action type, against what the external system holds.
+
+    Scoped to external-effect tools, because a tool with no effect has no verifier by design and
+    nothing to compare against.
+
+    Raises:
+        UnverifiableAction: naming the tool and the arguments that are neither identifying nor
+            compared.
+    """
+    for tool in registry:
+        if not tool.external_effect:
+            continue
+        unchecked = sorted(
+            tool.arg_names - tool.identifying_args - COMPARED_ARGUMENTS.get(tool.name, frozenset())
+        )
+        if unchecked:
+            raise UnverifiableAction(
+                f"{tool.name} declares argument(s) {unchecked} that neither identify the action "
+                f"nor are compared by its verifier; an argument may leave the idempotency key only "
+                f"where something still checks it afterwards"
+            )
+
+
 check_verifiers_cover_the_registry()
 check_observable_tools_are_declared()
 check_observable_state_matches_verification()
+check_non_identifying_arguments_are_verified()
 
 
 def verify_action(
@@ -600,6 +671,7 @@ def verify_action(
 
 
 __all__ = [
+    "COMPARED_ARGUMENTS",
     "INDEPENDENTLY_OBSERVABLE",
     "OBSERVABLE_STATE",
     "RESULT_TYPES",
@@ -613,6 +685,7 @@ __all__ = [
     "UnverifiableAction",
     "Verification",
     "Verifier",
+    "check_non_identifying_arguments_are_verified",
     "check_observable_state_matches_verification",
     "check_observable_tools_are_declared",
     "check_verifiers_cover_the_registry",

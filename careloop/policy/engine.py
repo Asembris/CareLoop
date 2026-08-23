@@ -73,7 +73,7 @@ from careloop.provenance.canonical import canonical_value
 from careloop.provenance.trust import TrustLevel, at_least
 from careloop.state.case import Case
 from careloop.tools.idempotency import UncanonicalizableArgument, args_digest
-from careloop.tools.registry import REGISTRY, ToolRegistry
+from careloop.tools.registry import AUTHORED_VALUES, REGISTRY, ToolRegistry
 
 
 def resolve_trust(fact_key: str | None, value: object, case: Case) -> TrustLevel:
@@ -139,6 +139,16 @@ def _condition_holds(
 
     for arg_name in condition.args_present:
         if canonical_value(args.get(arg_name)) in (None, ""):
+            return False
+
+    # **Authorship, which is not trust and not approval.** It asks whether the supplied value is
+    # byte-identical to the fixed literal CareLoop composes for this argument, so a model-authored
+    # string fails it whatever the string says. Compared through ``canonical_value`` because that is
+    # the one reduction the engine and the idempotency key share; a value with no canonical form
+    # answers ``None``, which cannot equal a declared literal, so it fails closed.
+    for arg_name in condition.args_system_authored:
+        declared = AUTHORED_VALUES.get((tool_name, arg_name))
+        if declared is None or canonical_value(args.get(arg_name)) != declared:
             return False
 
     if condition.args_approved is None:

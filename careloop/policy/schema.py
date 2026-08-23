@@ -72,6 +72,28 @@ class Condition(BaseModel):
     args_present: tuple[str, ...] = ()
     """Holds when the call supplies every named argument with a non-empty value."""
 
+    args_system_authored: tuple[str, ...] = ()
+    """Holds when every named argument carries exactly the value CareLoop composes for it.
+
+    Deterministic, and deliberately not a statement about trust. It compares the supplied canonical
+    value against :data:`careloop.tools.registry.AUTHORED_VALUES` — a fixed literal — and answers
+    *did a model write this string*. Nothing is promoted, no
+    :class:`~careloop.provenance.facts.Fact` is minted, and no trust level moves; an argument named
+    here still resolves ``UNTRUSTED`` and would still fail a rule that required its trust.
+
+    **The second of two enforcement points**, and the reason it exists is that the first is a
+    schema. A ``SYSTEM``-authored argument is omitted from every model-facing proposal schema, so a
+    model cannot express it — but a hand-built
+    :class:`~careloop.agents.schemas.PlannerIntentBase`, a replayed corpus entry or a future seam
+    can, and an ``ALLOW`` rule that did not read this would authorise whatever they put there.
+    Naming it in the rule is what stops the positive path depending on the schema being the thing
+    that catches it, exactly as ``allow-approved-portal-access-grant`` names ``portal_id`` beside a
+    ``DENY`` that already refuses it.
+
+    Naming an argument no tool declares ``SYSTEM``-authored fails at *load*, in the loader's
+    registry-resolution step, rather than becoming a clause that can never hold.
+    """
+
     args_approved: bool | None = None
     """Holds when a caregiver's approval covering exactly these arguments is (or is not) recorded.
 
@@ -98,6 +120,7 @@ class Condition(BaseModel):
         return frozenset(
             [predicate.arg for predicate in (*self.arg_trust_below, *self.arg_trust_at_least)]
             + list(self.args_present)
+            + list(self.args_system_authored)
         )
 
     @property

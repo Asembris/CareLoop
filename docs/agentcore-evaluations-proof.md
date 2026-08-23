@@ -207,13 +207,18 @@ the idempotency key it already held, and no second write left the process.
 - **AWS does not independently query the clinic.** The independent read is CareLoop's own; the
   independence being tested is between CareLoop's self-authored claim attributes and the
   instrumentation-authored transport spans in the same trace.
-- **`book_appointment.reason` is planner-authored free text**, and it is unstable at the
-  punctuation level. Measured here: reproposals alternated between `"…for cardiology review"` and
-  `"…for cardiology review."`, which moves the argument digest, moves the idempotency key and
-  defeats duplicate suppression. Rows 3 and 4 each needed retries for that reason — three fresh
-  attempts for row 4 — and each failed attempt ended `FAILED` on `ClinicRefused` when the second
-  booking hit a slot the clinic already held. This is the behaviour CLAUDE.md documents; it was
-  reproduced in production here rather than inferred.
+- **`book_appointment.reason` was planner-authored free text when these traces were captured**,
+  and it was unstable at the punctuation level. Measured here: reproposals alternated between
+  `"…for cardiology review"` and `"…for cardiology review."`, which moved the argument digest,
+  moved the idempotency key and defeated duplicate suppression. Rows 3 and 4 each needed retries
+  for that reason — three fresh attempts for row 4 — and each failed attempt ended `FAILED` on
+  `ClinicRefused` when the second booking hit a slot the clinic already held. It was reproduced in
+  production here rather than inferred, and it has since been closed at both ends: `reason` is
+  `SYSTEM`-authored and non-identifying, so the wording cannot vary and a variation would not be a
+  second action. **Nothing about this proof moved.** `reason` is still in `OBSERVABLE_STATE`, so
+  `careloop.effect.fields` still renders `patient_id,provider_id,reason,slot_start`, the frozen
+  evaluator's `EXPECTED_FIELDS` still matches, and the nine attributes are still nine. The rows
+  above are the record of what was measured on the day, retries included.
 - **No AgentCore service role and no Lambda resource-based policy were created**, and
   `lambda:GetPolicy` returned `ResourceNotFoundException` both before `CreateEvaluator` and after
   six successful `Evaluate` calls. This holds for the **measured on-demand path** only and does not

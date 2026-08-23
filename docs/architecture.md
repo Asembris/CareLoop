@@ -130,9 +130,17 @@ The fourth was missing at both ends until session O, and this page said so: a cl
 appointment and rewrote only *why* it was made reached `VERIFICATION_PASSED` and `DONE` with the
 timeline reporting `read_back: true`. It is compared now, against the exact value CareLoop executed
 rather than against a value policy authorised — `reason` carries no `trust_key` and by design cannot,
-since a rule requiring its trust fails at load. So this is fidelity to an external record, and
-**not** provenance: whether planner-authored free text should reach a clinic at all is still open
-and is listed under the honest limits in the README.
+since a rule requiring its trust fails at load. So this comparison is fidelity to an external record
+and **not** provenance.
+
+Provenance is answered one layer over, and separately. `reason` is `SYSTEM`-authored: CareLoop
+composes it from a fixed literal in the tool registry, it is absent from the model-facing
+`propose_book_appointment` schema, and `allow-booking-on-validated-slot` requires exactly that value
+through `args_system_authored`. Authorship mints no `Fact` and moves no trust level, so the two
+questions stay apart — and both are now closed rather than one of them being open. `reason` is also
+declared **non-identifying**, so rewording it is not a second appointment; it remains in the payload,
+in `args_digest`, in this comparison and in both settlement state digests. See *Four questions about
+one argument* in `CLAUDE.md`.
 
 **What it does not prove.** It checks the effect performed against the effect authorised. It does
 not prove the outside world did the right thing, that the appointment suits the patient, or that

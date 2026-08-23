@@ -24,6 +24,10 @@ by reading that service back.
 **You never need to press reset.** Pressing a scenario resets the world first, automatically, in
 the same request.
 
+**If you only have time for two, make the second one 04.** Scenario 01 is the loop working; 04 is
+the loop surviving an outcome it could not read, which is the harder thing and the one nothing else
+on the page shows.
+
 **You have your own world.** Opening the URL mints you one — your own cases, your own clinic — so
 another judge reading this page at the same moment cannot see your cases, reset them, or take the
 appointment slot you are about to book. Nothing is asked of you and there is nothing to sign into;
@@ -115,6 +119,64 @@ The difference is real. 01 finishes on an action against the external clinic and
 reading that clinic back. 03 finishes on an email, which is simulated, so verification can only
 confirm that what was performed matches what was authorised. Both say "done"; only one claims the
 outside world agreed. A seal that played on every completion would mean nothing.
+
+---
+
+## The fourth scenario: the answer gets lost
+
+**04 — The answer gets lost.** This is the one that is hard to see anywhere else, and it is worth
+the ten seconds.
+
+Press it and watch the row. It books, and then it stops on a line saying **"Sent, with no answer
+back"**. That is true: the clinic accepted the appointment and created it, and the reply was thrown
+away before CareLoop could read it. From CareLoop's position an outside system has simply not
+answered, and it does not know whether the booking happened.
+
+Then — with nothing clicked, nothing refreshed and nothing restarted — the row moves on by itself
+and finishes **Done · independently verified**. Open the case and the trail says what it did:
+
+```
+The exact booking was written down before anything was sent
+No answer came back — CareLoop does not yet know whether it happened
+Retrying the same frozen booking identity — never a new booking
+Appointment booked
+Clinic record checked independently — match
+```
+
+**We throw the reply away on purpose, and the card says so.** That is the only thing this scenario
+adds; everything after it is the system that ships — the same policy verdict, the same action
+identity frozen before anything left the process, the same five-second reconciliation the deployed
+build uses, and the same independent read of the clinic's own record.
+
+**The distinction worth getting right.** CareLoop *did* send the booking again. It re-sent the exact
+identity it had frozen beforehand, which is why the clinic answered with the appointment it already
+had instead of making a second one. So:
+
+| | |
+|---|---|
+| requests that really reached the clinic | **2** |
+| action identities | **1** |
+| appointments at the clinic | **1** |
+| plans made | **1** — none after the answer was lost |
+
+Check the last one yourself at `/clinic/slots?session=<your world>`: two of the three seeded slots
+are still free, not one. The evidence block on the finished case says the same thing in the same
+words, and `tests/test_recovery_copy.py` fails the build if any screen in this product ever starts
+claiming CareLoop avoided the second request.
+
+**What the live demo does not show, and where it is.** A CareLoop process that is *killed*
+mid-booking recovers the same way, from a durable store, in a brand-new process. That cannot be
+demonstrated on this URL — every visitor's world is held in memory so the public demo can give each
+judge their own, so a process death there would destroy the very durability the claim is about (and
+everyone else's cases with it). It is proven in the repository instead, against a real child
+process killed with `os._exit` on the line after the clinic confirms:
+
+```bash
+.venv/Scripts/python -m pytest tests/test_saga_chaos.py -q
+```
+
+`scripts/resume_demo.py` is the same property over a file on disk, carrying one case through three
+separate processes.
 
 ---
 

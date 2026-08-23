@@ -110,6 +110,21 @@ export default function RecoveryLoop() {
         action. It is one observation of one record — and if the observer is missing, verification
         refuses to certify rather than quietly looking away.
       </p>
+
+      {/* A different failure, and the distinction is the whole reason it has its own paragraph.
+          Above, the world *disagreed* and a person is needed. Here the world never answered, so
+          there is nothing for a person to decide and CareLoop can settle it itself. */}
+      <span style={STEP_LABEL}>WHEN THE WORLD DOES NOT ANSWER</span>
+
+      <p style={{ margin: 0, fontSize: 14, lineHeight: 1.6, color: "var(--muted-foreground)", maxWidth: "62ch" }}>
+        A request that gets no reply is the harder case: the appointment may exist and CareLoop
+        holds nothing. It writes the action&apos;s exact identity down <em>before</em> anything
+        leaves the process, waits, and then re-sends that same identity — so the clinic answers with
+        the appointment it already made rather than creating a second one, and an independent read
+        of the clinic&apos;s own record is what finally closes the case. No model is asked anything
+        along the way. Scenario 04 does this live; a killed process recovering the same way from a
+        durable store is proven in the repository, in <code>tests/test_saga_chaos.py</code>.
+      </p>
     </section>
   );
 }

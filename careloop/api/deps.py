@@ -46,9 +46,9 @@ CAREGIVER_HEADER: Final[str] = "X-Caregiver"
 #:
 #: The two post-effect states in which a durably prepared action has no recorded result:
 #: ``EXECUTING`` is a process that died mid-dispatch, ``WAITING_EXTERNAL`` is a provider that did
-#: not answer. Both
-#: route to :class:`careloop.graph.nodes.ReconcileNode`, which is why both are swept and why a wake
-#: that finds a case anywhere else has found a stale opportunity rather than a problem.
+#: not answer. Both route to :class:`careloop.graph.nodes.ReconcileNode`, which is why both are
+#: swept, and why a wake that finds a case anywhere else has found a stale opportunity rather than
+#: a problem.
 #:
 #: Named once and read by the sweep and by the wake, so the two triggers cannot come to disagree
 #: about what is recoverable.
@@ -150,10 +150,10 @@ class ApiDeps:
     wakes: ReconcileWaker = field(default_factory=ReconcileWaker)
     """Reconciliation wakes pending in this world. Execution context, exactly as :attr:`runs` is.
 
-    **Nothing arms one yet.** The object is here so the lifecycles that tear a world down — the demo
-    reset, idle eviction and shutdown — already close the boundary a wake would have to cross, and
-    so that closing it is reviewable on its own rather than arriving underneath the scheduling
-    policy that will use it. See :mod:`careloop.api.wake`.
+    Armed by :meth:`_consider_wake` when a run leaves its case in ``WAITING_EXTERNAL``, and by
+    nothing else. What a wake does when it fires is :meth:`register_recovery`; when it fires is
+    :data:`careloop.api.wake.WAKE_DELAYS`. See :mod:`careloop.api.wake` for why stopping one is the
+    hard part.
 
     Per world for the reason :attr:`runs` is: a reset reaches the wakes belonging to the store it is
     about to clear and has no way to express reaching another visitor's.
@@ -327,10 +327,60 @@ class ApiDeps:
         "what happens when a run finishes" one statement rather than five, and it is the seam the
         wake scheduling hangs off.
 
+        **The ``finally`` is the activation, and it reads the store rather than the exception.** A
+        run ends five ways — the case rests, it parks, it fails, the SDK's bound fires, or a node
+        raises — and what decides whether another reconciliation opportunity is owed is none of
+        those: it is the state the case is durably in afterwards. Inferring it from how the run
+        ended would put a scheduling decision on the shape of a failure, which is exactly the sort
+        of second source of truth this repository keeps closing. ``finally`` rather than ``else``
+        for the same reason: a run that lost a compare-and-set race raised, and the case the winner
+        left behind may well be waiting.
+
         Raises:
             RunAlreadyInFlight: if this case already has an unsettled run.
         """
-        return self.runs.start(case_id, lambda: self.graph_runner(self.store, inbound, case_id))
+
+        async def run() -> RunResult:
+            try:
+                return await self.graph_runner(self.store, inbound, case_id)
+            finally:
+                self._consider_wake(case_id)
+
+        return self.runs.start(case_id, run)
+
+    def _consider_wake(self, case_id: str) -> None:
+        """Arm or withdraw this case's reconciliation wake, from what the store now says.
+
+        ``WAITING_EXTERNAL`` means a durably prepared, replay-safe action was dispatched and the
+        provider did not answer. The case can settle itself the moment something does, so it is
+        owed another opportunity — and until this existed the only thing that would ever supply one
+        was a restart.
+
+        **Anything else withdraws**, including the states that look like they might want one.
+        ``DONE`` and ``FAILED`` are finished; ``AWAITING_HUMAN`` is waiting for a person and no
+        amount of retrying is what it needs; a case that has gone back to work has a run of its own.
+        Withdrawing also clears the process-local backoff, so a case that waits again later starts
+        at the first delay rather than inheriting an old episode's.
+
+        **It never fails a run.** This is called from a ``finally``, so an exception raised here
+        would replace whatever the run was actually going to report — a scheduling problem
+        masquerading as a graph failure. Logged loudly instead, and the case stays exactly as
+        durable as it was: the startup sweep still finds it, and so does the next run that settles
+        on it.
+        """
+        try:
+            try:
+                case = self.store.get(case_id)
+            except CaseNotFound:
+                self.wakes.forget(case_id)
+                return
+
+            if case.state is CaseState.WAITING_EXTERNAL:
+                self.wakes.schedule(case_id, lambda: self.register_recovery(case_id))
+            else:
+                self.wakes.forget(case_id)
+        except Exception:
+            logger.exception("could not decide a reconciliation wake for case %s", case_id)
 
 
 def deps(

@@ -54,6 +54,24 @@ def waited(event: threading.Event, what: str) -> None:
     assert event.wait(HANDSHAKE_TIMEOUT), f"timed out waiting for {what}"
 
 
+#: How many loop turns a test gives the scheduler before deciding it is never going to act.
+#:
+#: Every wait below is on a synchronous hand-off with no I/O in it, so a correct run needs a
+#: handful.
+#: Bounded rather than open because an unbounded spin turns a mutant into a hang, and a hang is a
+#: measurement nobody can read.
+TURNS = 500
+
+
+async def until(predicate, what: str) -> None:
+    """Give the loop turns until ``predicate`` holds, then fail rather than spin forever."""
+    for _ in range(TURNS):
+        if predicate():
+            return
+        await asyncio.sleep(0)
+    raise AssertionError(f"timed out waiting for {what}")
+
+
 def never() -> Callable[[float], Awaitable[None]]:
     """A sleeper that never returns, so a wake stays pending until something withdraws it."""
 
@@ -219,8 +237,7 @@ class TestTheStopBoundaryIsLinearized:
             waker.close()
             gate.set()
             # The wake withdraws itself on the way through, so this settles rather than spins.
-            while waker.pending():
-                await asyncio.sleep(0)
+            await until(lambda: not waker.pending(), "the wake to fire")
             return runs, waker
 
         runs, waker = asyncio.run(scenario())
@@ -249,8 +266,7 @@ class TestTheStopBoundaryIsLinearized:
             waker.close()
             waker.reopen()
             gate.set()
-            while waker.pending():
-                await asyncio.sleep(0)
+            await until(lambda: not waker.pending(), "the wake to fire")
             await runs.finish()
             return runs
 
@@ -342,14 +358,12 @@ class TestDeferredWakesSurviveAReversibleClose:
             assert waker.arm(CASE, 0.0, runs.start)
             waker.close()
             gate.set()
-            while waker.pending():
-                await asyncio.sleep(0)
+            await until(lambda: not waker.pending(), "the wake to fire")
             assert waker.deferred() == (CASE,)
 
             waker.reopen()
             # Restored as a fresh pending wake, which then fires: the sleeper's gate is still open.
-            while waker.pending():
-                await asyncio.sleep(0)
+            await until(lambda: not waker.pending(), "the wake to fire")
             await runs.finish()
             return runs, waker
 
@@ -371,8 +385,7 @@ class TestDeferredWakesSurviveAReversibleClose:
             deferred = waker.deferred()
 
             waker.reopen()
-            while not waker.pending():
-                await asyncio.sleep(0)
+            await until(waker.pending, "the deferred wake to be restored")
             restored = waker.pending()
 
             await waker.quiesce()
@@ -401,14 +414,12 @@ class TestDeferredWakesSurviveAReversibleClose:
             assert waker.arm(CASE, 0.0, runs.start)
             waker.close()
             gate.set()
-            while waker.pending():
-                await asyncio.sleep(0)
+            await until(lambda: not waker.pending(), "the wake to fire")
             assert waker.deferred() == (CASE,)
 
             await asyncio.to_thread(waker.reopen)
             # The restoration is queued on this loop; giving it turns is all that is needed.
-            while not runs.started:
-                await asyncio.sleep(0)
+            await until(lambda: runs.started, "the restored wake to register a run")
             await runs.finish()
             return runs, waker
 
@@ -429,8 +440,7 @@ class TestDeferredWakesSurviveAReversibleClose:
             waker.reopen()
             still_deferred = waker.deferred()
             waker.reopen()
-            while not waker.pending():
-                await asyncio.sleep(0)
+            await until(waker.pending, "the deferred wake to be restored")
             restored = waker.pending()
 
             await waker.quiesce()
@@ -522,8 +532,7 @@ class TestTheBackoffAdvancesOnlyOnRealAttempts:
             waker = ReconcileWaker(sleeper=sleeper)
             for _ in range(3):
                 assert waker.schedule(CASE, lambda: RecoveryOutcome.STARTED)
-                while waker.pending():
-                    await asyncio.sleep(0)
+                await until(lambda: not waker.pending(), "the wake to fire")
             return delays, waker.attempts(CASE)
 
         delays, attempts = asyncio.run(scenario())
@@ -553,8 +562,7 @@ class TestTheBackoffAdvancesOnlyOnRealAttempts:
             waker = ReconcileWaker(sleeper=sleeper)
             assert waker.arm(CASE, 0.0, exploding)
             task = next(iter(waker._pending.values()))
-            while waker.pending():
-                await asyncio.sleep(0)
+            await until(lambda: not waker.pending(), "the wake to fire")
             for _ in range(3):
                 await asyncio.sleep(0)
             return waker.attempts(CASE), task.done() and task.exception() is None
@@ -575,8 +583,7 @@ class TestTheBackoffAdvancesOnlyOnRealAttempts:
             waker = ReconcileWaker(sleeper=sleeper)
             for _ in range(3):
                 assert waker.schedule(CASE, lambda: RecoveryOutcome.RUN_ALREADY_IN_FLIGHT)
-                while waker.pending():
-                    await asyncio.sleep(0)
+                await until(lambda: not waker.pending(), "the wake to fire")
             return delays, waker.attempts(CASE)
 
         delays, attempts = asyncio.run(scenario())
@@ -591,13 +598,11 @@ class TestTheBackoffAdvancesOnlyOnRealAttempts:
 
             waker = ReconcileWaker(sleeper=sleeper)
             assert waker.schedule(CASE, lambda: RecoveryOutcome.STARTED)
-            while waker.pending():
-                await asyncio.sleep(0)
+            await until(lambda: not waker.pending(), "the wake to fire")
             after_start = waker.attempts(CASE)
 
             assert waker.schedule(CASE, lambda: RecoveryOutcome.STATE_MOVED)
-            while waker.pending():
-                await asyncio.sleep(0)
+            await until(lambda: not waker.pending(), "the wake to fire")
             after_move = waker.attempts(CASE)
 
             return after_start, after_move
@@ -611,8 +616,7 @@ class TestTheBackoffAdvancesOnlyOnRealAttempts:
 
             waker = ReconcileWaker(sleeper=sleeper)
             assert waker.schedule(CASE, lambda: RecoveryOutcome.STARTED)
-            while waker.pending():
-                await asyncio.sleep(0)
+            await until(lambda: not waker.pending(), "the wake to fire")
             before = waker.attempts(CASE)
 
             forgotten = waker.forget(CASE)
@@ -827,8 +831,7 @@ class TestResetQuiescesRatherThanCancelling:
 
             assert waker.arm(CASE, 0.0, runs.start)
             gate.set()
-            while not runs.started:
-                await asyncio.sleep(0)
+            await until(lambda: runs.started, "the restored wake to register a run")
 
             try:
                 await app_module.reset_world(world)

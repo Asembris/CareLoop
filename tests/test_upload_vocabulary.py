@@ -53,6 +53,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SWEPT: tuple[tuple[str, str], ...] = (
     ("careloop", "*.py"),
     ("demoworld", "*.py"),
+    ("objectstore", "*.py"),
     ("evaluators", "*.py"),
     ("scripts", "*.py"),
     ("docs", "architecture.md"),

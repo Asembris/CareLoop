@@ -6,9 +6,10 @@ which applies is a fact about the *provider*, not about the case, the tool's imp
 inconvenient stopping would be:
 
 ``IDEMPOTENT_REPLAYABLE``
-    The provider keys writes by an idempotency key, durably, and returns the original resource when
-    the same key arrives again. Re-issuing the frozen identity is therefore a *lookup that also
-    repairs*: it cannot create a second effect, and it answers the question the crash left open.
+    Re-issuing the frozen identity is a *lookup that also repairs*: it cannot create a second
+    effect, and it answers the question the crash left open. **How a provider delivers that is its
+    own business** — see the member's docstring for the two measured shapes, which have almost
+    nothing in common mechanically.
 
 ``NOT_REPLAYABLE``
     It does not, or CareLoop has not measured that it does. An action of this class whose outcome is
@@ -52,39 +53,68 @@ class RecoveryClass(StrEnum):
     """What may be done about one action type whose outcome a crash left unknown."""
 
     IDEMPOTENT_REPLAYABLE = "IDEMPOTENT_REPLAYABLE"
-    """The provider's own idempotency makes re-issuing the frozen identity safe.
+    """Re-issuing the frozen identity cannot create a second effect and settles what the crash left
+    open.
 
-    A claim about a *measured* contract and not an aspiration. For ``book_appointment`` it is Demo
-    World's ``Clinic._by_key``: the same key returns the recorded appointment with ``200`` rather
-    than ``201``, consumes no second slot, and refuses with ``409`` if the key names different
-    arguments. ``tests/test_clinic_replay.py`` measures all three against a real service over a
-    loopback socket, so this member is backed by transport rather than by a docstring.
+    A claim about a *measured* contract and not an aspiration — and deliberately a claim about the
+    **outcome** rather than about a mechanism, because the two members of this class deliver it in
+    ways that share nothing.
+
+    ``book_appointment`` is the shape this member used to be defined as: Demo World's
+    ``Clinic._by_key`` keys writes by the idempotency header and **returns the original
+    appointment** with ``200`` rather than ``201``, consumes no second slot, and refuses with
+    ``409`` if the key names different arguments. ``tests/test_clinic_replay.py`` measures all three
+    against a real service over a loopback socket.
+
+    ``upload_document`` earns the same class by a different route, and the earlier wording would
+    have been false about it. **Amazon S3 has no concept of an idempotency key and returns nothing
+    on a duplicate**: a ``PutObject`` carrying ``IfNoneMatch="*"`` answers ``412
+    PreconditionFailed`` and leaves the existing object exactly as it was. What makes the replay
+    safe is *create-once* — measured, and measured together with the fact that dropping the
+    precondition silently overwrites — and what settles the outcome is a fresh ``GetObject`` that
+    :meth:`careloop.tools.objectstore.ObjectStoreClient.put_once` issues in answer to the ``412``,
+    comparing the bytes the store returned against the bytes CareLoop was about to write. Equal is
+    convergence; different is
+    :class:`~careloop.tools.objectstore.ObjectIdentityConflict` and fails closed.
+    ``docs/objectstore-contract.md`` records the measurement and
+    ``tests/test_objectstore_contract.py`` re-runs it offline on every suite run.
+
+    So: *the provider guarantees no second effect; CareLoop assembles the answer.* A member here
+    asserts the first and takes responsibility for the second.
     """
 
     NOT_REPLAYABLE = "NOT_REPLAYABLE"
     """Nothing CareLoop has measured makes a second dispatch safe, so it will not make one.
 
-    The three simulated effects are here. Their handlers key off an in-process ledger that dies with
-    the process, so there is no durable provider idempotency to rely on — and the real integrations
-    they stand for are worse, not better. An ambiguous outcome on one of these parks the case for a
-    person with :attr:`~careloop.policy.verdicts.ReasonCode.EXTERNAL_OUTCOME_NOT_ESTABLISHED`.
+    The two remaining simulated effects are here. Their handlers key off an in-process ledger that
+    dies with the process, so there is no durable provider idempotency to rely on — and the real
+    integrations they stand for are worse, not better. An email that may or may not have been sent
+    is the clearest case: no transactional provider CareLoop has measured offers a way to ask, and
+    a second send is a second message in somebody's inbox. An ambiguous outcome on one of these
+    parks the case for a person with
+    :attr:`~careloop.policy.verdicts.ReasonCode.EXTERNAL_OUTCOME_NOT_ESTABLISHED`.
     """
 
 
 #: The recovery class of every external-effect tool.
 #:
-#: **Only ``book_appointment`` is replayable, and that is the honest state of the system rather than
-#: a staging post.** It is the one effect that reaches a real external service, the one whose
-#: provider keys writes durably, and the one CareLoop can independently read back. The other three
-#: are simulated on purpose — one action made genuinely external is the proof — so classifying them
-#: as replayable would be inferring a provider guarantee from the fact that a mock is deterministic.
+#: **The two effects with real providers are replayable and the two simulated ones are not**, which
+#: is the honest state of the system. ``send_email`` and ``grant_portal_access`` reach no external
+#: service: their handlers key off an in-process ledger that dies with the process, so classifying
+#: them as replayable would be inferring a provider guarantee from the fact that a mock is
+#: deterministic — and the real integrations they stand for offer less, not more.
 #:
-#: Adding a member here is a claim that a measured contract exists. The test that backs it belongs
-#: beside the one for booking, driven against the real service, before the entry is written.
+#: Adding a member here is a claim that a measured contract exists, and the two that are here were
+#: measured separately against their own providers before the entry was written:
+#: ``tests/test_clinic_replay.py`` for the clinic and ``docs/objectstore-contract.md`` plus
+#: ``tests/test_objectstore_contract.py`` for the object store. Note how little the two contracts
+#: have in common — one replays the original record, the other refuses and makes CareLoop look —
+#: which is exactly why :class:`RecoveryClass` is defined by the outcome it guarantees rather than
+#: by the mechanism that delivers it.
 RECOVERY_CLASS: Final[Mapping[str, RecoveryClass]] = {
     "book_appointment": RecoveryClass.IDEMPOTENT_REPLAYABLE,
+    "upload_document": RecoveryClass.IDEMPOTENT_REPLAYABLE,
     "send_email": RecoveryClass.NOT_REPLAYABLE,
-    "upload_document": RecoveryClass.NOT_REPLAYABLE,
     "grant_portal_access": RecoveryClass.NOT_REPLAYABLE,
 }
 
@@ -125,8 +155,9 @@ def may_replay(action_type: str, *, observers: Collection[str]) -> bool:
     would reach ``DONE`` on the strength of CareLoop's own receipt for an effect it was not sure had
     happened. That is certifying by *removing* evidence, which is the hazard
     :meth:`careloop.graph.nodes.VerifyNode._nothing_was_observed` closes for a re-check and this
-    closes for a recovery. The two conditions coincide today because one collaborator — the
-    clinic — turns on both the real write and the read that observes it, and
+    closes for a recovery. The two conditions coincide because an
+    :class:`careloop.graph.providers.ExternalProvider` declares its handlers and its read-backs
+    together — one collaborator turns on both the real write and the read that observes it — and
     :class:`careloop.graph.context.ConflictingExecutors` makes anything else unconstructable.
     """
     if RECOVERY_CLASS.get(action_type) is not RecoveryClass.IDEMPOTENT_REPLAYABLE:

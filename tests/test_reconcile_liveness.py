@@ -51,14 +51,17 @@ from saga_helpers import (
 from careloop.api.deps import ApiDeps
 from careloop.api.wake import WAKE_DELAYS, ReconcileWaker, RecoveryOutcome
 from careloop.events.simulator import EventSimulator
+from careloop.graph.providers import ExternalProvider
 from careloop.graph.recovery import RECOVERY_CLASS, RecoveryClass, may_replay
 from careloop.graph.runner import context_for
+from careloop.graph.trusted import configured
 from careloop.graph.verify import ObservationOutcome
 from careloop.state import CaseState, InMemoryCaseStore, TimelineKind
 from careloop.state.machine import transition
 from careloop.state.sqlite_store import SqliteCaseStore
 from careloop.tools.clinic import DEFAULT_TIMEOUT, ClinicClient
 from careloop.tools.registry import REGISTRY
+from careloop.tools.results import EmailSent
 from demoworld.clinic import Clinic
 
 #: How many loop turns a released wake gets to reach its registration before the test gives up.
@@ -68,6 +71,15 @@ from demoworld.clinic import Clinic
 TURNS = 500
 
 UPLOAD_ARGS = {"portal_id": "PORTAL-NORTHGATE", "document_id": "doc-0001-referral"}
+
+#: A stranded action of a type that may never be re-sent. The recipient is the configured
+#: caregiver address, so nothing about *this* call is objectionable on its face — which is the
+#: point: what refuses it is the action type's recovery class and not a rule about its arguments.
+EMAIL_ARGS = {
+    "to": configured("caregiver_email") or "",
+    "subject": "Your appointment",
+    "body": "The clinic has confirmed the time.",
+}
 
 
 class Outage(httpx.BaseTransport):
@@ -144,10 +156,34 @@ class Clock:
         raise AssertionError("the released wake never reached a registration")
 
 
+def observed_email_provider() -> ExternalProvider:
+    """A provider that claims ``send_email`` and offers a read-back for it.
+
+    It exists to *remove* an alternative explanation rather than to model anything real. With no
+    observer bound, :func:`~careloop.graph.recovery.may_replay` refuses a replay for two independent
+    reasons at once, and a test asserting the refusal could not say which one did the work. Binding
+    one leaves exactly one reason standing: the declared recovery class.
+
+    Its handler and read-back are never reached — that is the property under test — so both simply
+    return a well-formed result rather than pretending to be a mail provider.
+    """
+    sent = EmailSent(message_id="msg-never-sent", to=EMAIL_ARGS["to"], subject="Your appointment")
+    return ExternalProvider(
+        name="observed-email",
+        handlers={"send_email": lambda args, key: sent},
+        readbacks={"send_email": lambda result: sent},
+    )
+
+
 class World:
     """One CareLoop world wired for recovery: a real clinic, no model, a controlled clock."""
 
-    def __init__(self, store, clinic: ClinicClient | None = None) -> None:
+    def __init__(
+        self,
+        store,
+        clinic: ClinicClient | None = None,
+        providers: tuple[ExternalProvider, ...] = (),
+    ) -> None:
         self.store = store
         self.clock = Clock()
         self.planner = ExplodingPlanner()
@@ -159,6 +195,7 @@ class World:
                 inbound,
                 case_id=case_id,
                 clinic=clinic,
+                providers=providers,
                 triage=self.triage,
                 planner=self.planner,
                 now=lambda: FIXED_NOW,
@@ -913,7 +950,7 @@ class TestEveryWaitingCaseCanBeCarriedForward:
 
 
 class TestANonReplayableEffectCannotBeWokenAtAll:
-    """T11. The auto-retry path is unreachable for the three simulated effects.
+    """T11. The auto-retry path is unreachable for the two effects that reach no real provider.
 
     Two independent halves, and both are needed. **Structurally**, ``WAITING_EXTERNAL`` is written
     only where :func:`careloop.graph.recovery.may_replay` says yes, and that answers ``False`` for a
@@ -921,11 +958,16 @@ class TestANonReplayableEffectCannotBeWokenAtAll:
     armed for cannot be reached. **Behaviourally**, a stranded non-replayable action parks for a
     person, and the arming path then withdraws rather than schedules.
 
-    ``upload_document`` is the discriminating fixture rather than ``send_email``, because the
-    shipped
-    rules refuse an email to an untrusted recipient anyway: a test built on that one passes even
-    when
-    every action is treated as replayable, which is the shape of vacuity this repository names.
+    **The fixture moved when ``upload_document`` gained a measured provider**, and the reason it had
+    to is worth stating. It was chosen over ``send_email`` because the shipped rules refuse an email
+    to an untrusted recipient anyway, so a behavioural test built on one could park for a reason
+    that has nothing to do with the recovery class — the shape of vacuity this repository names. The
+    replacement is not another fixture argument but a **direct** one:
+    :meth:`test_a_stranded_non_replayable_action_parks_before_policy_is_consulted` asserts the
+    timeline carries no ``POLICY_DENY`` at all, which is only true if
+    :func:`~careloop.graph.recovery.may_replay` is what refused. ``ReconcileNode`` checks the class
+    before it fires the ``BeforeToolCall`` hook, so the two are distinguishable by what the trail
+    records rather than by an argument about which tool to pick.
     """
 
     def test_no_number_of_observers_makes_a_non_replayable_action_replayable(self) -> None:
@@ -936,18 +978,39 @@ class TestANonReplayableEffectCannotBeWokenAtAll:
             if recovery is RecoveryClass.NOT_REPLAYABLE
         }
 
-        assert refused == {"send_email", "upload_document", "grant_portal_access"}
+        assert refused == {"send_email", "grant_portal_access"}
         assert [may_replay(tool, observers=every_observer) for tool in sorted(refused)] == [
-            False,
             False,
             False,
         ]
 
-    def test_a_stranded_upload_parks_for_a_person_and_schedules_nothing(self) -> None:
+    def test_a_stranded_non_replayable_action_parks_for_the_right_reason(self) -> None:
+        """Parked, unsent, unscheduled — and refused by the recovery class, not by anything else.
+
+        **Two things make this discriminating**, and neither is a choice of fixture.
+
+        The run is bound to a provider that really does observe ``send_email``, so
+        :func:`~careloop.graph.recovery.may_replay`'s *other* condition is satisfied. Without that,
+        the absence of an observer would refuse the replay on its own and this test would pass with
+        the recovery class deleted.
+
+        And the **handoff says which refusal happened**. ``ReconcileNode`` consults the class before
+        it fires the ``BeforeToolCall`` hook, and each branch parks with its own ``detail`` on the
+        diagnostic. Measured against a mutant marking ``send_email`` replayable: the case is carried
+        as far as the hook, which cancels the unapproved email, and it parks with
+        *"the BeforeToolCall hook cancelled the replay"* instead. Every other assertion in this test
+        stays green under that mutant — same state, no action, no wake — and this one turns red.
+
+        That is worth stating plainly, because the obvious assertion does not work. There is no
+        ``POLICY_DENY`` on the trail in either case — ``ReconcileNode`` parks on a refused replay
+        without writing one — so a test built on its absence would pass under the mutant and prove
+        nothing.
+        """
+
         async def scenario():
             store = InMemoryCaseStore()
-            executing_with_a_prepared_action(store, tool_name="upload_document", args=UPLOAD_ARGS)
-            world = World(store)
+            executing_with_a_prepared_action(store, tool_name="send_email", args=EMAIL_ARGS)
+            world = World(store, providers=(observed_email_provider(),))
 
             await world.run()
             case = world.case()
@@ -962,8 +1025,17 @@ class TestANonReplayableEffectCannotBeWokenAtAll:
         assert case.actions == (), "a non-replayable action was re-sent"
         assert (pending, deferred) == ((), ()), "a non-replayable action was given a retry schedule"
 
-    def test_only_the_replayable_action_type_can_reach_the_waiting_state(self) -> None:
-        """Vacuity for the pair above: the booking really does take the other branch."""
-        assert RECOVERY_CLASS["book_appointment"] is RecoveryClass.IDEMPOTENT_REPLAYABLE
-        assert may_replay("book_appointment", observers={"book_appointment"})
-        assert not may_replay("book_appointment", observers=frozenset())
+        (handoff,) = [
+            entry for entry in case.timeline if entry.kind is TimelineKind.MANUAL_HANDOFF_REQUIRED
+        ]
+        assert "no safe way to establish the outcome" in (handoff.diagnostic or ""), (
+            "the case parked, but not because the action type may never be re-sent; the handoff "
+            f"says: {handoff.diagnostic!r}"
+        )
+
+    def test_the_replayable_action_types_really_do_take_the_other_branch(self) -> None:
+        """Vacuity for the pair above: both measured providers reach the waiting state."""
+        for action_type in ("book_appointment", "upload_document"):
+            assert RECOVERY_CLASS[action_type] is RecoveryClass.IDEMPOTENT_REPLAYABLE
+            assert may_replay(action_type, observers={action_type})
+            assert not may_replay(action_type, observers=frozenset())

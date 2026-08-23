@@ -35,5 +35,18 @@ export const SCENARIOS: ScenarioMeta[] = [
     title: "Pause for a decision",
     blurb: "CareLoop reaches a step it has no authority for, stops, and finishes the moment you decide.",
     toneVar: "var(--state-decision)"
+  },
+  /* 04 is the only card that describes something the demo deliberately does *to* CareLoop, and the
+     blurb says so outright. The ambiguity that follows is genuine — nothing above the transport
+     receives an answer, and every state, key and check after that is the shipped one — but a card
+     implying a spontaneous outage would be claiming something that did not happen, which is the
+     small lie the rest of this product refuses to tell. */
+  {
+    id: "recovery",
+    num: "04",
+    title: "The answer gets lost",
+    blurb:
+      "The clinic books the appointment and CareLoop deliberately throws its reply away. Watch it work out what happened, on its own, without creating a second appointment.",
+    toneVar: "var(--state-controlled)"
   }
 ];

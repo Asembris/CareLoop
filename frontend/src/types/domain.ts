@@ -37,7 +37,7 @@ export type EventTone = "neutral" | "decision" | "verified" | "denied" | "untrus
  *  is made instead by `tests/test_verify_readback.py::TestTheIndependenceProof`, which moves the
  *  appointment behind CareLoop's back and requires verification to fail. A test that proves it
  *  beats a button whose backend state contradicts its own screen. */
-export type ScenarioId = "referral" | "injection" | "resume";
+export type ScenarioId = "referral" | "injection" | "resume" | "recovery";
 
 /** One step of a fact's provenance journey, rendered as a dot and a sentence in the lens. */
 export interface ProvenanceStep {
@@ -159,6 +159,33 @@ export interface CareCase {
   /** Optional because the mock predates them; the real adapter always fills both. */
   documents?: CaseDocument[];
   refusals?: PolicyRefusal[];
+  /** Present only on a case whose own audit trail records a settled ambiguous-outcome recovery.
+   *
+   *  Absent everywhere else, including on a case that is *still* waiting — see
+   *  `recoveryProofFor`. A block that appeared on a waiting case would be claiming a recovery had
+   *  happened while the outcome was still unknown, which is the one thing this whole feature
+   *  exists to stop the product doing. */
+  recovery?: RecoveryProof | null;
+}
+
+/** What a settled recovery leaves behind, read entirely from the durable timeline.
+ *
+ *  Nothing here is inferred and nothing is fetched: every field comes from a payload key the API
+ *  already projects. See `recoveryProofFor`.
+ *
+ *  **There is deliberately no model-call count.** The backend proves zero recovery model calls with
+ *  booby-trapped seams in `tests/test_recovery_proof.py`; the durable trail cannot, because one
+ *  persisted plan does not establish that no model was invoked and failed. `plans` says what the
+ *  trail *can* support, and the copy says exactly that and no more. */
+export interface RecoveryProof {
+  /** A short, safe prefix of the frozen action identity. Never the whole key. */
+  actionKey: string;
+  /** Durable `ActionRecord`s on the case. One, or this is not a settled recovery. */
+  recordedActions: number;
+  /** `PLAN_PROPOSED` entries on the case. */
+  plans: number;
+  /** The observation word the independent read produced — one of the closed backend vocabulary. */
+  observation: string;
 }
 
 export interface AgentRun {

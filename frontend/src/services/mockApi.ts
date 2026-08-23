@@ -115,6 +115,11 @@ class MockCareLoopApi implements CareLoopApi {
     await this.resetDemo();
     if (id === "referral") return this.referral();
     if (id === "injection") return this.injection();
+    /* Not offered by the mock, for the reason a re-check is not: it claims a real provider
+       committed a real write whose answer was really lost, and a choreography cannot make that
+       claim. Refused with an empty run rather than falling through to `resume`, which would have
+       shown a judge the wrong scenario under the right button. */
+    if (id === "recovery") return { scenarioId: id, runId: "", caseId: "" };
     return this.resume();
   }
 

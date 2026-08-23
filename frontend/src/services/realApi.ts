@@ -41,6 +41,7 @@ import type {
   PolicyRefusal,
   PolicyVerdict,
   Readback,
+  RecoveryProof,
   ScenarioId,
   ScenarioRun,
   TimelineEvent,
@@ -771,7 +772,64 @@ export function buildCase(
     events: timelineFor(timeline, detail?.facts ?? []),
     evidence: evidenceFor(detail?.facts ?? []),
     documents: documentsFor(detail?.facts ?? []),
-    refusals: refusalsFor(timeline)
+    refusals: refusalsFor(timeline),
+    // Read from the stored case, never from `shownState`: the block is evidence about what
+    // happened, not a beat in the paced display, and a paced case is briefly a `DONE` case the
+    // screen is still walking towards.
+    recovery: recoveryProofFor(detail)
+  };
+}
+
+/** The settled recovery a case's own audit trail records, or `null`.
+ *
+ *  **Read, never inferred.** Every clause below is a durable timeline entry the API already
+ *  projects, which is why this feature needed no new payload key, no new endpoint and no new
+ *  telemetry. The signature is deliberately the whole story rather than any one part of it:
+ *
+ *  - the case is `DONE` — a recovery that has not settled is not a recovery to show;
+ *  - one action identity was frozen before anything was sent (`ACTION_PREPARED`);
+ *  - the case really waited on an unanswered request (`EXECUTING -> WAITING_EXTERNAL`);
+ *  - the frozen attempt was really re-claimed (`WAITING_EXTERNAL -> EXECUTING`);
+ *  - the action that finally happened carries *that* identity (`ACTION_EXECUTED`);
+ *  - exactly one durable action was recorded;
+ *  - and an independent read of the other system's own record confirmed it.
+ *
+ *  A case that is merely `WAITING_EXTERNAL` fails the first clause and several others, which is
+ *  the property `test_demo_recovery`'s frontend counterpart pins: the block may not appear until
+ *  the outcome is actually known. */
+export function recoveryProofFor(detail: CaseDetail | null): RecoveryProof | null {
+  if (!detail || detail.state !== "DONE") return null;
+
+  const prepared = detail.timeline.find((e) => e.kind === "ACTION_PREPARED");
+  const key = prepared ? payloadString(prepared, "idempotency_key") : "";
+  if (!key) return null;
+
+  const moves = detail.timeline
+    .filter((e) => e.kind === "STATE_TRANSITION")
+    .map((e) => `${payloadString(e, "from")}>${payloadString(e, "to")}`);
+  if (!moves.includes("EXECUTING>WAITING_EXTERNAL")) return null;
+  if (!moves.includes("WAITING_EXTERNAL>EXECUTING")) return null;
+
+  const executed = detail.timeline.find(
+    (e) => e.kind === "ACTION_EXECUTED" && payloadString(e, "idempotency_key") === key
+  );
+  if (!executed) return null;
+
+  if (detail.actions.length !== 1 || detail.actions[0].idempotency_key !== key) return null;
+
+  const verified = detail.timeline.find(
+    (e) => e.kind === "VERIFICATION_PASSED" && payloadString(e, "read_back") === "true"
+  );
+  if (!verified) return null;
+
+  return {
+    // A short prefix, never the whole key. It exists so a reader can see that two rows of the
+    // trail name the *same* identity; the full value is an internal digest and nothing on screen
+    // needs it.
+    actionKey: `${key.slice(0, 8)}…`,
+    recordedActions: detail.actions.length,
+    plans: detail.timeline.filter((e) => e.kind === "PLAN_PROPOSED").length,
+    observation: payloadString(verified, "observation")
   };
 }
 

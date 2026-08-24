@@ -395,6 +395,32 @@ export function policyLines(timeline: readonly TimelineEventView[]): PolicyLine[
     }));
 }
 
+/** The rule that authorised what this case actually did, or `null`.
+ *
+ *  Read from the last `POLICY_ALLOW` the case recorded — `matched_rule_id` and `tool_name` are both
+ *  already on the API's payload allowlist, so this needed no new field, no new endpoint and no new
+ *  decision about what may be exposed.
+ *
+ *  **The last one, and only when it names a tool.** A case can carry several verdicts — a refusal
+ *  and then a replan, or a re-check — and the one that authorised the effect a caregiver is looking
+ *  at is the most recent. Returning an earlier one would attribute the outcome to a rule that
+ *  allowed something else.
+ *
+ *  Nothing here decides whether the action *was* allowed: the case reached `DONE`, and this only
+ *  says which rule the gate recorded when it did. */
+export function authorisedBy(
+  timeline: readonly TimelineEventView[]
+): { ruleId: string; toolName: string } | null {
+  for (let index = timeline.length - 1; index >= 0; index -= 1) {
+    const event = timeline[index];
+    if (event.kind !== "POLICY_ALLOW") continue;
+    const ruleId = payloadString(event, "matched_rule_id");
+    const toolName = payloadString(event, "tool_name");
+    if (ruleId && toolName) return { ruleId, toolName };
+  }
+  return null;
+}
+
 /* ------------------------------------------------------------------ *
  * Evidence
  * ------------------------------------------------------------------ */
@@ -795,6 +821,11 @@ export function buildCase(
     evidence: evidenceFor(detail?.facts ?? []),
     documents: documentsFor(detail?.facts ?? []),
     refusals: refusalsFor(timeline),
+    // Only on a settled case, and deliberately: while a run is in flight the gate may allow, then
+    // be asked again, and a row naming a rule mid-run would keep changing under the reader. What
+    // it answers is "which rule authorised what happened here", which is a question about a case
+    // that has finished happening.
+    authorisedBy: shownState === "DONE" ? (authorisedBy(timeline) ?? undefined) : undefined,
     // Read from the stored case, never from `shownState`: the block is evidence about what
     // happened, not a beat in the paced display, and a paced case is briefly a `DONE` case the
     // screen is still walking towards.

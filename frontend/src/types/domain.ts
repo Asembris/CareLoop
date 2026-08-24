@@ -161,6 +161,13 @@ export interface CareCase {
   /** Optional because the mock predates them; the real adapter always fills both. */
   documents?: CaseDocument[];
   refusals?: PolicyRefusal[];
+  /** The rule the gate recorded when it authorised what this case did, on a settled case.
+   *
+   *  Read from the case's own `POLICY_ALLOW` entry — both fields are already projected. It is what
+   *  lets the outcome link back to the standing capability it is an instance of, so a judge can go
+   *  from "this happened" to "this is why it was allowed to" without either page inventing the
+   *  connection. Absent while a run is in flight, and absent on a case that recorded no allow. */
+  authorisedBy?: { ruleId: string; toolName: string };
   /** Present only on a case whose own audit trail records a settled ambiguous-outcome recovery.
    *
    *  Absent everywhere else, including on a case that is *still* waiting — see

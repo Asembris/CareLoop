@@ -63,8 +63,9 @@ class RecoveryClass(StrEnum):
     ``book_appointment`` is the shape this member used to be defined as: Demo World's
     ``Clinic._by_key`` keys writes by the idempotency header and **returns the original
     appointment** with ``200`` rather than ``201``, consumes no second slot, and refuses with
-    ``409`` if the key names different arguments. ``tests/test_clinic_replay.py`` measures all three
-    against a real service over a loopback socket.
+    ``409`` if the key names different arguments.
+    ``tests/test_demoworld.py::TestIdempotency`` measures all three against a real service over a
+    loopback socket.
 
     ``upload_document`` earns the same class by a different route, and the earlier wording would
     have been false about it. **Amazon S3 has no concept of an idempotency key and returns nothing
@@ -106,7 +107,7 @@ class RecoveryClass(StrEnum):
 #:
 #: Adding a member here is a claim that a measured contract exists, and the two that are here were
 #: measured separately against their own providers before the entry was written:
-#: ``tests/test_clinic_replay.py`` for the clinic and ``docs/objectstore-contract.md`` plus
+#: ``tests/test_demoworld.py`` for the clinic and ``docs/objectstore-contract.md`` plus
 #: ``tests/test_objectstore_contract.py`` for the object store. Note how little the two contracts
 #: have in common — one replays the original record, the other refuses and makes CareLoop look —
 #: which is exactly why :class:`RecoveryClass` is defined by the outcome it guarantees rather than

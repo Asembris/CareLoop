@@ -20,8 +20,8 @@ than being accidentally defused by a line break.
 **No value in any document may equal a value in** :data:`careloop.graph.trusted.TRUSTED_CONFIG`.
 Trust resolution takes the lowest level among facts whose *value* matches, so a configured
 destination that also appeared in a document would be dragged to ``UNTRUSTED`` and the legitimate
-action denied. ``tests/test_graph_trusted.py`` checks the shipped values against every document in
-both directions; :func:`careloop.tools.document_source.all_lines` is what makes that cheap.
+action denied. ``tests/test_document_sources.py`` checks the shipped values against every
+document in both directions; :func:`careloop.tools.document_source.all_lines` makes that cheap.
 
 **Whitespace does not survive PDF extraction and is not used to carry meaning.** pdfplumber
 reconstructs inter-word spacing from glyph positions, so runs of spaces collapse to one and

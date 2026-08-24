@@ -210,9 +210,12 @@ def head_commit(root: Path) -> str:
 def dirty_paths(root: Path) -> tuple[str, ...]:
     """Everything ``git status`` reports as not matching ``HEAD``.
 
-    Load-bearing rather than tidy. The member *list* comes from ``HEAD`` and the member *content*
-    comes from the working tree, so those two agreeing is what makes "this artefact is that commit"
-    a true sentence instead of a hopeful one.
+    Not what makes the artefact match the commit -- :func:`head_blobs` does that, by construction.
+    What this catches is the mismatch that construction cannot: ``frontend/dist`` is built from the
+    working tree and recorded by no commit, so uncommitted frontend sources produce a bundle that is
+    genuinely not ``HEAD`` sitting inside an artefact named after it. Refusing on any dirty path
+    rather than only on frontend ones is the coarser and safer reading -- a deploy that silently
+    leaves a developer's edits behind is its own kind of surprise.
     """
     reported = git(root, "status", "--porcelain")
     return tuple(line[3:].strip() for line in reported.splitlines() if line.strip())
@@ -279,25 +282,64 @@ def missing_required(names: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(required for required in REQUIRED_MEMBERS if required not in present)
 
 
+def head_blobs(root: Path) -> dict[str, bytes]:
+    """The content of every tracked path, read out of the commit rather than off the disk.
+
+    **The working tree is not consulted for a tracked file, and that is the point.** A checkout on
+    Windows holds CRLF for anything ``.gitattributes`` normalises, and half the members here are
+    shell and unit files a Linux host executes. Packing the disk would also make "this artefact is
+    that commit" depend on nobody having touched a file since — a property maintained by a check
+    rather than by construction. ``git archive`` answers with the commit's own bytes, so the two
+    questions collapse into one.
+    """
+    try:
+        finished = subprocess.run(
+            ["git", "archive", "--format=tar", "HEAD"],
+            cwd=root,
+            capture_output=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError as failed:  # pragma: no cover - a broken repository
+        raise ArtifactRefused(
+            f"git archive HEAD failed: {failed.stderr.decode().strip()}"
+        ) from failed
+
+    content: dict[str, bytes] = {}
+    with tarfile.open(fileobj=BytesIO(finished.stdout), mode="r:") as archive:
+        for entry in archive:
+            if not entry.isfile():
+                continue
+            handle = archive.extractfile(entry)
+            if handle is not None:
+                content[entry.name] = handle.read()
+    return content
+
+
 def pack(root: Path, names: tuple[str, ...]) -> bytes:
     """A deterministic ``tar.gz`` of exactly ``names``.
+
+    Tracked members come from :func:`head_blobs`; the built bundle comes from disk, because it is
+    the one thing in here that no commit records.
 
     ``mtime=0`` on the gzip header as well as on every entry: the header carries a timestamp of its
     own, and leaving it to default makes two builds of one tree produce two digests.
     """
+    blobs = head_blobs(root)
+
     raw = BytesIO()
     with tarfile.open(fileobj=raw, mode="w") as archive:
         for name in names:
-            source = root / name
+            payload = blobs.get(name)
+            if payload is None:
+                payload = (root / name).read_bytes()
             info = tarfile.TarInfo(name=f"./{name}")
-            info.size = source.stat().st_size
+            info.size = len(payload)
             info.mtime = TAR_EPOCH
             info.mode = 0o755 if name.endswith(".sh") else 0o644
             info.uid = info.gid = 0
             info.uname = info.gname = ""
             info.type = tarfile.REGTYPE
-            with source.open("rb") as handle:
-                archive.addfile(info, handle)
+            archive.addfile(info, BytesIO(payload))
 
     compressed = BytesIO()
     with gzip.GzipFile(fileobj=compressed, mode="wb", mtime=TAR_EPOCH) as zipped:
@@ -317,8 +359,9 @@ def build(root: Path, out: Path, *, allow_dirty: bool = False) -> Artifact:
         listed = ", ".join(dirty[:5]) + ("..." if len(dirty) > 5 else "")
         raise ArtifactRefused(
             f"the working tree does not match HEAD ({len(dirty)} path(s): {listed}). "
-            "The artefact is named after a commit, so it is built from one. Commit, stash, or "
-            "pass --allow-dirty and accept that the name is then a guess."
+            "Tracked changes would not be deployed at all -- the artefact carries the commit's "
+            "own blobs -- and an uncommitted frontend change would be, through the built bundle. "
+            "Commit, stash, or pass --allow-dirty and accept both."
         )
 
     commit = head_commit(root)

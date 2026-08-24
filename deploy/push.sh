@@ -21,37 +21,31 @@ echo "== building the frontend"
 test -f frontend/dist/index.html || { echo "no frontend/dist/index.html after build" >&2; exit 1; }
 
 echo "== packing"
-# Excludes, and three of them are not about size.
-#
-#   .keys/  the SSH private key that authorises this very deploy. A tarball of the repository
-#           root sweeps it up by default, and shipping it to the host it opens would be the
-#           worst kind of quiet mistake — it works perfectly and leaves the key on the box.
-#   .env    developer credentials. The host reaches Bedrock through its instance profile and
-#           needs no key at all; see deploy/careloop.env.
-#   *.sqlite3*  the server's durable source of truth, WAL sidecars included. Shipping a local
-#           copy would overwrite it with a developer's scratch database.
-#   e2e/    the end-to-end suite. Test code has no business on the instance: it is not what is
-#           being served, it names ports and hosts the deployment does not use, and the one thing
-#           worse than shipping it is shipping it and having somebody run it there.
-#
-# The patterns are unanchored on purpose: `./**/__pycache__` is a bashism tar does not expand,
-# so a leading `./` here would have matched only the repository root.
+# The member list is built by scripts/deploy_artifact.py, from the tree git records at HEAD, and
+# is not assembled here any more. The inline `tar --exclude` list this replaces had a hole that
+# never announced itself: tar matches an unanchored exclusion against whole path *components*, so
+# `--exclude='.venv'` dropped `.venv/` and shipped `.venv-evals/` — 260 MB of the DeepTeam closure,
+# openai and deepeval included — into /opt/careloop/app on every deploy since that environment was
+# created. A blocklist maintained beside the thing it protects is exactly the shape that grows a
+# hole like that, so the list now lives in one module, with tests, and the artefact starts from the
+# tracked tree rather than from the working directory.
 TAR=$(mktemp -t careloop-XXXXXX.tar.gz)
 trap 'rm -f "$TAR"' EXIT
-tar --exclude='.keys' \
-    --exclude='.env' \
-    --exclude='.git' \
-    --exclude='.venv' \
-    --exclude='node_modules' \
-    --exclude='__pycache__' \
-    --exclude='*.sqlite3*' \
-    --exclude='*.pem' \
-    --exclude='frontend/reference' \
-    --exclude='e2e' \
-    -czf "$TAR" .
 
+# The repo's venv first, on either platform, then whatever is on PATH — the packing half of that
+# module imports the standard library alone, so any 3.12 will do.
+PY=""
+for candidate in "$ROOT/.venv/Scripts/python.exe" "$ROOT/.venv/bin/python" python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1; then PY="$candidate"; break; fi
+done
+[ -n "$PY" ] || { echo "no python found to run scripts/deploy_artifact.py" >&2; exit 1; }
+"$PY" "$ROOT/scripts/deploy_artifact.py" --out "$TAR" ${ALLOW_DIRTY:+--allow-dirty}
+
+# Kept, and still load-bearing. It shares no code with the module that built the archive, so a
+# defect in the exclusion rules is not also a defect in the check that they worked — and it reads
+# the tarball that is about to be shipped rather than the list somebody intended to pack.
 echo "== confirming nothing secret is in the tarball"
-if tar -tzf "$TAR" | grep -Ei '(^|/)(\.env$|\.keys/|.*\.pem$|.*\.sqlite3)' ; then
+if tar -tzf "$TAR" | grep -Ei '(^|/)(\.env($|\.)|\.keys/|\.venv|venv/|node_modules/|.*\.pem$|.*\.(key|p12|pfx)$|.*\.sqlite3)' ; then
     echo "refusing to ship: the tarball contains something it must not" >&2
     exit 1
 fi

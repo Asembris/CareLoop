@@ -126,6 +126,13 @@ class CaregiverDirectory(Protocol):
         """
         ...
 
+    def may_act_for_anybody(self, caregiver_id: str) -> bool:
+        """Whether this caregiver currently holds any active grant at all.
+
+        The question available before a case knows who it is about. Fail-closed the same way.
+        """
+        ...
+
 
 @dataclass
 class InMemoryCaregiverDirectory:
@@ -166,6 +173,12 @@ class InMemoryCaregiverDirectory:
             grant.active and grant.caregiver_id == caregiver_id and grant.patient_id == patient_id
             for grant in self.grants
         )
+
+    def may_act_for_anybody(self, caregiver_id: str) -> bool:
+        holder = self.caregivers.get(caregiver_id)
+        if holder is None or not holder.active:
+            return False
+        return any(grant.active and grant.caregiver_id == caregiver_id for grant in self.grants)
 
     def revoke_grant(self, caregiver_id: str, patient_id: str) -> None:
         """Withdraw one grant, keeping the record. See :class:`Grant`."""

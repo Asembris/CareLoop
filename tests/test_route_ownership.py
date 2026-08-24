@@ -20,10 +20,11 @@ status code, because a 404 with a side effect is the failure that matters.
 from __future__ import annotations
 
 import pytest
-from api_helpers import EMAIL, intent
+from api_helpers import intent
 from identity_helpers import (
     CAREGIVER_A,
     CAREGIVER_B,
+    EMAIL_TO_A,
     TOKEN_A,
     TOKEN_B,
     bearer,
@@ -208,7 +209,7 @@ def parked_case(store) -> tuple:
 
     app = create_app(
         store,
-        context_factory=factory_proposing(intent("send_email", **EMAIL)),
+        context_factory=factory_proposing(intent("send_email", **EMAIL_TO_A)),
         auth=production_auth(verifier=stub_verifier(), directory=two_caregiver_directory()),
     )
     with TestClient(app) as client:
@@ -244,7 +245,7 @@ class TestEveryCallerDrivenRouteChecksOwnership:
         store = InMemoryCaseStore()
         case_id, approval_id = parked_case(store)
 
-        with production_client(store, intent("send_email", **EMAIL)) as client:
+        with production_client(store, intent("send_email", **EMAIL_TO_A)) as client:
             answered = client.post(
                 f"/api/cases/{case_id}/decisions/{approval_id}/approve?wait=5",
                 headers=bearer(TOKEN_A),
@@ -301,7 +302,7 @@ class TestEveryCallerDrivenRouteChecksOwnership:
 
     def test_reading_somebody_elses_run_is_refused(self) -> None:
         store = InMemoryCaseStore()
-        with production_client(store, intent("send_email", **EMAIL)) as client:
+        with production_client(store, intent("send_email", **EMAIL_TO_A)) as client:
             started = client.post(
                 "/api/events?wait=5", headers=bearer(TOKEN_A), json=BOOKING_EVENT
             ).json()
@@ -362,7 +363,7 @@ class TestARefusedMutationRecordsNothing:
             case = transition(case, step, reason="t", actor="t", now=FIXED_NOW)
         store.save(case, expected_version=base)
 
-        with production_client(store, intent("send_email", **EMAIL)) as client:
+        with production_client(store, intent("send_email", **EMAIL_TO_A)) as client:
             answered = client.post(
                 "/api/events",
                 headers=bearer(TOKEN_A),

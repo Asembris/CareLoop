@@ -24,6 +24,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Final
 
 from pydantic import BaseModel, ConfigDict
 
@@ -44,6 +45,7 @@ from careloop.policy.gate import PolicyGate
 from careloop.policy.gated import GatedToolSet
 from careloop.policy.hook import PolicyHook, policy_registry
 from careloop.policy.verdicts import ReasonCode
+from careloop.provenance.trust import TrustLevel, at_least
 from careloop.state.case import ActionRecord, Approval, Case, CaseState, TimelineKind
 from careloop.state.store import CaseStore
 from careloop.tools.callables import ToolSet
@@ -403,6 +405,33 @@ class Delivery(BaseModel):
 
     event_id: str
     document_ids: tuple[str, ...]
+
+
+#: The trust level a patient identifier must reach before it can name who an effect affects.
+#:
+#: Read from the same place ``deny-booking-for-unverified-patient`` requires it, because these are
+#: two halves of one question and a second spelling is a second thing to keep in step.
+ESTABLISHED_PATIENT_TRUST: Final[TrustLevel] = TrustLevel.CONTROLLED
+
+
+def established_patients(case: Case) -> frozenset[str]:
+    """Every patient identifier this case has deterministically established.
+
+    Scoped to ``CONTROLLED`` or higher on purpose. An untrusted ``patient_id`` scraped out of a
+    document cannot reach an effect -- ``deny-booking-for-unverified-patient`` refuses it and the
+    ``ALLOW`` clause requires the same level -- so treating one as a patient this case is *about*
+    would let an attacker-authored page decide which caregiver may work on it. That is the
+    denial-of-service shape the other direction, and it is worth stating because the stricter
+    reading looks safer.
+
+    Empty for a case whose documents have not been read yet, which is the ordinary state of a case
+    at the moment it is opened.
+    """
+    return frozenset(
+        fact.value
+        for fact in case.facts
+        if fact.key == "patient_id" and at_least(fact.trust_level, ESTABLISHED_PATIENT_TRUST)
+    )
 
 
 def latest_delivery(case: Case) -> Delivery | None:
@@ -765,6 +794,7 @@ def _empty_registry():
 
 
 __all__ = [
+    "ESTABLISHED_PATIENT_TRUST",
     "ConflictingExecutors",
     "Delivery",
     "Handoff",
@@ -775,6 +805,7 @@ __all__ = [
     "approval_for",
     "approval_id_for",
     "entered_verifying_from",
+    "established_patients",
     "is_approved",
     "latest_delivery",
     "latest_proposal",

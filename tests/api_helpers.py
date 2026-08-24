@@ -161,12 +161,22 @@ class PausedTriage:
         return await self.inner.classify(text)
 
 
-def factory_proposing(*proposals: PlannerIntent, gate: threading.Event | None = None):
+def factory_proposing(
+    *proposals: PlannerIntent,
+    gate: threading.Event | None = None,
+    directory: object | None = None,
+):
     """A context factory whose agents are scripted and whose clock is pinned.
 
     What ``create_app(context_factory=...)`` exists for: the routes are identical whether the run
     behind them is driven by the mock or by Nova.
+
+    ``directory`` binds the run's patient authority, exactly as a production composition root does.
+    Omitting it leaves :func:`careloop.graph.runner.context_for`'s own default -- a real grant check
+    against the demo directory -- which is right for the demo-owned cases most of this suite drives
+    and correctly refuses a case owned by anybody the demo directory does not hold.
     """
+    from careloop.api.deps import patient_authority_for
 
     def build(store, inbound: InboundEvent, case_id: str):
         triage = triage_agent()
@@ -177,6 +187,7 @@ def factory_proposing(*proposals: PlannerIntent, gate: threading.Event | None = 
             triage=PausedTriage(triage, gate) if gate is not None else triage,
             planner=planner_proposing(*proposals),
             now=lambda: FIXED_NOW,
+            **patient_authority_for(directory, store, case_id),
         )
 
     return build

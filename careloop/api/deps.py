@@ -81,7 +81,35 @@ def default_context_factory(store: CaseStore, inbound: InboundEvent, case_id: st
     return context_for(store, inbound, case_id=case_id)
 
 
-def simulated_context_factory(witness: Witness = NO_WITNESS) -> ContextFactory:
+def patient_authority_for(directory: object | None, store: CaseStore, case_id: str) -> dict:
+    """The ``patient_authority`` keyword a run over ``case_id`` should be built with.
+
+    Empty when no directory was supplied, which leaves :func:`careloop.graph.runner.context_for` to
+    apply its own default -- a real grant check against the demo directory, not a permission.
+
+    **The caregiver comes from the case and never from the request.** A caller who could say which
+    caregiver a run is authorised as could grant themselves somebody else's case; ownership was
+    frozen when the case was opened, and the grant behind it is read live at the moment a node asks.
+
+    A case this store does not hold yet yields an authority over no caregiver, which refuses
+    everything. That is the fail-closed answer to a question asked before the case exists, and it is
+    not reachable in production: ``deliver`` opens the case before it schedules the run.
+    """
+    if directory is None:
+        return {}
+
+    from careloop.identity.patients import CaregiverPatientAuthority
+
+    try:
+        owner = store.get(case_id).caregiver_id
+    except CaseNotFound:
+        owner = None
+    return {"patient_authority": CaregiverPatientAuthority(directory, owner)}
+
+
+def simulated_context_factory(
+    witness: Witness = NO_WITNESS, directory: object | None = None
+) -> ContextFactory:
     """:func:`default_context_factory`, with somewhere for a run to record what it did.
 
     Exists so the no-clinic path can be given a witness at all. Behaviourally identical to
@@ -91,7 +119,13 @@ def simulated_context_factory(witness: Witness = NO_WITNESS) -> ContextFactory:
     """
 
     def build(store: CaseStore, inbound: InboundEvent, case_id: str) -> RunContext:
-        return context_for(store, inbound, case_id=case_id, witness=witness)
+        return context_for(
+            store,
+            inbound,
+            case_id=case_id,
+            witness=witness,
+            **patient_authority_for(directory, store, case_id),
+        )
 
     return build
 
@@ -102,6 +136,7 @@ def provider_context_factory(
     objects: ObjectStoreClient | None = None,
     witness: Witness = NO_WITNESS,
     losing_clinic: Any = None,
+    directory: object | None = None,
 ) -> ContextFactory:
     """A factory binding every run to whichever real providers this world has.
 
@@ -133,12 +168,15 @@ def provider_context_factory(
             providers=others,
             clinic=bound_clinic,
             witness=witness,
+            **patient_authority_for(directory, store, case_id),
         )
 
     return build
 
 
-def clinic_context_factory(clinic: ClinicClient, witness: Witness = NO_WITNESS) -> ContextFactory:
+def clinic_context_factory(
+    clinic: ClinicClient, witness: Witness = NO_WITNESS, directory: object | None = None
+) -> ContextFactory:
     """A factory binding every run to a real external clinic.
 
     One collaborator turns on both the executor whose bookings are performed over HTTP and the
@@ -153,7 +191,14 @@ def clinic_context_factory(clinic: ClinicClient, witness: Witness = NO_WITNESS) 
     """
 
     def build(store: CaseStore, inbound: InboundEvent, case_id: str) -> RunContext:
-        return context_for(store, inbound, case_id=case_id, clinic=clinic, witness=witness)
+        return context_for(
+            store,
+            inbound,
+            case_id=case_id,
+            clinic=clinic,
+            witness=witness,
+            **patient_authority_for(directory, store, case_id),
+        )
 
     return build
 
@@ -581,6 +626,7 @@ __all__ = [
     "default_context_factory",
     "deps",
     "local_graph_runner",
+    "patient_authority_for",
     "provider_context_factory",
     "sections_from",
     "simulated_context_factory",

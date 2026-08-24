@@ -175,7 +175,7 @@ class TestRevocationStopsAnApprovalDeadInItsTracks:
         store = InMemoryCaseStore()
         app = create_app(
             store,
-            context_factory=factory_proposing(intent_email()),
+            context_factory=factory_proposing(intent_email(), directory=directory),
             auth=production_boundary(directory),
         )
         with TestClient(app) as client:

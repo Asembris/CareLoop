@@ -204,13 +204,15 @@ def parked_case(store) -> tuple:
     from fastapi.testclient import TestClient
     from identity_helpers import stub_verifier, two_caregiver_directory
 
+    held = two_caregiver_directory()
+
     from careloop.api.app import create_app
     from careloop.api.auth import production_auth
 
     app = create_app(
         store,
-        context_factory=factory_proposing(intent("send_email", **EMAIL_TO_A)),
-        auth=production_auth(verifier=stub_verifier(), directory=two_caregiver_directory()),
+        context_factory=factory_proposing(intent("send_email", **EMAIL_TO_A), directory=held),
+        auth=production_auth(verifier=stub_verifier(), directory=held),
     )
     with TestClient(app) as client:
         client.post("/api/events?wait=5", headers=bearer(TOKEN_A), json=BOOKING_EVENT)

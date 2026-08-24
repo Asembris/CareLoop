@@ -30,6 +30,7 @@ from pydantic import BaseModel, ConfigDict
 
 from careloop.agents.planner import PlannerAgent
 from careloop.agents.triage import TriageAgent
+from careloop.graph.authority import AUTHORISES_NOBODY, PatientAuthority
 from careloop.graph.providers import (
     ExternalProvider,
     clinic_provider,
@@ -698,6 +699,30 @@ class RunContext:
 
     Present so the layered-enforcement claim is testable rather than asserted: with this ``False``
     the ``BeforeToolCall`` hook is absent and the gated toolset must still refuse the same calls.
+    """
+
+    patient_authority: PatientAuthority = AUTHORISES_NOBODY
+    """Whether this run may cause an external effect for the people its case is about.
+
+    **The default denies, and that is the whole of the safety argument.** A run nobody bound an
+    authority to dispatches nothing at all -- not because a caller remembered a flag, but because
+    the only implementation :mod:`careloop.graph.authority` ships is the refusing one. An allow-all
+    default is a default that ends up in production; there is deliberately none to reach for, and
+    ``tests/test_patient_authority.py`` sweeps the package to keep one from appearing.
+
+    **Asked live at the point of dispatch, never snapshotted.** The composition root binds an object
+    that closes over a caregiver id and a directory and answers from current state. A set of
+    authorised patients computed when the run started would be a revocation that had not happened
+    yet -- and, worse, would have been computed before the case had established a patient at all,
+    which is precisely the first-run hole this exists to close.
+
+    **The graph never learns what is behind it.** The protocol takes patient identifiers and answers
+    yes or no; a principal, a caregiver, a directory and a token all stay outside, where
+    ``tests/test_identity_boundary.py`` requires them to be.
+
+    **Not consulted on the recovery path.** ``ReconcileNode`` settles an already-issued effect
+    rather than issuing a new one, so it does not ask and structurally cannot -- an appointment that
+    may exist does not stop existing because a grant was withdrawn.
     """
 
     witness: Witness = NO_WITNESS

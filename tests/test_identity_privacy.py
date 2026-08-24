@@ -37,6 +37,7 @@ from identity_helpers import (
 )
 
 from careloop.api.app import create_app
+from careloop.api.deps import patient_authority_for
 from careloop.graph.runner import context_for
 from careloop.state import CaseState, InMemoryCaseStore
 from careloop.tools.clinic import ClinicClient
@@ -67,6 +68,14 @@ def clinic_client(base_url: str) -> ClinicClient:
 
 
 def production_app(store, clinic, directory=None):
+    """A production app whose scripted factory binds the same directory the boundary holds.
+
+    Both halves, exactly as a composition root does it: the boundary authenticates the caller and
+    the factory binds the run's patient authority. A factory that bound neither would fall back to
+    the demo authority and refuse Alma's case, correctly and for the wrong reason.
+    """
+    held = directory if directory is not None else two_caregiver_directory()
+
     def build(store_, inbound, case_id):
         return context_for(
             store_,
@@ -76,13 +85,14 @@ def production_app(store, clinic, directory=None):
             planner=_planner(),
             now=lambda: FIXED_NOW,
             clinic=clinic,
+            **patient_authority_for(held, store_, case_id),
         )
 
     return create_app(
         store,
         context_factory=build,
         clinic=clinic,
-        auth=production_boundary(directory),
+        auth=production_boundary(held),
     )
 
 

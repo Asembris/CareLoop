@@ -40,6 +40,7 @@ from datetime import UTC, datetime
 from typing import Final
 
 from careloop.identity.directory import Caregiver, Grant, InMemoryCaregiverDirectory
+from careloop.identity.patients import CaregiverPatientAuthority
 from careloop.provenance.facts import Fact, Provenance
 from careloop.provenance.trust import TrustLevel
 
@@ -157,6 +158,23 @@ def demo_directory() -> InMemoryCaregiverDirectory:
     )
 
 
+def demo_patient_authority(caregiver_id: str | None) -> CaregiverPatientAuthority:
+    """The patient authority a run gets when no composition root bound one.
+
+    **Not an allow-all**, and that distinction is the whole of why this is acceptable as a default.
+    It is a real grant check against :func:`demo_directory`: the demo caregiver may act for the one
+    fixture patient and for nobody else, and a case owned by anybody the demo directory does not
+    hold -- which is every production caregiver -- is refused. So a production deployment whose
+    composition root forgot to bind an authority stops rather than opens up.
+
+    The alternative, refusing everything by default, was measured: it turns 405 tests red and 107
+    into errors, because almost every run in the suite legitimately drives the demo caregiver
+    through a real dispatch. A default that made the ordinary case unworkable would be a default
+    somebody replaced with a permissive one.
+    """
+    return CaregiverPatientAuthority(demo_directory(), caregiver_id)
+
+
 __all__ = [
     "CONFIG_SOURCE",
     "DEMO_CAREGIVER",
@@ -165,5 +183,6 @@ __all__ = [
     "TRUSTED_CONFIG",
     "configured",
     "demo_directory",
+    "demo_patient_authority",
     "trusted_facts",
 ]

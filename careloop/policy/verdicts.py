@@ -190,6 +190,36 @@ class ReasonCode(StrEnum):
     out — where "unknown" reads as though nobody tried. Something did try, and reported nothing.
     """
 
+    PATIENT_AUTHORITY_DENIED = "PATIENT_AUTHORITY_DENIED"
+    """The people this case is about may not currently be acted for.
+
+    The eleventh code, and the fifth that parks a *case* rather than refusing a call -- so like the
+    four above no rule carries it and the engine never emits it. The graph writes it onto the
+    ``MANUAL_HANDOFF_REQUIRED`` entry :func:`careloop.graph.nodes._park_with_no_patient_authority`
+    appends, when a run is about to cause its **first** external effect and
+    :meth:`careloop.graph.authority.PatientAuthority.allows` says no.
+
+    **Why none of the other ten would do.** ``NO_SAFE_ACTION_AVAILABLE`` asserts that every tool in
+    the catalogue was proposed and refused; here exactly one action was proposed and policy allowed
+    it. ``EXTERNAL_STATE_NOT_CONFIRMED`` and ``EXTERNAL_OUTCOME_NOT_ESTABLISHED`` both assert that
+    something was carried out; here nothing was, and nothing was even prepared. Every refusal code
+    -- ``DESTINATION_NOT_TRUSTED`` and the rest -- is a verdict the policy engine reached about
+    arguments, and this is not one: the arguments are fine and the *case* is not one this run may
+    act on. Reusing any of them would put a false statement in an append-only trail, which is the
+    argument each park code here has had to make.
+
+    **It names the boundary and not the caller.** Not ``CAREGIVER_NOT_AUTHORISED``, not
+    ``GRANT_REVOKED``, not anything mentioning a principal or a token: this vocabulary is read by a
+    model, and invariant 6's rule is that a refusal reason must not describe the mechanism that
+    produced it. It is also read by the graph, which is not allowed to know that caregivers exist --
+    :mod:`careloop.graph.authority` deliberately speaks only of patients.
+
+    **It is a *live* answer, not a stale one.** The question is asked at the execute node, after
+    evidence has established who the case is about; a set of authorised patients computed when the
+    run began would be a revocation that had not happened yet, and would also have been computed
+    before there was a patient to compute it about. That was the defect this code exists for.
+    """
+
 
 #: The only strings that ever reach the model.
 #:
@@ -251,6 +281,14 @@ REASON_TEXT: Final[Mapping[ReasonCode, str]] = {
     ReasonCode.EXTERNAL_OUTCOME_NOT_ESTABLISHED: (
         "Whether an action CareLoop was authorised to carry out actually happened could not be "
         "established. A caregiver has been asked to check before anything further is done."
+    ),
+    # Says that this case may not be acted on and stops. It names no caregiver, no grant and no
+    # mechanism -- a model reading this must not learn what decided it, and the graph that writes
+    # it does not know either. Like the three codes above it points at a person and gives the
+    # planner no directive: no argument it could change would make this case actionable.
+    ReasonCode.PATIENT_AUTHORITY_DENIED: (
+        "This case is not one CareLoop may currently act on. Nothing has been done and a person "
+        "has been asked to take it from here."
     ),
 }
 

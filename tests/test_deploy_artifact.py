@@ -22,6 +22,8 @@ Three properties, and they are not variations of one:
 from __future__ import annotations
 
 import subprocess
+import tarfile
+from io import BytesIO
 from pathlib import Path
 
 import pytest
@@ -122,6 +124,17 @@ MUST_SHIP: tuple[str, ...] = (
     "docs/architecture.md",
     "pyproject.toml",
 )
+
+
+def _extract(payload: bytes) -> dict[str, bytes]:
+    """Every member of a packed artefact, by name. What the host would actually unpack."""
+    found: dict[str, bytes] = {}
+    with tarfile.open(fileobj=BytesIO(payload), mode="r:gz") as archive:
+        for entry in archive:
+            handle = archive.extractfile(entry)
+            if handle is not None:
+                found[entry.name] = handle.read()
+    return found
 
 
 @pytest.fixture(scope="module")
@@ -304,6 +317,32 @@ class TestTheBuildRefusesRatherThanShips:
         monkeypatch.setattr(deploy_artifact, "FRONTEND_DIST", "frontend/dist-that-is-not-there")
         with pytest.raises(ArtifactRefused, match="does not exist"):
             deploy_artifact.built_frontend(ROOT)
+
+
+class TestTheContentIsTheCommitsAndNotTheDisks:
+    """A tracked member carries the bytes ``HEAD`` records, whatever the checkout looks like."""
+
+    def test_a_tracked_member_comes_from_the_commit(self, tmp_path: Path, shipped) -> None:
+        scratch = tmp_path / "planted.txt"
+        target = "README.md"
+        scratch.write_bytes(b"planted")
+
+        packed = _extract(pack(ROOT, (target, *REQUIRED_MEMBERS)))
+        assert packed[f"./{target}"] == deploy_artifact.head_blobs(ROOT)[target]
+
+    def test_shell_scripts_ship_with_unix_line_endings(self, shipped) -> None:
+        """A checkout on Windows holds CRLF for these, and a Linux host cannot run them that way."""
+        packed = _extract(pack(ROOT, shipped))
+        for name, payload in packed.items():
+            if name.endswith(".sh") or name.endswith(".service"):
+                assert b"\r\n" not in payload, f"{name} would reach the host with CRLF endings"
+
+    def test_the_built_bundle_still_comes_from_disk(self, shipped: tuple[str, ...]) -> None:
+        """The one member no commit records, so construction cannot supply it."""
+        blobs = deploy_artifact.head_blobs(ROOT)
+        bundle = [name for name in shipped if name.startswith(f"{FRONTEND_DIST}/")]
+        assert bundle
+        assert not [name for name in bundle if name in blobs]
 
 
 class TestTheBytesAreDeterministic:

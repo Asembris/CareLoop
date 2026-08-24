@@ -75,8 +75,13 @@ argument; `tests/test_session_lifecycle.py` carries the property.
 | `careloop-api.service` | uvicorn: the API and the built frontend, port 8000 |
 | `careloop-demoworld.service` | the clinic, port 8100 |
 | `bootstrap.sh` | runs **on** the instance: installs Python, the venv, the units |
-| `push.sh` | runs **locally**: builds the frontend, ships the tree, restarts the services |
+| `../scripts/deploy.py` | runs **locally**: the one deploy command. Builds, packs, stages through S3, drives SSM, rolls back |
+| `../scripts/deploy_artifact.py` | what goes in the artefact and what does not, with the exclusions in one place |
+| `../scripts/verify_deploy.py` | asserts the deployed properties **through the distribution**, at the end of every deploy |
 | `../scripts/observability.py` | the one span processor CareLoop adds: it removes an attribute and does nothing else |
+
+`push.sh` is gone. It shipped the tree over `scp` and needed inbound port 22; SSM replaced it, and
+**port 22 is closed and stays closed**.
 
 ## Observability
 
@@ -116,7 +121,7 @@ absent.
 
 ### One-time AWS setup, per account
 
-Not performed by `push.sh` and not automated on purpose — each of these is an account-level change
+Not performed by the deploy and not automated on purpose — each of these is an account-level change
 that should be made deliberately.
 
 ```bash
@@ -177,18 +182,77 @@ function, and gains no permission from it. The measured results are in
 
 ## Deploying
 
-From a checkout, with SSH access to the instance:
+From a checkout with AWS credentials for this account, and **no SSH**:
 
 ```bash
-deploy/push.sh <ssh-target>        # e.g. deploy/push.sh ec2-user@ec2-1-2-3-4.compute-1.amazonaws.com
+python scripts/deploy.py
 ```
 
-`push.sh` builds `frontend/dist` **locally** and ships it. Node is never installed on the server:
-the artefact is the built bundle, and a host that cannot build it cannot accidentally serve a
-different one from the one that was tested.
+```bash
+python scripts/deploy.py --dry-run     # build, check, print every remote script, touch no AWS
+```
 
-The first run also executes `bootstrap.sh`; later runs just replace the tree and restart, which
-takes a few seconds.
+**Systems Manager is the deployment path and there is no other one.** The instance's own agent opens
+an outbound session to AWS; the artefact travels through a private S3 bucket; authority is IAM.
+Nothing inbound is opened, no key is transported, and **port 22 is closed** — a deploy that needs it
+is a deploy that has gone wrong, not a security group to edit.
+
+What the one command does, in order:
+
+| Step | What it means |
+|---|---|
+| verify HEAD | refuses a working tree that does not match the commit; the artefact carries the commit's own blobs |
+| build the frontend | locally, so Node never goes on the server and the bundle served is the bundle tested |
+| pack the artefact | `scripts/deploy_artifact.py` — tracked tree at `HEAD`, minus the exclusions, plus `frontend/dist` |
+| checksum and scan | a deterministic SHA-256, and a member scan that refuses anything secret |
+| upload | to the private artefact bucket, SSE-S3, after asserting the bucket blocks public access |
+| preflight | on the instance: disk, tools, download, **verify the digest**, scan the member list again, unpack nothing |
+| rollback snapshot | `cp -a /opt/careloop/app /opt/careloop/app.prev` before anything moves |
+| preserve `careloop.env` | the deployed file is copied aside, and the operator values it sets are carried into the new one |
+| inject `CARELOOP_UPLOAD_BUCKET` | only when `--upload-bucket` is given; otherwise whatever the instance has is kept |
+| demo-state reset | **only when the boundary marker says the store predates the current identity boundary** |
+| atomic swap | two renames on one filesystem, after the new tree is fully extracted and checked |
+| `bootstrap.sh` | the same idempotent script as ever, from the new tree |
+| health | both units active, both origins answering, on the instance |
+| `verify_deploy.py` | **through the distribution**, which is the only place a CDN misconfiguration is visible |
+| cleanup | the transfer artefact is removed from the instance and the object deleted from S3 |
+
+**Rollback is automatic, and only for what a rollback can undo.** A failing `bootstrap.sh` or a
+failing health check restores `app.prev` and bootstraps again, and the deploy exits non-zero saying
+so. A **demo-state reset is not undone** — deleting a synthetic store is not reversible, and the
+tool says that rather than implying otherwise. A `verify_deploy.py` failure is reported and *not*
+rolled back: the origin already answered, so a rollback would not address what is wrong.
+
+Useful flags: `--upload-bucket`, `--force-state-reset`, `--no-build`, `--no-verify`,
+`--instance-id`, `--artifact-bucket`, `--demo-url`.
+
+### The demo-state boundary
+
+`scripts/deploy.py` carries `DEMO_STATE_BOUNDARY` — `2026-08-24-booking-identity` — and the instance
+carries `/opt/careloop/state/.boundary`. When they disagree, the synthetic store is cleared once and
+the marker rewritten; when they agree, nothing is touched. That is what makes *CLAUDE.md*'s "a clean
+demo-state reset is required immediately before the first deployment containing this boundary" a
+comparison rather than something an operator has to remember. Changing the constant is what makes
+the next reset happen — once.
+
+Everything in the store is synthetic. There is deliberately no migration and no legacy-key
+fallback: a `DONE` case booked before a booking-identity boundary and reopened after it misses
+duplicate suppression and sends a real second `POST`.
+
+### What has to exist first
+
+Not created by the deploy, and each one an account-level decision:
+
+| Resource | Requirement |
+|---|---|
+| the EC2 instance | SSM Agent running, and an instance profile carrying `AmazonSSMManagedInstanceCore` |
+| the instance profile | plus `s3:GetObject` on the artefact bucket, the Bedrock statement, the telemetry statement, and — if uploads are real — the upload-bucket statement in [`../docs/deployment-objectstore.md`](../docs/deployment-objectstore.md) |
+| the artefact bucket | **permanent and private**: `careloop-deploy-artifacts-<account>-us-east-1` by default. Block Public Access on, SSE-S3, and a short lifecycle rule on `deploy/`. The deploy *asserts* it blocks public access and refuses if it cannot establish that |
+| the deploying principal | `s3:PutObject`, `s3:DeleteObject`, `s3:GetBucketPublicAccessBlock` on that bucket; `ssm:SendCommand`, `ssm:GetCommandInvocation`, `ssm:DescribeInstanceInformation`; `sts:GetCallerIdentity` |
+| the CloudFront distribution | already exists; the deploy neither creates nor invalidates it |
+
+The artefact object is deleted at the end of every deploy. The lifecycle rule is the backstop for a
+run that was interrupted before it got there.
 
 ## Checking it
 

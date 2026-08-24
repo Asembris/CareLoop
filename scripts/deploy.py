@@ -755,7 +755,24 @@ def print_report(report: Report) -> None:
         print(f"   note          {note}")
 
 
-def main(argv: list[str] | None = None) -> int:
+def exit_code(report: Report) -> int:
+    """Non-zero unless the deployment was verified, or verification was deliberately skipped.
+
+    A release that reached the instance and then failed through the distribution is a *failed*
+    deploy: the origin answering is not the property, and exiting zero on it would make a CDN
+    misconfiguration invisible to anything reading the exit status.
+    """
+    return 0 if report.verified in {"passed", "skipped"} else 1
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Every flag this deploy accepts.
+
+    Separate from :func:`main` so ``deploy/README.md``'s flag list can be checked against the
+    parser rather than against a second list of names -- ``tests/test_deploy_docs.py`` does that,
+    and a README naming a flag that was renamed is exactly the kind of stale claim this session
+    was about.
+    """
     parser = argparse.ArgumentParser(
         description="Deploy CareLoop over SSM. No SSH, and port 22 stays closed."
     )
@@ -788,7 +805,20 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="build and check locally, print every remote script, and reach no AWS service",
     )
-    arguments = parser.parse_args(argv)
+    return parser
+
+
+def accepted_flags() -> frozenset[str]:
+    """The option strings :func:`build_parser` really accepts, for the README check."""
+    return frozenset(
+        option
+        for action in build_parser()._get_optional_actions()
+        for option in action.option_strings
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    arguments = build_parser().parse_args(argv)
 
     root = Path(__file__).resolve().parents[1]
 
@@ -812,7 +842,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print_report(report)
-    return 0 if report.verified in {"passed", "skipped"} else 1
+    return exit_code(report)
 
 
 def dry_run(root: Path, arguments: argparse.Namespace) -> int:

@@ -572,3 +572,61 @@ def _drive(ssm: _RecordingSsm) -> list[str]:
     report = deploy.Report(instance="i-0")
     release_over_ssm(ssm, "i-0", plan(), report)
     return [step.name for step in report.steps]
+
+
+class TestTheDeployIsOnlyDoneWhenTheDistributionAgrees:
+    """``scripts/verify_deploy.py`` is the last step, and its verdict reaches the exit status.
+
+    The release step already asked ``127.0.0.1``. That is liveness, and liveness is not what breaks:
+    a stripped session header, a cache policy serving one visitor's cases to another, or a shell
+    naming a bundle that was never shipped all leave both origins answering. So the CDN check is
+    what the exit code is built from, and a failure there is reported rather than rolled back --
+    the origin being healthy is the evidence a rollback would not address it.
+    """
+
+    def test_a_passing_verification_exits_zero(self) -> None:
+        assert deploy.exit_code(deploy.Report(verified="passed")) == 0
+
+    def test_a_deliberately_skipped_one_exits_zero_too(self) -> None:
+        assert deploy.exit_code(deploy.Report(verified="skipped")) == 0
+
+    @pytest.mark.parametrize("outcome", ["failed", "unreachable", "not run"])
+    def test_anything_else_exits_non_zero(self, outcome: str) -> None:
+        assert deploy.exit_code(deploy.Report(verified=outcome)) == 1
+
+    def test_a_failed_property_is_reported_as_failed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import scripts.verify_deploy as verifier
+
+        def refuse(_: str) -> None:
+            raise verifier.Failed("the session header did not reach the origin")
+
+        monkeypatch.setattr(verifier, "verify", refuse)
+        report = deploy.Report()
+        assert deploy.verify_through_the_cdn("https://example.invalid", report) == "failed"
+        assert any("session header" in note for note in report.notes)
+
+    def test_an_unreachable_distribution_is_reported_as_unreachable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import scripts.verify_deploy as verifier
+
+        def unreachable(_: str) -> None:
+            raise OSError("connection refused")
+
+        monkeypatch.setattr(verifier, "verify", unreachable)
+        report = deploy.Report()
+        assert deploy.verify_through_the_cdn("https://example.invalid", report) == "unreachable"
+        assert any("could not be reached" in note for note in report.notes)
+
+    def test_the_distribution_is_the_default_and_the_origin_is_never_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import scripts.verify_deploy as verifier
+
+        asked: list[str] = []
+        monkeypatch.setattr(verifier, "verify", asked.append)
+        assert deploy.verify_through_the_cdn("", deploy.Report()) == "passed"
+
+        assert asked == [verifier.DEFAULT_BASE]
+        assert asked[0].startswith("https://")
+        assert "127.0.0.1" not in asked[0]

@@ -139,6 +139,42 @@ schema = [
     "schemathesis>=4.24.3,<5",
 ]
 
+# The deployment driver under scripts/ only — `scripts/deploy.py`, `scripts/deploy_artifact.py` and
+# `scripts/verify_deploy.py`. Separate from `dev` for the reason every extra above is: CI installs
+# `.[dev]` and its contract is that no provider SDK is reachable, asserted by inspecting the
+# installed tree. Deploying is also not something the test suite does.
+#
+# **One package, because that is what the tooling imports.** Measured rather than assumed:
+# `deploy_artifact.py` is standard library throughout — `tarfile`, `gzip`, `hashlib`, `subprocess`
+# — and `verify_deploy.py` drives the distribution with `urllib`, so `boto3` in `deploy.py` is the
+# whole of it. `tests/test_deploy_docs.py` re-derives that set from the modules' own imports, so an
+# extra that stopped covering them fails rather than going quietly stale.
+#
+# **Declared even though it already arrives.** `strands-agents` depends on `boto3<2.0.0,>=1.26.0`,
+# so a `.[dev]` checkout has had one all along — which is precisely the shape session 4's `httpx`
+# note names: an undeclared dependency you rely on is one you find out about on CI. An operator
+# deploying from a checkout should not be depending on the agent SDK's dependency list to have a
+# deploy tool, and the day `strands-agents` drops boto3 is not the day to discover that.
+#
+# **`[crt]` is why this extra exists at all, and it is not decoration.** The first real SSM deploy
+# could not start: the `careloop-deployer` profile is an `aws login` profile carrying a
+# `login_session`, and botocore's login credential provider raises
+# `MissingDependencyException: Using the login credential provider requires an additional
+# dependency ... botocore[crt]`. Measured 2026-08-24, against both boto3 and the AWS CLI.
+#
+# **`boto3[crt]` rather than naming `awscrt`.** The extra resolves `botocore[crt]`, which pins
+# `awscrt==0.36.0` itself. Spelling awscrt here would be a second, independent constraint on a
+# package botocore already constrains exactly — two answers to one compatibility question, which
+# is the shape this repository refuses everywhere else.
+#
+# The floor is the version the deploy was actually proven on rather than the oldest that might
+# work; the ceiling is the major, because boto3 2.x would be a different SDK and deserves a
+# deliberate edit. Node is deliberately absent: `build_frontend` shells out to `npm run build`, and
+# a Python extra cannot supply it.
+deploy = [
+    "boto3[crt]>=1.43.68,<2",
+]
+
 # No [project.scripts] yet. The `careloop` console script comes back with careloop/cli.py in
 # commit 9; declaring it now installs a launcher that fails on invocation for anyone following
 # the README.

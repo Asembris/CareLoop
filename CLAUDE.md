@@ -882,24 +882,31 @@ a reason, and every response field either names the stored field it comes from o
 `DERIVED`. Response fields carry no default and no `default_factory` — invariant 9's rule for tool
 results, here so a response can only say what the projector gave it.
 
-**One tool is real, and the read-back is what makes that worth anything.** `book_appointment` routes
-over HTTP to `demoworld/`; the other three effects stay simulated, because one action made genuinely
-external is the proof and four is scope creep with a rationale. Verification then performs a
-*separate* `GET`, keyed on the confirmation id the effect returned, and compares observed clinic
-state against **every declared booking argument** — provider, patient, slot and reason — never the
-booking's own response, which would be re-reading CareLoop's receipt.
-`tests/test_verify_readback.py::TestTheIndependenceProof` is the vacuity proof for the whole
-arrangement: it moves the appointment behind CareLoop's back and requires verification to fail while
-showing the pre-read-back checks still pass. **Anything that makes the read-back cheaper by reusing
-what the effect returned deletes the only thing this buys.**
+**Two tools are real, and the read-back is what makes that worth anything.** `book_appointment`
+routes over HTTP to `demoworld/` and `upload_document` files into Amazon S3; the other two effects,
+`send_email` and `grant_portal_access`, stay simulated, because the point is proven by two
+integrations that offer CareLoop nothing in common and not by making all four external. Verification then performs a
+*separate* read, keyed on the identifier the effect returned, and compares observed external state
+against **every declared argument** — never the effect's own response, which would be re-reading
+CareLoop's receipt. `tests/test_verify_readback.py::TestTheIndependenceProof` and
+`tests/test_upload_readback.py::TestTheIndependenceProof` are the vacuity proofs: each moves the
+external record behind CareLoop's back and requires verification to fail while showing the
+pre-read-back checks still pass. **Anything that makes a read-back cheaper by reusing what the
+effect returned deletes the only thing this buys.**
 
-Two structural decisions hold it up. `RunContext` takes a **clinic or an executor, never both** —
-one collaborator turns on the real booking *and* the read-back that observes it, so a real effect
-verified against a simulated read cannot be built. And the read-back is **deliberately not a
-registry tool**: it is never proposed, produces no fact, and its only sink is a timeline-only
-diagnostic the API withholds, so registering it would buy a new proposable tool to satisfy a
-symmetry that does not apply. `demoworld/` may never import `careloop`, or reading it back stops
-being evidence.
+Two structural decisions hold it up. `RunContext` takes **providers or an executor, never both** —
+one collaborator turns on the real write *and* the read-back that observes it, so a real effect
+verified against a simulated read cannot be built. And a read-back is **deliberately not a registry
+tool**: it is never proposed, produces no fact, and its only sink is a timeline-only diagnostic the
+API withholds, so registering it would buy a new proposable tool to satisfy a symmetry that does not
+apply. `demoworld/` may never import `careloop`, or reading it back stops being evidence.
+
+**`RunContext.clinic` is the one surviving provider-named field, and it is inert.** It predates
+`ExternalProvider`, is converted by `clinic_provider` in `__post_init__`, and nothing below that
+line reads it — `bound` is assembled identically for the clinic and for anything else.
+`tests/test_provider_seams.py::TestTheOneToleratedProviderCoupling` pins the allowance to an *exact*
+set of names, so the obvious way to wire the next provider — a second field beside it — fails there.
+The object store already arrives as an ordinary provider from the composition root.
 
 **`CaseStore.clear` has exactly one caller**, `POST /api/demo/reset`, which exists only when
 `create_app` is asked for the demo surface. It is the one destructive method on the durable source
@@ -1613,6 +1620,72 @@ attributes are still nine — `reason` stays in `Proposal.args`, in the provider
 state digests, so `careloop.effect.fields` still renders `patient_id,provider_id,reason,slot_start`
 and the frozen evaluator's `EXPECTED_FIELDS` still matches. No AWS infrastructure, no evaluator
 code, no observability adapter, no Demo World semantics, no prompt and no email content moved.
+
+## Providers declare capabilities; the saga consumes two of them
+
+**The saga does not know how a clinic or an object store works, and that is now machine-checked
+rather than reviewed.** Two real providers with contracts that share nothing reach one deterministic
+recovery engine, and the engine consumes exactly two answers about a provider — *may the frozen
+identity be re-issued*, and *is an independent observer bound* — assembled by `may_replay` from
+`RECOVERY_CLASS` and `RunContext.readbacks`.
+
+**No capability framework was added, deliberately.** The audit's question was whether a third
+provider would need another hidden `if tool == …`, and the answer is no: the two declarations plus
+`Handler` and `ReadBack` already span every combination that exists. A `DuplicateSemantics` enum
+would be read by the engine and then branched on identically, because *how* a provider delivers "no
+second effect" is consumed entirely inside its adapter — the clinic replays its record, S3 refuses
+with `412` and `put_once` fetches what is there. `RecoveryClass` is defined by the outcome it
+guarantees rather than by the mechanism, and that is what lets one member cover both.
+
+```
+AUTHORITY        may this be re-issued          RECOVERY_CLASS, a write-contract fact
+AVAILABILITY     can anything else see it       RunContext.readbacks, a fact about this run
+PRODUCTION       what the write yields          Handler — including reconstruction, adapter-local
+OBSERVATION      what the world holds now       ReadBack — a fresh read, never the write's answer
+```
+
+**The four combinations are all live and all correct.** A replayable type with no observer bound
+parks; an observable type may be `NOT_REPLAYABLE` and still be independently verified, which is the
+shape a transactional mailer with a delivery log would take. What cannot be *declared* is
+replayable-with-nothing-able-to-observe-it: `check_replayable_types_are_observable` refuses it at
+import. That is a coherence check and not a merge — `may_replay` still fails closed per run, and
+availability is not capability.
+
+**Reconstruction is not observation, and the object store is where the two are easiest to confuse.**
+A `412` is answered by a `GetObject` on the *dispatch* path, which settles what CareLoop's own frozen
+identity already created; the settlement read is a second `GetObject` in `VerifyNode`, keyed on the
+recorded result. `tests/test_upload_recovery.py::TestTheReconstructionReadIsNotTheSettlementRead`
+counts both and changes the object between them. Collapsing them would be cheaper, would look green
+on every passing run, and would delete the only evidence verification has.
+
+**Absence is never a licence to re-send, and there is nowhere to write that it is.** `may_replay`
+has no parameter for an outcome and `recovery.py` imports nothing from `verify.py`, so the licence is
+decided before any read is made.
+
+**Evidence, and the four guards that keep it honest.**
+`tests/test_demoworld.py::TestIdempotency` measures the clinic's contract, `docs/objectstore-contract.md`
+and `tests/test_objectstore_contract.py` the store's. `tests/test_provider_seams.py` proves by AST
+that no effect-tool name, provider identifier, provider import or raw status code reaches the
+recovery engine — with declaration tables exempt, because `RECOVERY_CLASS` and `DEFAULT_HANDLERS`
+*must* name every tool and a branch must not.
+`tests/test_third_provider_seam.py` carries a synthetic provider with a third duplicate contract
+(submit answers with a receipt and never a record) through strand → reconcile → record → verify →
+`DONE`, importing no production provider client. `tests/test_evidence_citations.py` requires every
+repository path any module cites to exist — written because `RecoveryClass`'s clinic evidence
+citation named a file that never existed, twice.
+
+**One inconsistency is consciously deferred.** Both providers can say *"your frozen identity is
+already taken by something you did not write"*, and during **reconciliation** they land in different
+lifecycles: the clinic's `409` becomes `DispatchRefused` and parks `AWAITING_HUMAN`, while the
+store's `412`-plus-digest-mismatch raises `ObjectIdentityConflict`, escapes the node and ends the
+case `FAILED`. Both fail closed, neither creates a second effect, and on a *first* attempt the two
+agree — `ExecuteNode` catches no `DispatchRefused`. So this is a lifecycle-vocabulary difference and
+not a safety hole, and choosing between them is a real decision rather than a tidy-up:
+`ObjectIdentityConflict`'s docstring argues for the loud failure on purpose, and `FAILED` is terminal
+where `AWAITING_HUMAN` is the state that means a person must look. **Do not align them as a side
+effect of something else.** If it is taken, do it at the node — making `ObjectIdentityConflict` a
+`ProviderRefused` would also change first-attempt behaviour and re-label a CareLoop-identity error as
+a provider fact.
 
 
 ## Commands

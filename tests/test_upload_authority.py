@@ -34,7 +34,7 @@ from datetime import UTC, datetime
 import pytest
 
 from careloop.graph.extract import record_document, validate_and_promote
-from careloop.graph.trusted import configured, trusted_facts
+from careloop.graph.trusted import DEMO_CAREGIVER, configured, trusted_facts
 from careloop.policy import PolicyEngine, ReasonCode, Verdict, default_rules
 from careloop.provenance import TrustLevel
 from careloop.state import CaseState
@@ -107,7 +107,7 @@ def case_demanding(demanded: str, *attached: str) -> Case:
         case_id="case-upload",
         event_id="evt-0003-claim-rejection",
         state=CaseState.GATHERING_EVIDENCE,
-        facts=trusted_facts(NOW),
+        facts=trusted_facts(DEMO_CAREGIVER, NOW),
         created_at=NOW,
         updated_at=NOW,
     )

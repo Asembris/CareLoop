@@ -28,7 +28,7 @@ from __future__ import annotations
 import pytest
 from helpers import BOOKING_REASON, make_case, make_fact, trusted_fact
 
-from careloop.graph.trusted import TRUSTED_CONFIG, configured, trusted_facts
+from careloop.graph.trusted import DEMO_CAREGIVER, TRUSTED_CONFIG, configured, trusted_facts
 from careloop.policy import PolicyConfigError, ReasonCode, Verdict, load_rules_from_text
 from careloop.policy.engine import PolicyEngine, default_engine
 from careloop.provenance import TrustLevel
@@ -51,7 +51,7 @@ def engine() -> PolicyEngine:
 
 def _case(*facts, state: CaseState = CaseState.PLANNING):
     """A case carrying the shipped trusted configuration, plus whatever a test adds."""
-    return make_case(state=state, facts=(*trusted_facts(), *facts))
+    return make_case(state=state, facts=(*trusted_facts(DEMO_CAREGIVER), *facts))
 
 
 def _validated_patient():

@@ -43,7 +43,7 @@ import pytest
 import yaml
 from helpers import BOOKING_REASON, make_case, make_fact, trusted_fact
 
-from careloop.graph.trusted import configured, trusted_facts
+from careloop.graph.trusted import DEMO_CAREGIVER, configured, trusted_facts
 from careloop.policy import (
     RULES_PATH,
     PolicyEngine,
@@ -77,7 +77,7 @@ def engine() -> PolicyEngine:
 
 def _case(*facts, state: CaseState = CaseState.PLANNING):
     """A case carrying the shipped trusted configuration, plus whatever a test adds."""
-    return make_case(state=state, facts=(*trusted_facts(), *facts))
+    return make_case(state=state, facts=(*trusted_facts(DEMO_CAREGIVER), *facts))
 
 
 def _hero_evidence() -> tuple:

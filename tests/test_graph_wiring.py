@@ -32,7 +32,7 @@ from careloop.graph.context import (
     proposal_for,
 )
 from careloop.graph.nodes import DeterministicNode, DispatchNode, TriageNode
-from careloop.graph.trusted import trusted_facts
+from careloop.graph.trusted import DEMO_CAREGIVER, trusted_facts
 from careloop.llm.mock import mock_model
 from careloop.policy.verdicts import ReasonCode
 from careloop.state import Case, CaseState, InMemoryCaseStore, TimelineKind
@@ -47,7 +47,7 @@ def opened_case(state: CaseState = CaseState.NEW) -> Case:
         case_id="case-0001",
         event_id="evt-0001",
         state=state,
-        facts=trusted_facts(now=FIXED_NOW),
+        facts=trusted_facts(DEMO_CAREGIVER, now=FIXED_NOW),
         created_at=FIXED_NOW,
         updated_at=FIXED_NOW,
     )

@@ -15,10 +15,22 @@
  * run in this context. A reload therefore re-authenticates silently against the hosted UI, which is
  * a redirect the visitor usually does not see.
  *
- * The **PKCE verifier** is the one thing that must survive a redirect, because the code exchange
- * happens in a *different page load* from the one that generated it. It lives in `sessionStorage`
- * for exactly that hop and is deleted the moment it is used — it is a single-use secret bound to
- * one authorization code, not a credential, and it is worthless once the code is spent.
+ * The **PKCE verifier** and the **OAuth `state`** are the two things that must survive a redirect,
+ * because the code exchange happens in a *different page load* from the one that generated it. Both
+ * live in `sessionStorage` for exactly that hop and are deleted the moment a callback is handled —
+ * whether it was accepted or refused. Neither is a credential: the verifier is a single-use secret
+ * bound to one authorization code and worthless once that code is spent, and `state` is a one-time
+ * nonce that proves this callback answers a request *this page load's predecessor actually made*.
+ *
+ * **`state` and PKCE answer different questions and neither replaces the other.** PKCE stops an
+ * intercepted authorization code being redeemed by somebody who did not generate the challenge.
+ * `state` stops a code being *delivered* to this app that it never asked for — an attacker walking
+ * a victim's browser onto `https://…/?code=<the attacker's own code>` so that the victim's session
+ * silently becomes the attacker's account. That attack costs the attacker nothing and PKCE does not
+ * see it, because the code really was issued and the app really would have a matching verifier if
+ * one were lying about. So the check is exact equality against a value this app minted, and a
+ * callback carrying no `state`, an unrecognised one, or one this page has no record of is refused
+ * before the code is ever sent to the token endpoint.
  *
  * **The demo carries none of this.** `GET /api/auth` answers `{"mode": "DEMO"}` and this module
  * does nothing at all: no redirect, no token, no login screen. The judge opens the URL and is on
@@ -40,8 +52,11 @@ export interface AuthDiscovery {
 
 const BASE_URL: string = import.meta.env.VITE_API_BASE_URL ?? "";
 
-/** Where the PKCE verifier waits out the redirect. Deleted the moment the code is exchanged. */
+/** Where the PKCE verifier waits out the redirect. Deleted the moment a callback is handled. */
 const VERIFIER_KEY = "careloop.pkce";
+
+/** Where the one-time OAuth `state` waits out the same redirect, and for the same one hop. */
+const STATE_KEY = "careloop.oauth-state";
 
 /** The access token. **Module scope on purpose** — see the header. */
 let token: string | null = null;
@@ -72,11 +87,7 @@ export function forgetAuth(): void {
   token = null;
   discovered = null;
   discovering = null;
-  try {
-    window.sessionStorage.removeItem(VERIFIER_KEY);
-  } catch {
-    /* private-mode browsers throw on storage access; there is nothing to clean up there */
-  }
+  forgetTheRedirectHop();
 }
 
 /** Ask the backend which identity story it tells. Cached for the life of the page. */
@@ -114,10 +125,20 @@ function base64url(bytes: Uint8Array): string {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-function randomVerifier(): string {
+function randomNonce(): string {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
   return base64url(bytes);
+}
+
+/** Drop both single-use values, whatever happened to them. Never throws. */
+function forgetTheRedirectHop(): void {
+  try {
+    window.sessionStorage.removeItem(VERIFIER_KEY);
+    window.sessionStorage.removeItem(STATE_KEY);
+  } catch {
+    /* private-mode browsers throw on storage access; there is nothing to clean up there */
+  }
 }
 
 async function challengeFor(verifier: string): Promise<string> {
@@ -142,12 +163,14 @@ export async function beginLogin(): Promise<boolean> {
   const found = await discover();
   if (!found.authorization_endpoint || !found.client_id) return false;
 
-  const verifier = randomVerifier();
+  const verifier = randomNonce();
+  const state = randomNonce();
   try {
     window.sessionStorage.setItem(VERIFIER_KEY, verifier);
+    window.sessionStorage.setItem(STATE_KEY, state);
   } catch {
-    // Without somewhere to keep the verifier across the redirect the exchange cannot succeed, so
-    // refusing to start is better than a round trip that will fail on the way back.
+    // Without somewhere to keep these across the redirect the callback cannot be accepted at all,
+    // so refusing to start is better than a round trip that will be refused on the way back.
     return false;
   }
 
@@ -156,6 +179,7 @@ export async function beginLogin(): Promise<boolean> {
     client_id: found.client_id,
     redirect_uri: redirectUri(),
     scope: found.scopes ?? "openid",
+    state,
     code_challenge: await challengeFor(verifier),
     code_challenge_method: "S256"
   });
@@ -165,23 +189,35 @@ export async function beginLogin(): Promise<boolean> {
 
 /** Exchange the `?code=` the hosted UI came back with, if there is one.
  *
- *  Returns whether a token was obtained. The code and the verifier are both single-use: the query
- *  string is scrubbed from the address bar with `replaceState` so a copied URL carries no
- *  authorization code, and the verifier is deleted whether the exchange succeeded or not. */
+ *  Returns whether a token was obtained. The code, the verifier and the `state` are all single-use:
+ *  the query string is scrubbed from the address bar with `replaceState` so a copied URL carries
+ *  neither the authorization code nor the nonce, and both stored values are deleted whether the
+ *  callback was accepted or refused. Consuming them on the refusing path is the point rather than
+ *  tidiness — a `state` that survived a mismatch would still be there for the next attempt. */
 export async function completeLoginFromRedirect(): Promise<boolean> {
   const query = new URLSearchParams(window.location.search);
   const code = query.get("code");
+  // Not a callback at all, so nothing has been spent and nothing is consumed: a redirect this page
+  // is still waiting for must not have its stored values deleted out from under it.
   if (!code) return false;
+  const returned = query.get("state");
 
   let verifier: string | null = null;
+  let expected: string | null = null;
   try {
     verifier = window.sessionStorage.getItem(VERIFIER_KEY);
-    window.sessionStorage.removeItem(VERIFIER_KEY);
+    expected = window.sessionStorage.getItem(STATE_KEY);
   } catch {
     /* see forgetAuth */
   }
+  forgetTheRedirectHop();
   scrubTheQueryString();
   if (!verifier) return false;
+  // Exact equality against a value this page load's predecessor minted. An absent `state` on either
+  // side is a refusal rather than a skip: "no nonce to compare" is precisely the state an injected
+  // callback arrives in, and treating it as acceptable would make the check optional in the one
+  // case it exists for.
+  if (!expected || !returned || returned !== expected) return false;
 
   const found = await discover();
   if (!found.token_endpoint || !found.client_id) return false;
@@ -210,7 +246,11 @@ export async function completeLoginFromRedirect(): Promise<boolean> {
   }
 }
 
-/** Remove `code` and `state` from the address bar without a reload. */
+/** Remove `code` and `state` from the address bar without a reload.
+ *
+ *  Both, and always: the code because a copied URL must not carry a redeemable credential, and the
+ *  nonce because it is spent by the time this runs and leaving it there invites somebody to reuse
+ *  a URL that looks like a working login. */
 function scrubTheQueryString(): void {
   const url = new URL(window.location.href);
   url.searchParams.delete("code");

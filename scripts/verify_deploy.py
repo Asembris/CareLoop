@@ -107,9 +107,25 @@ def settled_case(base: str, session: str, case_id: str) -> dict[str, Any]:
 
 
 def verify(base: str) -> None:
+    """Assert what this deployment claims to be, and then assert that claim.
+
+    **The mode is read rather than assumed, and it decides which properties are askable at all.**
+    A demo deployment can be driven end to end by an anonymous checker, which is what
+    :func:`verify_demo` does. A production one cannot, and must not: everything past
+    ``GET /api/auth`` needs a credential this script deliberately does not hold. So the two are
+    separate bodies rather than one body with skips in it -- a skipped assertion reads as a
+    property that held.
+
+    What the production half checks is exactly what is checkable without authenticating: that the
+    deployment says it verifies identity, that it publishes a login a browser can complete, and
+    that every route touching a case refuses an unauthenticated caller. The authenticated half --
+    a real token, a real booking, a real read-back -- is a proof run by hand with a token obtained
+    from the hosted UI, and is recorded in ``docs/identity-bootstrap.md`` rather than pretended to
+    here.
+    """
     print(f"\nverifying {base}\n")
 
-    print("the API is there and knows about worlds")
+    print("the API is there and says what it is")
     status, _, headers = call(base, "/api/health")
     check("GET /api/health is 200", status == 200)
     check(
@@ -118,24 +134,81 @@ def verify(base: str) -> None:
         headers.get("cache-control", "<none>"),
     )
     status, raw, _ = call(base, "/api/auth")
-    published = decoded(raw) if status == 200 else {}
+    # `call` decodes already; this is the guard against a non-JSON body, not a second decode.
+    published = raw if status == 200 and isinstance(raw, dict) else {}
     check("GET /api/auth is 200", status == 200, f"got {status}")
-    # **Asserted rather than assumed, and it is the shipped state that is being asserted.** This
-    # distribution serves the judge-facing demo, so it must report DEMO: a deployment that had
-    # quietly acquired production identity would refuse every judge, and one that claimed DEMO
-    # while verifying tokens would be lying about what a visitor is using. When a real user pool
-    # exists this gate flips to PRODUCTION and gains the 401-without-a-token check below it.
+    mode = published.get("mode")
+    check("it reports one of the two identity modes", mode in {"DEMO", "PRODUCTION"}, f"{mode!r}")
+
+    if mode == "PRODUCTION":
+        verify_production(base, published)
+    else:
+        verify_demo(base, published)
+
+    verify_the_shipped_frontend(base)
+
+
+def verify_production(base: str, published: dict[str, Any]) -> None:
+    """A deployment that verifies real tokens, checked by something holding none.
+
+    Every assertion here is about a *refusal*, and that is the honest shape: an anonymous checker
+    can establish that nothing is reachable without a credential, and can establish nothing
+    whatsoever about what happens once one is presented.
+    """
+    print("\nthis deployment verifies identity and publishes a login")
+    for field in ("authorization_endpoint", "token_endpoint", "end_session_endpoint", "client_id"):
+        check(f"it publishes {field}", bool(published.get(field)), "absent")
     check(
-        "this deployment reports the demo identity mode",
-        published.get("mode") == "DEMO",
-        f"got {published.get('mode', '<none>')!r}",
+        "it asks for openid and nothing else",
+        published.get("scopes") == "openid",
+        f"got {published.get('scopes', '<none>')!r}",
     )
+    # Both endpoints are derived from one configured hosted-UI origin, so a deployment whose login
+    # and token exchange came from different pools is the failure worth catching -- and both are in
+    # the same answer, which is what lets an anonymous checker see it. Nothing here is secret: the
+    # public client id is published in every authorization request this deployment will ever send.
+    authorize = str(published.get("authorization_endpoint", ""))
+    token = str(published.get("token_endpoint", ""))
+    check(
+        "its authorize and token endpoints are the same hosted UI",
+        authorize.endswith("/oauth2/authorize")
+        and token.endswith("/oauth2/token")
+        and authorize[: -len("/oauth2/authorize")] == token[: -len("/oauth2/token")],
+        json.dumps(published),
+    )
+
+    print("\nnothing that touches a case is reachable without a token")
+    unauthenticated: tuple[tuple[str, str, dict[str, Any]], ...] = (
+        ("POST", "/api/sessions", {}),
+        ("GET", "/api/cases", {}),
+        ("GET", "/api/cases", {"session": "not-a-world-this-process-minted"}),
+        ("GET", "/api/cases/demo-referral", {"session": "not-a-world-this-process-minted"}),
+        ("POST", "/api/demo/reset", {}),
+        ("POST", "/api/demo/scenarios/referral", {}),
+    )
+    for method, path, extra in unauthenticated:
+        status, _, _ = call(base, path, method=method, **extra)
+        check(f"{method} {path} is 401 with no token", status == 401, f"got {status}")
+
+    # The header that used to be the whole of a caller's identity. Presenting one authenticates
+    # nobody, so it is refused exactly as sending nothing is -- which is the property, rather than
+    # the 400 a production route answers once a caller has authenticated and sent one anyway.
+    status, _, _ = call(base, "/api/cases", caregiver="somebody-who-never-signed-in")
+    check("a caller-supplied X-Caregiver authenticates nobody", status == 401, f"got {status}")
+
+    status, _, _ = call(base, "/api/health")
+    check("the unauthenticated health check still answers", status == 200, f"got {status}")
+
+
+def verify_demo(base: str, published: dict[str, Any]) -> None:
+    """The judge-facing synthetic world, driven end to end by an anonymous checker."""
     check(
         "a demo deployment publishes no login endpoint",
         "authorization_endpoint" not in published,
         "a demo mode that offered a login would be claiming to authenticate somebody",
     )
 
+    print("\nthe API knows about worlds")
     status, _, _ = call(base, "/api/cases")
     check("a request naming no world is 400", status == 400, f"got {status}")
     status, _, _ = call(base, "/api/cases", session="not-a-world-this-process-minted")
@@ -236,6 +309,9 @@ def verify(base: str) -> None:
         json.dumps(again),
     )
 
+
+def verify_the_shipped_frontend(base: str) -> None:
+    """The shell and the bundle it names, which need no credential in either mode."""
     print("\nthe frontend that is served is the one that carries a session")
     status, _, headers = call(base, "/")
     check("the shell is served", status == 200, f"got {status}")

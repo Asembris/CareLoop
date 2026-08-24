@@ -1,6 +1,6 @@
 """Assert the deployed demo's properties through the CDN, from outside.
 
-Run by ``deploy/push.sh`` at the end of every deploy, and runnable by hand at any time::
+Run by ``scripts/deploy.py`` at the end of every deploy, and runnable by hand at any time::
 
     python scripts/verify_deploy.py https://d2heuwvhvrdyig.cloudfront.net
 

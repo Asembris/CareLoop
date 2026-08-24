@@ -27,6 +27,10 @@ env/
 .coverage
 htmlcov/
 
+# Where scripts/deploy.py stages the artefact before it is uploaded and deleted. Never committed:
+# it is a build output whose whole point is that it is reproducible from the commit.
+.deploy/
+
 # CareLoop runtime artifacts
 *.sqlite3
 *.sqlite3-journal

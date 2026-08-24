@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Prepare an Amazon Linux 2023 arm64 host to run CareLoop. Runs ON the instance, as a sudoer.
 #
-# Idempotent: safe to re-run, and push.sh does re-run it on every deploy so that a host rebuilt
+# Idempotent: safe to re-run, and scripts/deploy.py does re-run it on every deploy so a host rebuilt
 # from scratch and a host updated in place converge on the same thing. A bootstrap that only
 # works once is a bootstrap nobody dares run.
 set -euo pipefail
@@ -100,7 +100,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable careloop-demoworld careloop-api >/dev/null
 # restart, not `enable --now`: --now does nothing to a service already running, so a redeploy
 # would leave the previous code serving and report success. The restart belongs here rather than
-# in push.sh so that the wait below is guaranteed to be waiting on the new process.
+# in the deploy driver so that the wait below is guaranteed to be waiting on the new process.
 sudo systemctl restart careloop-demoworld careloop-api
 
 echo "== waiting for both to answer"

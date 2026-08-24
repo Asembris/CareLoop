@@ -23,7 +23,7 @@ replaced is the model's opinion about what to do next, which is the one part a b
 assert on anyway.
 
 **Test-only, and structurally so.** ``pyproject.toml`` packages ``careloop*`` alone, so nothing here
-is in the wheel, and ``deploy/push.sh`` excludes the suite that drives it. Nothing under
+is in the wheel, and the deploy artefact excludes the suite that drives it. Nothing under
 ``careloop/`` imports this file and nothing here decides anything the application would otherwise
 decide — it is a composition root, exactly as ``demo_serve.py`` is.
 

@@ -29,8 +29,20 @@ from careloop.api.deps import (
     simulated_context_factory,
 )
 from careloop.api.faults import BookingResponseLoss
-from careloop.api.models import CaseDetail, CaseSections, DeliverEventRequest, RunView
-from careloop.api.projections import SECTIONS, case_detail, case_sections, run_view
+from careloop.api.models import (
+    BoundariesView,
+    CaseDetail,
+    CaseSections,
+    DeliverEventRequest,
+    RunView,
+)
+from careloop.api.projections import (
+    SECTIONS,
+    boundaries_view,
+    case_detail,
+    case_sections,
+    run_view,
+)
 from careloop.api.runs import RunAlreadyInFlight, UnknownRun
 from careloop.api.sessions import SESSION_HEADER, SessionsAtCapacity, SessionWorlds
 from careloop.events.inbound import InboundEvent
@@ -51,11 +63,14 @@ from careloop.graph.runner import (
 )
 from careloop.identity.config import browser_login
 from careloop.identity.directory import Caregiver
+from careloop.policy.boundaries import boundaries
+from careloop.policy.engine import default_engine
 from careloop.state.case import Case
 from careloop.state.machine import IllegalTransition
 from careloop.state.store import CaseNotFound, CaseStore
 from careloop.tools.clinic import ClinicClient
 from careloop.tools.objectstore import ObjectStoreClient
+from careloop.tools.registry import REGISTRY
 
 logger = logging.getLogger(__name__)
 
@@ -573,6 +588,32 @@ def create_app(
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(full)
             ) from None
+
+    @app.get(f"{API_PREFIX}/boundaries", response_model=BoundariesView, responses=SESSION_ERRORS)
+    def get_boundaries(access: Access) -> BoundariesView:
+        """What CareLoop may do for this caller, derived from what enforces it.
+
+        **The one surface that answers a question no case answers.** Everything else here projects a
+        stored case; this projects the standing configuration — which tools may act autonomously,
+        which require a decision, which nothing this caller holds can authorise, and what each one
+        demands before it will happen. It exists because the product used to state those things as
+        hand-written copy in the frontend, which is a second source of truth about authority.
+
+        **It decides nothing and it is not an authority surface.** The ruleset is read from
+        :func:`~careloop.policy.engine.default_engine`, the same object the
+        :class:`~careloop.policy.gate.PolicyGate` decides by, so the page cannot describe rules that
+        are not the ones in force. :mod:`careloop.policy.boundaries` derives the statement and
+        ``tests/test_boundaries.py`` cross-checks every claim against the real engine.
+
+        **Scoped to the caller, through their own caregiver record.** ``destinations`` is what
+        :func:`careloop.graph.trusted.trusted_facts` seeds onto that caregiver's cases, so a
+        production caller is told about their own trusted addresses and never about anybody else's.
+        Nothing about the principal is echoed back — no caregiver id, no subject, no token, no
+        session — and no patient or grant is enumerated: this says what may be done, never for whom.
+        """
+        return boundaries_view(
+            boundaries(default_engine().ruleset, REGISTRY, access.caregiver.destinations)
+        )
 
     @app.get(f"{API_PREFIX}/cases", response_model=CaseSections, responses=SESSION_ERRORS)
     def list_cases(access: Access) -> CaseSections:

@@ -197,6 +197,78 @@ class RunView(ResponseModel):
     error: str | None
 
 
+class BoundaryArgumentView(ResponseModel):
+    """One argument of one capability, as the boundary statement describes it.
+
+    Every field is a read or a derivation over ``rules.yaml`` and the tool registry — see
+    :mod:`careloop.policy.boundaries`. Nothing here is a claim about a case.
+    """
+
+    name: str
+    arg_class: str
+
+    required_trust: str | None
+    """The trust every authorising path demands, or ``None`` when the rules demand none.
+
+    ``None`` is an answer rather than a gap: ``send_email.subject`` declares no ``trust_key`` and no
+    rule names it, and a page that printed a requirement there would be asserting a guard that does
+    not exist.
+    """
+
+    trust_key: str | None
+    """Which fact this argument draws its trust from.
+
+    Safe to expose because it is the same key :class:`FactView` already carries on every piece of
+    evidence — it is what lets a caregiver connect *"the provider must be trusted"* to the trusted
+    fact on their own case, rather than a new identifier invented for this surface.
+    """
+
+    configured_value: str | None
+    """The caller's own configured destination, when this argument draws on one.
+
+    Their own address or their own portal, from CareLoop's directory. Never another caregiver's, and
+    never a value a document supplied.
+    """
+
+    authored_value: str | None
+    """The fixed literal CareLoop composes for this argument, when it composes one."""
+
+    identifies: bool
+    """Whether this argument is part of which logical action a call is."""
+
+
+class CapabilityView(ResponseModel):
+    """One external-effect tool, as the caller's current configuration permits it."""
+
+    tool_name: str
+    standing: str
+    unavailable_because: str | None
+
+    unmet_trust_keys: list[str]
+    """Fact keys an argument needs at ``TRUSTED`` that this caller does not configure.
+
+    The whole of why a capability is out of reach, and the reason the copy can be specific without
+    being a rule browser. Empty for anything that is not unavailable for that reason.
+    """
+
+    independently_observed: bool
+    recovery_class: str
+    arguments: list[BoundaryArgumentView]
+
+
+class BoundariesView(ResponseModel):
+    """What CareLoop may do for this caller, derived from what enforces it.
+
+    Not a projection of a :class:`~careloop.state.case.Case` — see
+    :data:`careloop.api.projections.DERIVED`, where every field says so. It answers *what are the
+    standing limits*, which is a question about configuration rather than about any one case, and it
+    is the surface that replaced a page of hand-written claims.
+    """
+
+    capabilities: list[CapabilityView]
+    refusals: list[str]
+
+
 class RequestModel(BaseModel):
     """Base for request bodies.
 
@@ -225,6 +297,9 @@ class DeliverEventRequest(RequestModel):
 #: ``ResponseModel.__subclasses__``, so a model defined and then forgotten is a visible omission.
 RESPONSE_MODELS: tuple[type[ResponseModel], ...] = (
     FactView,
+    BoundaryArgumentView,
+    BoundariesView,
+    CapabilityView,
     DecisionView,
     ApprovalView,
     ActionView,
@@ -271,6 +346,9 @@ __all__ = [
     "RESPONSE_MODELS",
     "ActionView",
     "ApprovalView",
+    "BoundariesView",
+    "BoundaryArgumentView",
+    "CapabilityView",
     "CaseCard",
     "CaseDetail",
     "CaseSections",

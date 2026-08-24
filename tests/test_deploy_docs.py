@@ -275,3 +275,187 @@ class TestTheRequiredAwsResourcesAreStated:
     def test_the_two_buckets_are_distinguished(self) -> None:
         """One holds documents, one holds deploy artefacts. Conflating them is an IAM mistake."""
         assert "not the same bucket" in text(OBJECTSTORE)
+
+
+# ---------------------------------------------------------------------------------------------
+# What a deploying checkout has to install.
+# ---------------------------------------------------------------------------------------------
+
+
+PYPROJECT = ROOT / "pyproject.toml"
+
+#: The modules the deploy extra exists to make importable and runnable.
+DEPLOY_TOOLING: tuple[Path, ...] = (
+    ROOT / "scripts" / "deploy.py",
+    ROOT / "scripts" / "deploy_artifact.py",
+    ROOT / "scripts" / "verify_deploy.py",
+)
+
+#: Local names that are not third-party distributions however they are imported.
+NOT_A_DISTRIBUTION: frozenset[str] = frozenset({"careloop", "scripts", "__future__"})
+
+#: What a distribution is called on PyPI where the module it provides is spelled differently. Empty
+#: today; a mapping rather than a guess, so the next one is a decision rather than a rename.
+DISTRIBUTION_OF: dict[str, str] = {}
+
+
+def third_party_imports(module: Path) -> frozenset[str]:
+    """Every non-stdlib, non-local top-level package ``module`` imports.
+
+    Derived from the module's own AST rather than from a list beside it, which is the whole point:
+    a deploy tool that grows a dependency the extra does not declare fails here, rather than in a
+    fresh checkout at the moment somebody is deploying.
+    """
+    import ast
+    import sys
+
+    tree = ast.parse(module.read_text(encoding="utf-8"))
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            imported.add(node.module.split(".")[0])
+    return frozenset(
+        DISTRIBUTION_OF.get(name, name)
+        for name in imported
+        if name not in sys.stdlib_module_names and name not in NOT_A_DISTRIBUTION
+    )
+
+
+def project_table() -> dict:
+    import tomllib
+
+    return tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))["project"]
+
+
+def extras() -> dict[str, list[str]]:
+    return project_table()["optional-dependencies"]
+
+
+def named_in(requirements: list[str], distribution: str) -> list[str]:
+    """Every requirement naming ``distribution``, extras and constraints included."""
+    return [r for r in requirements if re.match(rf"^{re.escape(distribution)}\b", r.strip())]
+
+
+class TestTheDeployExtraCoversTheDeployTooling:
+    """What the deploy extra has to be, derived from what the tooling imports.
+
+    **The first real SSM deploy is what wrote this.** Two things it measured, 2026-08-24. ``boto3``
+    reached the checkout only as a ``strands-agents`` dependency and was declared nowhere. And the
+    driver could not obtain a credential at all: the ``careloop-deployer`` profile carries an ``aws
+    login`` ``login_session``, whose botocore provider raises ``MissingDependencyException`` unless
+    ``botocore[crt]`` is installed. Neither fact was written down; both are now one requirement.
+
+    The coverage assertion reads the tooling's **own imports**, so this cannot become a second list
+    that drifts from the first. That is the treatment the flag list and the IAM prefix already get
+    in this module: a claim is compared against the thing that makes it true.
+    """
+
+    def test_the_extra_exists(self) -> None:
+        assert "deploy" in extras(), (
+            "pyproject.toml declares no deploy extra, so the install deploy/README.md tells an "
+            "operator to run installs nothing."
+        )
+
+    def test_every_third_party_import_of_the_tooling_is_declared(self) -> None:
+        needed = frozenset().union(*(third_party_imports(m) for m in DEPLOY_TOOLING))
+        declared = extras()["deploy"]
+
+        missing = sorted(name for name in needed if not named_in(declared, name))
+        assert missing == [], (
+            f"the deployment tooling imports {missing} and the deploy extra does not declare it. "
+            "A fresh checkout finds that out at the moment somebody is deploying."
+        )
+
+    def test_it_is_the_smallest_set_that_covers_them(self) -> None:
+        """No speculative packages: one requirement, because one is what the imports need.
+
+        ``deploy_artifact.py`` is standard library throughout and ``verify_deploy.py`` drives the
+        distribution with ``urllib``, so the driver's ``boto3`` is the whole of it.
+        """
+        needed = frozenset().union(*(third_party_imports(m) for m in DEPLOY_TOOLING))
+
+        assert needed == frozenset({"boto3"})
+        assert len(extras()["deploy"]) == 1
+
+    def test_the_sweep_would_notice_an_undeclared_import(self) -> None:
+        """Vacuity. The coverage check has to fail on a tool that grew a dependency."""
+        assert named_in(["boto3[crt]>=1.43.68,<2"], "boto3")
+        assert named_in(["boto3[crt]>=1.43.68,<2"], "httpx") == []
+
+    def test_the_crt_support_the_login_provider_needs_is_declared(self) -> None:
+        """Without it botocore refuses an ``aws login`` profile before any AWS call is made."""
+        (requirement,) = named_in(extras()["deploy"], "boto3")
+
+        assert "[crt]" in requirement, (
+            f"{requirement!r} declares boto3 without the crt extra. A profile carrying a "
+            "login_session then raises MissingDependencyException, which is what blocked the "
+            "first real deploy."
+        )
+
+    def test_awscrt_is_left_to_botocore_to_pin(self) -> None:
+        """One constraint on one package. Naming awscrt here would be a second, weaker answer."""
+        assert named_in(extras()["deploy"], "awscrt") == []
+        assert named_in(extras()["deploy"], "botocore") == []
+
+    def test_the_constraint_admits_the_version_the_deploy_was_proven_on(self) -> None:
+        from packaging.requirements import Requirement
+
+        requirement = Requirement(named_in(extras()["deploy"], "boto3")[0])
+
+        assert requirement.extras == {"crt"}
+        assert requirement.specifier.contains("1.43.68")
+        assert not requirement.specifier.contains("2.0.0"), (
+            "boto3 2.x would be a different SDK and deserves a deliberate edit, not a range that "
+            "already admits it."
+        )
+
+
+class TestTheDeploySdkStaysOutOfTheDefaultInstall:
+    """``dev`` is what CI installs, and its contract is that no provider SDK is reachable.
+
+    ``boto3`` arriving transitively through ``strands-agents`` is a separate fact and not this
+    module's business. What is asserted here is that *this file* does not stand a deployment SDK in
+    front of the default suite, which is the boundary ``bench``, ``evals``, ``observability`` and
+    ``schema`` already keep.
+    """
+
+    @pytest.mark.parametrize("distribution", ["boto3", "botocore", "awscrt"])
+    def test_it_is_not_a_base_dependency(self, distribution: str) -> None:
+        assert named_in(project_table()["dependencies"], distribution) == []
+
+    @pytest.mark.parametrize("distribution", ["boto3", "botocore", "awscrt"])
+    def test_it_is_not_in_dev(self, distribution: str) -> None:
+        assert named_in(extras()["dev"], distribution) == []
+
+    def test_the_extras_that_exist_are_the_ones_that_are_meant_to(self) -> None:
+        """A named set, so a new extra is a decision rather than something that appeared."""
+        assert set(extras()) == {"dev", "bench", "evals", "observability", "schema", "deploy"}
+
+
+class TestTheReadmeTellsAnOperatorToInstallIt:
+    """A deploy command documented without its install is a command that fails on a fresh clone."""
+
+    def test_the_install_is_documented_before_the_command(self) -> None:
+        readme = text(DEPLOY_README)
+
+        assert 'pip install -e ".[deploy]"' in readme
+        assert readme.index('pip install -e ".[deploy]"') < readme.index(
+            "python scripts/deploy.py"
+        ), "the install has to come before the command it makes work"
+
+    def test_it_says_why_the_crt_half_is_there(self) -> None:
+        """The one part of the requirement an operator would otherwise delete as noise."""
+        readme = text(DEPLOY_README).lower()
+
+        assert "login_session" in readme
+        assert "crt" in readme
+
+    def test_it_does_not_leave_node_looking_like_part_of_the_extra(self) -> None:
+        """``build_frontend`` shells out to npm, and no Python extra can install it."""
+        assert "node" in text(DEPLOY_README).lower()
+
+    def test_it_does_not_put_credentials_in_the_repository(self) -> None:
+        """The install is a dependency instruction; authentication stays in the shell."""
+        assert "from the shell" in text(DEPLOY_README)

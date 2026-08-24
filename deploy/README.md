@@ -185,8 +185,18 @@ function, and gains no permission from it. The measured results are in
 From a checkout with AWS credentials for this account, and **no SSH**:
 
 ```bash
+pip install -e ".[deploy]"
+```
+
+```bash
 python scripts/deploy.py
 ```
+
+The `deploy` extra is `boto3[crt]` and nothing else — `deploy_artifact.py` is standard library and
+`verify_deploy.py` uses `urllib`. The `crt` half is not optional: an `aws login` profile carries a
+`login_session`, and botocore's provider for it refuses without `botocore[crt]`. Credentials
+themselves come from the shell — a profile, an instance role, or environment variables — and never
+from this repository. The frontend build needs Node, which no Python extra can supply.
 
 ```bash
 python scripts/deploy.py --dry-run     # build, check, print every remote script, touch no AWS

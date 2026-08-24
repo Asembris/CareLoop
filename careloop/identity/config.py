@@ -40,6 +40,24 @@ ISSUER_VAR: Final[str] = "CARELOOP_OIDC_ISSUER"
 #: The app client id, matched against ``client_id`` on an access token.
 AUDIENCE_VAR: Final[str] = "CARELOOP_OIDC_AUDIENCE"
 
+#: Where the browser is sent to sign in. The hosted-UI domain, origin only.
+#:
+#: A separate variable rather than derived from the issuer, because they are genuinely different
+#: hosts: a Cognito user pool's issuer is ``cognito-idp.<region>.amazonaws.com/<pool>`` and its
+#: hosted UI is ``<prefix>.auth.<region>.amazoncognito.com``. Deriving one from the other would be
+#: a guess about AWS's naming, and the failure would be a login page that 404s.
+#:
+#: Optional. Without it the API reports production mode with no login endpoint, and a browser is
+#: told plainly that it must obtain a token some other way -- which is the truthful answer for a
+#: deployment whose clients are machines rather than people.
+LOGIN_DOMAIN_VAR: Final[str] = "CARELOOP_OIDC_LOGIN_DOMAIN"
+
+#: The scopes the browser asks for. Space-separated, OAuth's own form.
+#:
+#: ``openid`` because this is OIDC; nothing else, because CareLoop reads no claim but ``sub`` and
+#: asking for ``email`` or ``profile`` would collect personal data with no consumer.
+DEFAULT_SCOPES: Final[str] = "openid"
+
 #: The value of :data:`AUTH_MODE_VAR` that means "verify a real token".
 PRODUCTION_MODE: Final[str] = "production"
 
@@ -130,15 +148,42 @@ def auth_from_environment(
     )
 
 
+def browser_login(environ: dict[str, str] | None = None) -> dict[str, str]:
+    """What a browser needs to obtain a token, or ``{}`` if this deployment offers no login.
+
+    Public configuration in full: an authorization endpoint, a token endpoint, a logout endpoint,
+    a public client id and the scopes to ask for. **No secret**, because the browser client is a
+    public PKCE client and one that had a secret would be storing it in a page anybody can read.
+
+    Endpoints are derived from the hosted-UI origin using Cognito's documented paths, so there is
+    one variable to set rather than four to keep in step.
+    """
+    source = os.environ if environ is None else environ
+    domain = (source.get(LOGIN_DOMAIN_VAR) or "").strip().rstrip("/")
+    audience = (source.get(AUDIENCE_VAR) or "").strip()
+    if not domain or not audience:
+        return {}
+    return {
+        "authorization_endpoint": f"{domain}/oauth2/authorize",
+        "token_endpoint": f"{domain}/oauth2/token",
+        "end_session_endpoint": f"{domain}/logout",
+        "client_id": audience,
+        "scopes": DEFAULT_SCOPES,
+    }
+
+
 __all__ = [
     "AUDIENCE_VAR",
     "AUTH_MODE_VAR",
+    "DEFAULT_SCOPES",
     "DEMO_MODE",
     "ISSUER_VAR",
+    "LOGIN_DOMAIN_VAR",
     "PRODUCTION_MODE",
     "IncompleteAuthConfiguration",
     "UnknownAuthMode",
     "auth_from_environment",
+    "browser_login",
     "configured_mode",
     "wants_production",
 ]

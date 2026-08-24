@@ -49,6 +49,7 @@ from careloop.graph.runner import (
     reopen_case,
     request_recheck,
 )
+from careloop.identity.config import browser_login
 from careloop.identity.directory import Caregiver
 from careloop.state.case import Case
 from careloop.state.machine import IllegalTransition
@@ -478,6 +479,28 @@ def create_app(
         there is no stored field for it to name as its source.
         """
         return {"status": "ok"}
+
+    @app.get(f"{API_PREFIX}/auth")
+    def auth_discovery() -> dict[str, Any]:
+        """Which identity story this CareLoop tells, and how a browser joins it.
+
+        Not a response model, for the reason ``/api/health`` and ``/api/sessions`` are not: it
+        projects no stored case, so there is no stored field for a response field to name as its
+        source.
+
+        **Everything here is public.** An issuer URL, a public client id and three endpoint paths
+        are in every token this deployment will ever see, and a public PKCE client has no secret to
+        withhold. What is *not* here is anything about the caller: this answers "what is this
+        server" and never "who are you", so it is deliberately reachable without a credential --
+        a page that had to authenticate to discover how to authenticate could never start.
+
+        A demo app answers ``{"mode": "DEMO"}`` and nothing else, which is what tells a browser to
+        carry no token and to say plainly that the identity it is using is synthetic.
+        """
+        boundary = app.state.careloop_auth
+        if not boundary.is_production:
+            return {"mode": str(boundary.mode)}
+        return {"mode": str(boundary.mode), **browser_login()}
 
     @app.post(
         f"{API_PREFIX}/sessions",

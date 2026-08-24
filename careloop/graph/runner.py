@@ -176,7 +176,7 @@ def open_case(
         event_id=inbound.event_id,
         caregiver_id=caregiver.caregiver_id,
         state=CaseState.NEW,
-        facts=trusted_facts(now=at),
+        facts=trusted_facts(caregiver, now=at),
         created_at=at,
         updated_at=at,
     )

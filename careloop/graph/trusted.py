@@ -49,8 +49,14 @@ from careloop.provenance.trust import TrustLevel
 #: nothing here did.
 CONFIG_SOURCE: Final[str] = "trusted-config"
 
-#: The caregiver's own address, the provider CareLoop may book with, and the portal it may upload
-#: to. Every ``DESTINATION`` in the system resolves through one of these or is refused.
+#: The **demo** caregiver's own address, the provider CareLoop may book with, and the portal it may
+#: upload to. Every ``DESTINATION`` a demo case can reach resolves through one of these or is
+#: refused.
+#:
+#: Process-global until session X, which was correct while there was one caregiver and wrong the
+#: moment there were two -- see :func:`trusted_facts`. It is now the demo caregiver's record and
+#: nothing else's; a production caregiver's destinations live on their own
+#: :class:`~careloop.identity.directory.Caregiver`.
 TRUSTED_CONFIG: Final[tuple[tuple[str, str], ...]] = (
     ("caregiver_email", "rosa.marlowe@carer.example"),
     ("provider_id", "PROV-NORTHGATE-CARDIOLOGY"),
@@ -62,8 +68,26 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
-def trusted_facts(now: datetime | None = None) -> tuple[Fact, ...]:
-    """The configured facts, ready to seed onto a new case."""
+def trusted_facts(caregiver: Caregiver, now: datetime | None = None) -> tuple[Fact, ...]:
+    """That caregiver's configured facts, ready to seed onto a new case.
+
+    **Still the only producer of** ``TRUSTED``, and invariant 3 is unchanged. What changed in
+    session X is where the *values* come from: a process-global tuple was correct while there was
+    one synthetic caregiver and became an authority contradiction the moment there were two. Every
+    ``DESTINATION`` in the system resolves through one of these -- ``send_email.to`` draws on
+    ``caregiver_email`` -- so a global tuple would have permitted caregiver B's case to email
+    caregiver A's address, because A's was the only trusted address in the process, and refused B
+    their own.
+
+    ``caregiver`` is a record from CareLoop's own
+    :class:`~careloop.identity.directory.CaregiverDirectory`. **It is never a token claim**, and
+    that is the hard boundary: an identity provider supplying a ``caregiver_email`` would be a
+    second producer of ``TRUSTED``, reachable by anybody who could get a claim into one.
+    ``tests/test_identity_boundary.py`` refuses it structurally.
+
+    Required rather than defaulted, for :func:`careloop.graph.runner.open_case`'s reason: a case
+    seeded with destinations nobody chose is a case whose destinations nobody chose.
+    """
     at = now or _utcnow()
     return tuple(
         Fact(
@@ -73,7 +97,7 @@ def trusted_facts(now: datetime | None = None) -> tuple[Fact, ...]:
             provenance=Provenance(source_doc=CONFIG_SOURCE, extractor="config"),
             extracted_at=at,
         )
-        for key, value in TRUSTED_CONFIG
+        for key, value in caregiver.destinations
     )
 
 

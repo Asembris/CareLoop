@@ -30,7 +30,13 @@ from careloop.graph.extract import (
     record_document,
     validate_and_promote,
 )
-from careloop.graph.trusted import CONFIG_SOURCE, TRUSTED_CONFIG, configured, trusted_facts
+from careloop.graph.trusted import (
+    CONFIG_SOURCE,
+    DEMO_CAREGIVER,
+    TRUSTED_CONFIG,
+    configured,
+    trusted_facts,
+)
 from careloop.graph.verify import (
     VERIFIERS,
     UnverifiableAction,
@@ -92,14 +98,14 @@ class TestNoConfiguredValueAppearsInADocument:
             assert value not in document.text
 
     def test_a_seeded_case_resolves_every_configured_value_as_trusted(self) -> None:
-        case = make_case(facts=trusted_facts(now=FIXED_NOW))
+        case = make_case(facts=trusted_facts(DEMO_CAREGIVER, now=FIXED_NOW))
 
         for key, value in TRUSTED_CONFIG:
             assert resolve_trust(key, value, case) is TrustLevel.TRUSTED
 
     def test_and_still_does_after_both_documents_are_recorded(self) -> None:
         """The property that matters: seeding survives the evidence node reading the poison."""
-        case = make_case(facts=trusted_facts(now=FIXED_NOW))
+        case = make_case(facts=trusted_facts(DEMO_CAREGIVER, now=FIXED_NOW))
         case = record_document(case, referral(), now=FIXED_NOW)
         case = record_document(case, poisoned(), now=FIXED_NOW)
 
@@ -108,7 +114,7 @@ class TestNoConfiguredValueAppearsInADocument:
 
     def test_the_check_is_not_vacuous(self) -> None:
         """A value that *is* in a document really does resolve untrusted on the same case."""
-        case = make_case(facts=trusted_facts(now=FIXED_NOW))
+        case = make_case(facts=trusted_facts(DEMO_CAREGIVER, now=FIXED_NOW))
         case = record_document(case, poisoned(), now=FIXED_NOW)
         planted = "records-intake@claims-continuity-partners.example"
 
@@ -116,9 +122,9 @@ class TestNoConfiguredValueAppearsInADocument:
         assert resolve_trust("caregiver_email", planted, case) is TrustLevel.UNTRUSTED
 
     def test_configured_facts_name_no_document_as_their_source(self) -> None:
-        assert {fact.provenance.source_doc for fact in trusted_facts(now=FIXED_NOW)} == {
-            CONFIG_SOURCE
-        }
+        assert {
+            fact.provenance.source_doc for fact in trusted_facts(DEMO_CAREGIVER, now=FIXED_NOW)
+        } == {CONFIG_SOURCE}
 
     def test_configured_looks_a_value_up_and_admits_when_there_is_none(self) -> None:
         assert configured("provider_id") == "PROV-NORTHGATE-CARDIOLOGY"

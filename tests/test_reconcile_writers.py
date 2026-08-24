@@ -35,7 +35,15 @@ from pathlib import Path
 import pytest
 
 import careloop
-from careloop.graph.recovery import RECOVERY_CLASS, RecoveryClass, may_replay
+import careloop.graph.recovery
+from careloop.graph.recovery import (
+    RECOVERY_CLASS,
+    RecoveryClass,
+    UnobservableReplay,
+    check_replayable_types_are_observable,
+    may_replay,
+)
+from careloop.graph.verify import INDEPENDENTLY_OBSERVABLE
 from careloop.state.case import CaseState
 from careloop.state.machine import TRANSITIONS, is_legal
 
@@ -318,6 +326,117 @@ class TestTheRecoveryClassesAreDeclaredAndCovered:
     def test_an_unknown_action_type_may_not_be_replayed(self) -> None:
         """Fail closed. Unreachable while the import-time coverage check holds."""
         assert not may_replay("teleport_patient", observers={"teleport_patient"})
+
+
+class TestTheTwoDeclarationsAreCoherent:
+    """A replayable action type must be one something other than CareLoop can observe.
+
+    **Two declarations, one impossible combination.** :data:`RECOVERY_CLASS` says whether re-issuing
+    a frozen identity can create a second effect — a fact about a provider's write contract.
+    :data:`careloop.graph.verify.INDEPENDENTLY_OBSERVABLE` says whether anything but CareLoop's own
+    receipt can report what the world holds. They answer different questions and this does not merge
+    them: an observable type may perfectly well be ``NOT_REPLAYABLE``, which is what a provider that
+    can be read but whose write must never be repeated looks like.
+
+    What cannot be meant is the other corner. :func:`~careloop.graph.recovery.may_replay` requires
+    both, so a replayable-but-unobservable type can never be replayed however a run is wired — the
+    declaration is inert. Today that fails in the safe direction, which is exactly why it would sit
+    there: the first person to notice "this never replays" is one edit away from deleting the
+    observer clause instead of adding the observer, and that edit is a second real external effect
+    wearing the clothes of a fix.
+
+    **Driven against synthetic mappings**, so what is proven is the invariant rather than a second
+    spelling of today's four tools. The shipped declarations get one test of their own at the end.
+    """
+
+    OBSERVED = "provider_writes_and_can_be_read"
+    UNOBSERVED = "provider_writes_and_cannot_be_read"
+
+    def test_a_replayable_type_with_an_observer_is_coherent(self) -> None:
+        check_replayable_types_are_observable(
+            {self.OBSERVED: RecoveryClass.IDEMPOTENT_REPLAYABLE}, {self.OBSERVED}
+        )
+
+    def test_a_replayable_type_with_nothing_to_observe_it_is_refused(self) -> None:
+        with pytest.raises(UnobservableReplay, match=self.UNOBSERVED):
+            check_replayable_types_are_observable(
+                {self.UNOBSERVED: RecoveryClass.IDEMPOTENT_REPLAYABLE}, frozenset()
+            )
+
+    def test_an_observable_type_may_still_be_unreplayable(self) -> None:
+        """The converse is an ordinary integration, not an error.
+
+        A provider whose record can be read but whose write must never be repeated — a transactional
+        mailer with a delivery log, say — parks on ambiguity and is still independently verified.
+        Refusing this corner would make replay safety and observability one declaration, which is
+        the collapse this check exists *not* to be.
+        """
+        check_replayable_types_are_observable(
+            {self.OBSERVED: RecoveryClass.NOT_REPLAYABLE}, {self.OBSERVED}
+        )
+
+    def test_an_unreplayable_type_with_no_observer_is_fine_too(self) -> None:
+        """The shape ``send_email`` and ``grant_portal_access`` are in."""
+        check_replayable_types_are_observable(
+            {self.UNOBSERVED: RecoveryClass.NOT_REPLAYABLE}, frozenset()
+        )
+
+    def test_the_check_names_every_offender_rather_than_the_first(self) -> None:
+        with pytest.raises(UnobservableReplay) as raised:
+            check_replayable_types_are_observable(
+                {
+                    "alpha": RecoveryClass.IDEMPOTENT_REPLAYABLE,
+                    "beta": RecoveryClass.IDEMPOTENT_REPLAYABLE,
+                    self.OBSERVED: RecoveryClass.IDEMPOTENT_REPLAYABLE,
+                },
+                {self.OBSERVED},
+            )
+
+        assert "alpha" in str(raised.value)
+        assert "beta" in str(raised.value)
+
+    def test_the_shipped_declarations_satisfy_it(self) -> None:
+        """And the two that matter are named, so this cannot pass on an empty table."""
+        check_replayable_types_are_observable()
+
+        replayable = {
+            name
+            for name, klass in RECOVERY_CLASS.items()
+            if klass is RecoveryClass.IDEMPOTENT_REPLAYABLE
+        }
+        assert replayable == {"book_appointment", "upload_document"}
+        assert replayable <= INDEPENDENTLY_OBSERVABLE
+
+    def test_it_runs_at_import_rather_than_only_when_a_test_calls_it(self) -> None:
+        """A declaration invariant nobody enforces is a comment.
+
+        Read out of the module rather than by re-importing, because the import has already happened
+        by the time any test runs and a successful import proves nothing about *which* checks it
+        performed. Measured with the call in place: marking ``send_email`` replayable raises
+        :class:`~careloop.graph.recovery.UnobservableReplay` at import, before a single test is
+        collected.
+        """
+        source = Path(careloop.graph.recovery.__file__).read_text(encoding="utf-8")
+        module_level_calls = {
+            node.value.func.id
+            for node in ast.parse(source).body
+            if isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+        }
+
+        assert "check_replayable_types_are_observable" in module_level_calls
+        assert "check_recovery_classes_cover_the_registry" in module_level_calls
+
+    def test_the_runtime_condition_is_unchanged_by_the_declaration_check(self) -> None:
+        """The invariant is about declarations; ``may_replay`` still fails closed per run.
+
+        A type may be coherently declared and still be unreplayable *in this run*, because no
+        observer is bound. That is availability rather than capability, and nothing here moved it.
+        """
+        assert may_replay("book_appointment", observers={"book_appointment"})
+        assert not may_replay("book_appointment", observers=frozenset())
+        assert not may_replay("upload_document", observers=frozenset())
 
 
 class TestTheTransitionIsLegalAndNarrow:

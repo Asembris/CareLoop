@@ -19,7 +19,7 @@ frontend's dependency tree does not contain Playwright at all, so the download c
 by construction rather than because somebody remembered a variable. A new call site — a second CI
 job, a Docker build, a developer's shell — inherits the property without knowing it exists.
 
-`deploy/push.sh` excludes this directory: test code never lands on the instance.
+The deploy artefact excludes this directory: test code never lands on the instance.
 
 ## Running it
 

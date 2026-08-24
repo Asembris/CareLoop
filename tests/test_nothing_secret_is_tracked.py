@@ -275,25 +275,39 @@ class TestTheDetectorCatchesThePlantedOnes:
         assert forbidden_among([innocent]) == {}
 
 
-class TestTheDeployTarballExcludesTheSameThings:
+class TestTheDeployArtefactExcludesTheSameThings:
     """Two halves of one property, checked against each other rather than assumed to agree.
 
-    ``deploy/push.sh`` excludes these paths from the tarball it ships and then greps the archive to
-    prove it. That covers files that are *present but untracked*, which this sweep cannot see; this
-    sweep covers what is *published to GitHub*, which the tarball check cannot see. Neither
-    subsumes the other, and a deleted exclude in either is the kind of edit that looks harmless.
+    The deploy artefact excludes these paths and then scans its own member list to prove it. That
+    covers files that are *present but untracked*, which this sweep cannot see; this sweep covers
+    what is *published to GitHub*, which the artefact check cannot see. Neither subsumes the other,
+    and a deleted exclusion in either is the kind of edit that looks harmless.
+
+    The rules used to live in ``deploy/push.sh``'s ``tar --exclude`` list, which is where the
+    ``.venv-evals`` hole was; they are now :mod:`scripts.deploy_artifact`, with
+    ``tests/test_deploy_artifact.py`` holding the detail. This class keeps asking the question from
+    *this* side, because that independence is the point of it.
     """
 
-    def test_push_still_excludes_every_category_this_sweep_forbids(self) -> None:
-        script = (REPO_ROOT / "deploy" / "push.sh").read_text(encoding="utf-8")
-        for token in (".keys", ".env", "*.pem", "*.sqlite3"):
-            assert token in script, (
-                f"deploy/push.sh no longer mentions {token!r}: the tarball may now carry it. "
-                f"The two checks are deliberately independent — do not delete one because the "
-                f"other exists."
+    def test_every_category_this_sweep_forbids_is_excluded_from_the_artefact(self) -> None:
+        from scripts.deploy_artifact import is_excluded
+
+        for path in (".keys/deploy.pem", ".env", "careloop-deploy.pem", "demo.sqlite3"):
+            assert is_excluded(path), (
+                f"the deploy artefact would now carry {path!r}. The two checks are deliberately "
+                "independent - do not delete one because the other exists."
             )
 
-    def test_push_refuses_a_tarball_that_contains_one(self) -> None:
-        """The refusal, not just the exclusion: an exclude that silently failed would ship it."""
-        script = (REPO_ROOT / "deploy" / "push.sh").read_text(encoding="utf-8")
-        assert "refusing to ship" in script
+    def test_the_artefact_refuses_rather_than_shipping_one(self) -> None:
+        """The refusal, not just the exclusion: an exclusion that silently failed would ship it."""
+        from scripts.deploy_artifact import scan
+
+        assert scan((".keys/deploy.pem",)) == (".keys/deploy.pem",)
+
+    def test_the_instance_refuses_it_too(self) -> None:
+        """A third pass, on the host, over the bytes that actually arrived."""
+        from scripts.deploy import preflight_script
+
+        assert "refusing to unpack" in preflight_script(
+            bucket="b", key="deploy/k.tar.gz", sha256="a" * 64
+        )

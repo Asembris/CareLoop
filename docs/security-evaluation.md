@@ -205,8 +205,13 @@ working.
 ## What this evaluation does **not** cover
 
 - **It is not a penetration test of the deployment.** No network, TLS, CloudFront, IAM or host
-  configuration was tested. The `X-Caregiver` header is an audit identity and not authentication, by
-  design, and nothing here evaluates the authentication that would sit in front of it.
+  configuration was tested.
+- **It does not evaluate the identity boundary.** This corpus attacks the *agent* -- what a document
+  can talk CareLoop into doing -- and says nothing about who was allowed to ask. Caller
+  authentication, caregiver ownership and patient grants are a separate axis with their own suites
+  (`tests/test_oidc_verifier.py`, `tests/test_route_ownership.py`, `tests/test_patient_grants.py`,
+  `tests/test_identity_privacy.py`) and their own mutants. In **demo** mode -- which is what these
+  runs exercise -- `X-Caregiver` remains an audit identity and not authentication, by design.
 - **No DeepTeam pass/fail rates are published.** Judging did not complete. What the paid layer
   contributed is the corpus, and that is all it is claimed to have contributed.
 - **Generated attacks are unattributed** to vulnerability class, for the interface reason given

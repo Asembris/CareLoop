@@ -224,6 +224,8 @@ careloop/
                clinic client, document sources + fixtures/*.pdf, pdfplumber reader
   events/      Event simulator and fixtures/*.json
   llm/         Mock model provider; real Bedrock / OpenAI-compatible config
+  identity/    Principal + AuthMethod, the verifier protocol, the caregiver/grant directory,
+               the synthetic demo source and the OIDC verifier; mode configuration
   api/         FastAPI read surface + approve/reject/deliver; projections and withholding;
                the demo control surface, mounted only when create_app is asked for it
 demoworld/     A synthetic clinic in its own process. Never imports careloop.
@@ -1687,6 +1689,158 @@ effect of something else.** If it is taken, do it at the node — making `Object
 `ProviderRefused` would also change first-attempt behaviour and re-label a CareLoop-identity error as
 a provider fact.
 
+
+## Who is asking, and for whom
+
+**CareLoop had a complete answer to "may this action happen" and no answer at all to "who asked".**
+`X-Caregiver` was free text any client could set to anything; it supplied `Approval.decided_by` and
+`TimelineEvent.actor` and reached no rule, so the trail's answer to *who said yes* was a claim by
+whoever said yes. `X-CareLoop-Session` was the *entire* access-control mechanism of the deployed
+demo -- possession granted a world, every case in it, every decision on it and a real clinic booking
+-- and `docs/judges.md` told judges to put that credential in a URL bar. Neither was a bypass of the
+policy engine, and both were audit and access-boundary gaps written down in no rule.
+
+**Two modes, chosen at construction, with no path between them.** `AuthBoundary` holds a mode and
+**exactly one** verifier, and refuses at construction if they disagree -- so *"a failed production
+verification falls back to a demo identity"* is not a branch somebody must remember not to write;
+there is no second verifier in the object to fall back to. `production_auth` requires a verifier and
+a directory by signature, so an app that authenticates nobody while claiming to be production is a
+`TypeError` rather than a runtime discovery. `CARELOOP_AUTH_MODE` set to anything but the two known
+values **refuses to start**: a typo in a deployment file must not be the difference between
+authenticating and not.
+
+**The chain, and the layer that decides each link.**
+
+```
+Authorization: Bearer <token>   careloop/api/auth.py     scheme only; HTTP stops here
+verified claims                 careloop/identity/oidc.py signature, iss, aud, token_use, exp/nbf/iat
+caregiver_id                    identity/directory.py     the subject resolved once, then dropped
+caregiver -> patient grant      api/access.py             asked before new authority, never cached
+workspace ownership             api/deps.py               refused before any store is reached
+case ownership                  api/access.py             one predicate, every reader
+deterministic policy            careloop/policy/          unchanged; reads no principal
+external effect
+```
+
+**Authentication is not provenance, and that is the hard boundary.** A verified principal answers
+*who may ask CareLoop to act*; a `Fact` answers *why a tool argument may be sent somewhere*. They are
+separate axes read by separate code, exactly as `args_approved` is separate from `arg_trust_at_least`
+-- and the reason to enforce it structurally rather than by review is that an identity provider is
+the most plausible second producer of `TRUSTED` anybody would build: a token carries an email, an
+email is a destination, and one convenience later a claim decides where an effect lands.
+`tests/test_identity_boundary.py` sweeps the package by AST: `trusted_facts` is still the only
+constructor of a `TRUSTED` fact, `rules.yaml` names no principal, no caregiver and no grant, the
+policy condition vocabulary grew none, and no module below the API boundary names a token, a claim,
+an issuer or `caregiver_for_subject`.
+
+**`TRUSTED_CONFIG` was process-global, and that became an authority contradiction the moment there
+were two caregivers.** `send_email.to` is `DESTINATION`-class with `trust_key: caregiver_email` and
+`deny-email-to-untrusted-recipient` requires it `TRUSTED`; a global tuple would have permitted
+caregiver B's case to email **caregiver A's address** -- the only trusted address in the process --
+and refused B their own. So `trusted_facts(caregiver)` now takes the owning caregiver's record.
+**Invariant 3 did not move**: one producer, one file, and the input comes from CareLoop's own
+directory rather than from any claim. The demo caregiver carries exactly the shipped tuple, so a
+demo case's facts are byte-identical to before. A mutant restoring the global tuple turns 7
+assertions red in `tests/test_per_caregiver_trust.py` while all 202 existing trust and policy tests
+stay green.
+
+**Ownership is frozen when a case is opened and never rewritten.** `open_case` *requires* a
+caregiver -- a case whose owner was decided by a default is a case whose owner nobody chose -- and
+`reopen_case` has no parameter one could arrive through, for the reason `Case.event_id` is not
+rewritten by a reopen. `Case.caregiver_id` is `str | None` **so a case persisted before ownership
+existed stays readable**, which is `Approval.is_actionable`'s distinction: reading is total, and the
+refusal lives where authority is decided. Production treats `None` exactly as it treats somebody
+else's. No migration, and none was possible to need.
+
+**A case the caller does not own answers byte-identically to a case that does not exist.** `404`,
+not `403`: `403` says *that case exists and is not yours*, which is an oracle a caller sweeps an id
+space with. Same for a workspace, which answers the same `410` whether it was never minted, has been
+forgotten, or belongs to somebody else. `CaseAccess` is one predicate with several readers rather
+than a check per route, because a check per route is the one somebody forgets.
+
+**`X-Caregiver` is refused in production rather than ignored.** Ignoring it would leave two spellings
+of caregiver identity in one request for the next reader to disambiguate; refusing tells a client,
+once, that the field does not exist here. `400` and not `401`: the caller authenticated perfectly
+well and sent something meaningless on this surface. Demo mode keeps it, because a synthetic world
+has no verified principal to draw a name from and its trail should still record who pressed the
+button.
+
+**Revocation splits on whether an effect has already been issued, and the wrong half looks safer.**
+
+```
+authorised -> planned -> access revoked -> nothing dispatched      =>  REFUSE
+authorised -> dispatched -> answer lost -> access revoked          =>  RECONCILE
+```
+
+New authority is refused: a revoked caregiver cannot deliver an event, approve, re-check or start a
+scenario, and the assertion is zero `ActionRecord`s and an empty clinic rather than a status code.
+**Provider reconciliation continues**, because an effect that may already have committed is not
+un-issued by a revocation and refusing to look would leave a real appointment permanently
+unknowable -- the same argument `VerifyNode._nothing_was_observed` makes about certifying by
+removing evidence. That is structural rather than remembered: `ApiDeps` holds no directory, no
+principal and no boundary, so the startup sweep, `register_recovery`, the wake and `ReconcileNode`
+have nothing to consult. Two mutants, in their own places: dropping `may_act_on` from `decide` turns
+2 red, and making the sweep skip an owned case turns 3 red across two files.
+
+**Reading a case you own is still allowed after revocation.** Deliberate: a caregiver whose access
+was withdrawn may still see what was done in their name. Only *acting* stops.
+
+**No custom cryptography and no custom parser.** `PyJWT[crypto]` owns signature verification,
+base64url handling and JWKS caching; `careloop/identity/oidc.py` owns only the policy -- a positive
+`algorithms=("RS256",)` allowlist, exact issuer, exact audience, `token_use`, `exp`/`nbf`/`iat` with
+sixty seconds of leeway, and `require` naming every claim that must be present. **Cognito's audience
+lives in a different claim per token use** -- an access token carries `client_id` and no `aud` at
+all -- so PyJWT's own `aud` check is turned off and `AUDIENCE_CLAIM` names exactly one claim per
+use. A verifier that checked `aud` would refuse every real access token; one that accepted whichever
+matched would accept an ID token where an access token was meant.
+
+**Every authentication failure is the same failure.** One exception type, one sentence to the
+caller, the distinguishing detail in a log line that carries neither the token nor the subject.
+Invariant 6's argument applied to a different consumer: a caller who can tell an expired token from
+a wrong audience by probing has been handed a map of the verifier.
+
+**The offline suite verifies real RS256 tokens and reaches no network.** A locally generated key
+pair, real signatures, and the *production* `OidcVerifier.verify` -- only the key transport is
+swapped. Nothing is relaxed. Measured and stated rather than assumed: `alg: none` and an HS256 token
+signed with the RSA public key are refused **twice**, by the allowlist and by PyJWT declining an RSA
+key as an HMAC secret, so widening the allowlist alone does not make either verify.
+`test_the_allowlist_is_what_decides` isolates the allowlist by holding the key constant.
+
+**The token stops at the API boundary and the IdP subject is never persisted.** What travels
+inward is a `Principal` of two fields -- an opaque `caregiver_id` and how it was established -- and
+`auth_method` exists so *"a demo principal reached a production route"* is assertable rather than
+absent. Nothing carries an email, a display name, a role, a raw claim or a subject: the caregiver's
+own address is trusted **configuration** read from the directory, never a claim, and persisting the
+subject would make an IdP migration a rewrite of every case document instead of one table.
+
+**In the browser: one coherent model.** Hosted-UI login, authorization code with PKCE, and the
+access token **in memory only** -- not `localStorage`, not `sessionStorage`, not IndexedDB. A bearer
+header carries no ambient authority, so there is no CSRF machinery bolted on beside it, and the API
+is same-origin so no CORS middleware exists to configure. The PKCE verifier is the one thing that
+must survive the redirect, because the exchange happens in a different page load; it lives in
+`sessionStorage` for that hop and is deleted the moment the code is spent, succeeded or not. The
+authorization code is scrubbed from the address bar so a copied URL carries none.
+
+**The judge demo is unchanged and now says what it is.** No login, no account, no email
+verification: `POST /api/sessions`, then the dashboard. What it gained is a line saying the identity
+and the world are synthetic -- not "Signed in as Maya", which is the same small lie a decided card
+refuses to tell.
+
+**Nine telemetry attributes, still nine, still carrying no identity.** `CareLoopSettlementIntegrity`
+and `evaluators/` are untouched and were not redeployed. Provider payloads carry no identity either,
+asserted against **the clinic's own stored record** rather than against what CareLoop believes it
+sent. Session ids no longer appear whole in logs -- `careloop.api.sessions.named` logs eight
+characters, because a WARNING carrying a whole one handed anybody who could read the logs everything
+that world could do.
+
+**What this does not do.** There is no token revocation and no refresh-token store: an access token
+is valid until it expires, and shortening that is the issuer's setting rather than CareLoop's code.
+There are no roles, groups, organisations or scopes, and no identity policy language -- the only
+question production asks is *may this caregiver currently act for this patient*, and a boolean
+relation answers it. The caregiver directory is in-memory and is composed at the composition root;
+a durable one replaces it the way `SqliteCaseStore` replaces `InMemoryCaseStore`. **And the
+production claim is not earned until a real user pool exists and a real token has been verified
+through CloudFront** -- the offline suite proves the claim policy, not the deployment.
 
 ## Commands
 

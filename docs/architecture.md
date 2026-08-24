@@ -172,6 +172,54 @@ deliberately: a trace claiming an `upload_document` effect returns `NOT_APPLICAB
 `tests/test_evaluator_upload_scope.py` states that as a named exclusion rather than as an equality
 that happened to hold while there was one real provider.
 
+## Who is asking
+
+Two modes, decided at construction and mutually exclusive there.
+
+```
+                     DEMO                          PRODUCTION
+identity             synthetic caregiver           OIDC access token, verified in FastAPI
+audit actor          X-Caregiver, a typed name     the verified caregiver; the header is refused
+workspace            possession is enough          the owner must match the principal
+case access          one world, one visitor        case.caregiver_id == principal.caregiver_id
+patient              one fixture patient           caregiver -> patient grant, checked per request
+data                 fixtures, no PHI              whatever the deployment holds
+```
+
+The production chain, with the layer that decides each link:
+
+```
+Authorization: Bearer <token>
+        │  careloop/api/auth.py — the scheme, and nothing below sees a credential
+        ▼
+verified claims
+        │  careloop/identity/oidc.py — signature vs JWKS, exact iss, exact aud
+        │  by token_use, exp/nbf/iat with leeway, RS256 only
+        ▼
+caregiver_id
+        │  careloop/identity/directory.py — the subject resolved once, then dropped
+        ▼
+caregiver ↔ patient grant
+        │  careloop/api/access.py — asked before new authority, never cached
+        ▼
+workspace + case ownership
+        │  careloop/api/deps.py, careloop/api/access.py — 410 / 404, never a distinguishable 403
+        ▼
+the deterministic policy engine — unchanged, and reads no principal
+        ▼
+external effect
+```
+
+**Caller authorisation and evidence provenance are separate axes.** The policy engine answers *may
+this action happen, with these arguments, on this case*; identity answers *may this person ask*.
+`rules.yaml` names no principal, no caregiver and no grant, `trusted_facts` is still the only
+producer of a `TRUSTED` fact, and a token claim can never become one.
+
+**Revocation does not reach reconciliation.** New authority is refused; an already-issued effect
+whose outcome is unknown is still reconciled, because an appointment that may exist does not stop
+existing when a grant is withdrawn. `ApiDeps` holds no directory, which is what makes that a
+property of the wiring rather than of somebody's memory.
+
 ## Deployed
 
 One `t4g.small` behind CloudFront, serving `/` and `/api/*` from uvicorn on `:8000` and `/clinic/*`

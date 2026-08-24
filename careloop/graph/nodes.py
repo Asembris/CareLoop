@@ -79,6 +79,7 @@ from careloop.graph.context import (
     approval_for,
     approval_id_for,
     entered_verifying_from,
+    established_patients,
     is_repeat_refusal,
     latest_proposal,
     policy_fingerprint,
@@ -359,6 +360,28 @@ class GateNode(DeterministicNode):
             self.context.commit(case, expected_version=base)
             return "gate: nothing to decide"
 
+        # **The patient boundary, asked here because here is where a case can still be parked.**
+        #
+        # ``AWAITING_HUMAN`` is reachable from ``PLANNING`` and from nowhere an external effect
+        # could be proposed -- which is the same sentence this class's docstring opens with, and it
+        # is why the *primary* enforcement point for the patient boundary is this node rather than
+        # the executor. By the time the executor runs the case is ``READY_TO_EXECUTE``, whose only
+        # exits are ``EXECUTING`` and ``FAILED``, so a refusal there can only be a failure.
+        #
+        # Asked **before** the policy engine, deliberately. Not because the order changes the
+        # outcome -- neither verdict depends on the other -- but because a ``POLICY_ALLOW`` on the
+        # trail for a case CareLoop then refused to act on reads as a contradiction, and because
+        # asking the cheaper structural question first is what every other node here does.
+        #
+        # Asked **live**. ``established_patients`` reads the case as the store holds it now, and the
+        # authority answers from current state. Both halves matter: the patients are only known
+        # because the evidence node has already run, and the answer is only correct because nobody
+        # cached it when the run began.
+        if not self.context.patient_authority.allows(established_patients(case)):
+            case = _park_with_no_patient_authority(case, self.context.now())
+            self.context.commit(case, expected_version=base)
+            return "gate: parked; this case is not one this run may act on"
+
         decision = self.context.gate.decide(proposal.tool_name, proposal.args)
         # Computed from the case the engine just judged, before this verdict is appended. Nothing
         # the fingerprint reads is changed by appending a timeline entry, so the order is not
@@ -520,6 +543,30 @@ class ExecuteNode(DeterministicNode):
             )
             self.context.commit(case, expected_version=base)
             return f"execute: {proposal.tool_name} suppressed as a duplicate"
+
+        # **The second enforcement point for the patient boundary, and the last one there is.**
+        #
+        # Placed *after* duplicate suppression and *before* the preparation, which is the only
+        # window that is correct. After suppression, because a duplicate replays a recorded result
+        # and makes no provider call -- it settles an effect that already happened, and refusing it
+        # would strand a case over a decision that changes nothing outside. Before the preparation,
+        # because ``ACTION_PREPARED`` means *about to be attempted* and reconciliation acts on one:
+        # writing a preparation and then refusing would leave an unsettled intent for the startup
+        # sweep to find and dispatch, which is this check being routed around by the recovery path.
+        #
+        # The gate node asks the same question one node earlier and parks properly. This one exists
+        # for the path that never reaches the gate -- a case released by an approval resumes
+        # ``dispatch -> execute`` -- and for the reason the gated toolset exists beside the
+        # ``BeforeToolCall`` hook: either alone would do, so a future edit has to defeat both.
+        # Reaching it means the layers disagreed, which is what ``_fail`` means in this node
+        # already; the API refuses that path at ``decide`` before any state moves, so it should
+        # never fire.
+        if not self.context.patient_authority.allows(established_patients(case)):
+            return self._fail(
+                case,
+                base,
+                "the run is not authorised to act for the people this case is about",
+            )
 
         # **The durable intent and the state change are one commit.** Everything above has settled
         # that this action has not happened; this is the last line before anything could reach the
@@ -1417,6 +1464,54 @@ def _park_with_nothing_safe_to_do(case: Case, now, reason: NothingLeftToTry) -> 
         case,
         CaseState.AWAITING_HUMAN,
         reason=reason.summary,
+        actor="policy",
+        now=now,
+    )
+
+
+def _park_with_no_patient_authority(case: Case, now) -> Case:
+    """Stop because this run may not act for the people the case is about, and hand it to a person.
+
+    ``PLANNING`` → ``AWAITING_HUMAN``. **No approval is raised**, for the reason its three siblings
+    raise none: an :class:`~careloop.state.case.Approval` is a capability for one exact call, and
+    what is wrong here is not the call. Every argument on the proposal is fine and policy would
+    very likely have allowed it; what a caregiver would be being asked is *"may I act for this
+    person?"*, which is not a question a button on a proposal can answer and not one a human
+    pressing approve should be able to answer for themselves.
+
+    **A sibling rather than a branch**, again for the reason the other three are siblings. Every
+    tool was refused; an action was carried out and cannot be confirmed; no action could be written
+    down; and now: this case is not one this run may act on. Four different facts, told apart by
+    their reason code, which is what a reason code is for.
+
+    **The diagnostic names no caregiver, no grant and no mechanism.** This node cannot see one --
+    :mod:`careloop.graph.authority` speaks only of patients, on purpose -- and the withheld
+    diagnostic is the wrong place to start describing an identity system even if it could. What the
+    trail records is that the boundary refused and which patients it was asked about; who was asking
+    is the API layer's fact and lives in its own audit entries.
+    """
+    established = sorted(established_patients(case))
+    case = append_event(
+        case,
+        kind=TimelineKind.MANUAL_HANDOFF_REQUIRED,
+        actor="policy",
+        summary="this case is not one CareLoop may currently act on; manual follow-up is required",
+        diagnostic=(
+            f"the run's patient authority was asked about "
+            f"{established or 'no established patient'} and refused. Nothing was prepared, "
+            f"nothing was dispatched and no external system was reached: this is asked before "
+            f"the durable intent is written, so there is no unsettled attempt for a recovery to "
+            f"find. Parked rather than failed -- nothing broke, and a person deciding whether "
+            f"this case should be worked on at all is exactly the next step. No approval is "
+            f"raised: an approval authorises one exact call, and the call is not what was refused."
+        ),
+        payload={"reason_code": str(ReasonCode.PATIENT_AUTHORITY_DENIED)},
+        now=now,
+    )
+    return transition(
+        case,
+        CaseState.AWAITING_HUMAN,
+        reason="this case is not one this run may act on",
         actor="policy",
         now=now,
     )

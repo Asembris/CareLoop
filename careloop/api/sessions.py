@@ -503,6 +503,7 @@ def demo_session_worlds(
     witness: Witness = NO_WITNESS,
     limit: int = DEFAULT_SESSION_LIMIT,
     idle_seconds: float = DEFAULT_SESSION_IDLE_SECONDS,
+    directory: object | None = None,
 ) -> SessionWorlds:
     """The isolated demo's composition: an in-memory store and a session-scoped clinic per visitor.
 
@@ -581,7 +582,11 @@ def demo_session_worlds(
             store=SqliteCaseStore(":memory:"),
             events=shared_events,
             context_factory=provider_context_factory(
-                clinic=clinic, objects=objects, witness=witness, losing_clinic=faults
+                clinic=clinic,
+                objects=objects,
+                witness=witness,
+                losing_clinic=faults,
+                directory=directory,
             ),
             clinic=clinic,
             objects=objects,

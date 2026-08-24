@@ -48,12 +48,16 @@ def parked(store, *, production: bool) -> tuple[TestClient, str]:
     # The recipient differs by mode, and that *is* patch 5: a demo case carries the demo
     # caregiver's trusted address and a production case carries Alma's, so an email to the other
     # one is correctly denied rather than being a broken fixture.
+    from identity_helpers import two_caregiver_directory
+
+    held = two_caregiver_directory()
     app = create_app(
         store,
         context_factory=factory_proposing(
-            intent("send_email", **(EMAIL_TO_A if production else EMAIL))
+            intent("send_email", **(EMAIL_TO_A if production else EMAIL)),
+            directory=held if production else None,
         ),
-        auth=production_boundary() if production else None,
+        auth=production_boundary(held) if production else None,
     )
     client = TestClient(app)
     client.__enter__()

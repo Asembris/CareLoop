@@ -123,12 +123,18 @@ def production_client(
     directory: InMemoryCaregiverDirectory | None = None,
     demo: bool = False,
 ) -> TestClient:
-    """A single-world production app, driven by scripted agents on the mock model."""
+    """A single-world production app, driven by scripted agents on the mock model.
+
+    The scripted factory is handed the same directory the boundary holds, which is what a production
+    composition root does -- without it the run would fall back to the demo patient authority and
+    refuse every case owned by Alma or Bo, correctly and unhelpfully.
+    """
+    held = directory if directory is not None else two_caregiver_directory()
     return TestClient(
         create_app(
             store if store is not None else InMemoryCaseStore(),
-            context_factory=factory_proposing(*proposals) if proposals else None,
-            auth=production_boundary(directory),
+            context_factory=factory_proposing(*proposals, directory=held) if proposals else None,
+            auth=production_boundary(held),
             demo=demo,
         )
     )
@@ -141,17 +147,18 @@ def isolated_production_client(
 ) -> tuple[TestClient, SessionWorlds]:
     """A world-per-visitor production app, so workspace ownership can be exercised."""
     kept = worlds if worlds is not None else {}
+    held = directory if directory is not None else two_caregiver_directory()
 
     def build(session_id: str) -> ApiDeps:
         world = ApiDeps(
             store=InMemoryCaseStore(),
-            context_factory=factory_proposing(*proposals) if proposals else None,
+            context_factory=factory_proposing(*proposals, directory=held) if proposals else None,
         )
         kept[session_id] = world
         return world
 
     registry = SessionWorlds(build, end_world=lambda *_: None)
-    app = create_app(sessions=registry, auth=production_boundary(directory))
+    app = create_app(sessions=registry, auth=production_boundary(held))
     return TestClient(app), registry
 
 

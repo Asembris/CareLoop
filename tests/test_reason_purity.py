@@ -80,7 +80,7 @@ class TestTheMappingIsTotalAndClosed:
     def test_the_mapping_has_no_entries_outside_the_enum(self) -> None:
         assert all(isinstance(key, ReasonCode) for key in REASON_TEXT)
 
-    def test_the_vocabulary_is_the_ten_agreed_codes(self) -> None:
+    def test_the_vocabulary_is_the_eleven_agreed_codes(self) -> None:
         """Growth is a deliberate decision recorded in the session log, not a drive-by addition."""
         assert {code.value for code in ReasonCode} == {
             "DESTINATION_NOT_TRUSTED",
@@ -93,6 +93,7 @@ class TestTheMappingIsTotalAndClosed:
             "EXTERNAL_STATE_NOT_CONFIRMED",
             "NO_VALID_PROPOSAL_PRODUCED",
             "EXTERNAL_OUTCOME_NOT_ESTABLISHED",
+            "PATIENT_AUTHORITY_DENIED",
         }
 
     def test_the_vocabulary_has_not_grown(self) -> None:
@@ -123,8 +124,17 @@ class TestTheMappingIsTotalAndClosed:
         Changing this number is a deliberate decision that requires an entry in
         ``docs/session-log.md`` saying which code was added and what would not work without it.
         Editing the literal to make a red suite green is the drift this test exists to catch.
+
+        From ten to eleven, when ``PATIENT_AUTHORITY_DENIED`` was added for the case where a run is
+        about to cause its first external effect and the people the case is about may not be acted
+        for. Every refusal code above is a verdict the policy engine reached about *arguments*, and
+        this is not one: the arguments are fine and the case is not one this run may act on. The
+        four park codes all assert something that did not happen here -- every tool proposed and
+        refused, an effect carried out, an outcome unestablished, no proposal formed -- so reusing
+        any of them would put a false statement in an append-only trail, which is the argument each
+        of them had to make in turn.
         """
-        assert len(ReasonCode) == 10
+        assert len(ReasonCode) == 11
 
     def test_texts_are_distinct(self) -> None:
         """Two codes rendering identically would be indistinguishable to the planner."""
@@ -249,9 +259,10 @@ class TestEvaluationLeaksNothing:
             ReasonCode.EXTERNAL_STATE_NOT_CONFIRMED,
             ReasonCode.NO_VALID_PROPOSAL_PRODUCED,
             ReasonCode.EXTERNAL_OUTCOME_NOT_ESTABLISHED,
+            ReasonCode.PATIENT_AUTHORITY_DENIED,
         }
 
-    def test_only_the_four_parking_codes_are_outside_the_engines_reach(self) -> None:
+    def test_only_the_five_parking_codes_are_outside_the_engines_reach(self) -> None:
         """Vacuity: the carve-out above must stay a carve-out for exactly the codes named.
 
         Without this, a future code that no rule ever carries could be added and the exemption
@@ -264,6 +275,12 @@ class TestEvaluationLeaksNothing:
         there was no call — the planner's bounded retry produced nothing well-formed, so no
         argument was inspected, no rule matched and ``evaluate`` was never reached. A code the
         engine cannot emit is exactly right for a stopping the engine took no part in.
+
+        ``PATIENT_AUTHORITY_DENIED`` argued it too, and from the other direction: there *was* a
+        call, and the engine would very likely have allowed it. What refused is a boundary the
+        engine has never been able to see — whether the people this case is about may be acted for
+        at all — asked by the graph, before the verdict, and answered without any of the engine's
+        vocabulary.
         """
         engine = default_engine()
         seen = {
@@ -274,6 +291,7 @@ class TestEvaluationLeaksNothing:
             ReasonCode.NO_SAFE_ACTION_AVAILABLE,
             ReasonCode.EXTERNAL_STATE_NOT_CONFIRMED,
             ReasonCode.NO_VALID_PROPOSAL_PRODUCED,
+            ReasonCode.PATIENT_AUTHORITY_DENIED,
             ReasonCode.EXTERNAL_OUTCOME_NOT_ESTABLISHED,
         }
 

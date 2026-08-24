@@ -140,6 +140,7 @@ def main() -> None:
                 clinic_url=arguments.clinic_url,
                 upload_bucket=arguments.upload_bucket,
                 witness=witness,
+                directory=auth.directory,
             ),
             demo=True,
             static_dir=arguments.static_dir or None,
@@ -161,7 +162,11 @@ def main() -> None:
             clinic=clinic,
             objects=objects,
             context_factory=provider_context_factory(
-                clinic=clinic, objects=objects, witness=witness, losing_clinic=faults
+                clinic=clinic,
+                objects=objects,
+                witness=witness,
+                losing_clinic=faults,
+                directory=auth.directory,
             ),
             demo=True,
             static_dir=arguments.static_dir or None,

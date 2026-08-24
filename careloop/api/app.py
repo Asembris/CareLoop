@@ -26,7 +26,7 @@ from careloop.api.deps import (
     ContextFactory,
     GraphRunner,
     clinic_context_factory,
-    default_context_factory,
+    simulated_context_factory,
 )
 from careloop.api.faults import BookingResponseLoss
 from careloop.api.models import CaseDetail, CaseSections, DeliverEventRequest, RunView
@@ -295,6 +295,7 @@ def build_dependencies(
     demo: bool,
     faults: BookingResponseLoss | None = None,
     objects: ObjectStoreClient | None = None,
+    directory: object | None = None,
 ) -> ApiDeps | SessionWorlds:
     """What an app is bound to: one set of dependencies, or one per visitor.
 
@@ -329,9 +330,19 @@ def build_dependencies(
             )
         return sessions
 
+    # **The patient boundary is bound here or it is bound by the graph's own default.** Passing the
+    # directory into the factory rather than onto ``ApiDeps`` is deliberate: the recovery path
+    # reaches the graph through ``ApiDeps``, and a directory hanging off it would be a directory a
+    # reconciliation could consult. What binds the authority is the thing that builds a *run*, and
+    # ``ReconcileNode`` does not ask the question at all -- which is what keeps an already-issued
+    # effect settleable after a grant is withdrawn.
     factory = context_factory
     if factory is None:
-        factory = clinic_context_factory(clinic) if clinic is not None else default_context_factory
+        factory = (
+            clinic_context_factory(clinic, directory=directory)
+            if clinic is not None
+            else simulated_context_factory(directory=directory)
+        )
 
     # Resolved before construction rather than assigned onto the instance afterwards: the local
     # graph runner is built from whichever factory this app ended up with, and a field patched in
@@ -409,6 +420,7 @@ def create_app(
             collaborator is passed alongside ``sessions``.
         AuthModeMismatch: if ``auth`` names a mode its verifier does not establish.
     """
+    identity = auth if auth is not None else demo_auth()
     bound = build_dependencies(
         store,
         sessions=sessions,
@@ -419,6 +431,7 @@ def create_app(
         objects=objects,
         demo=demo,
         faults=faults,
+        directory=identity.directory,
     )
 
     @asynccontextmanager
@@ -469,7 +482,7 @@ def create_app(
     # app-scoped dependency that resolves to a world; this resolves to no world, holds no case and
     # answers one question about the caller -- and it has to be app-scoped, because a workspace
     # whose owner is checked against a principal cannot be the thing that produces the principal.
-    app.state.careloop_auth = auth if auth is not None else demo_auth()
+    app.state.careloop_auth = identity
 
     @app.get(f"{API_PREFIX}/health")
     def health() -> dict[str, str]:

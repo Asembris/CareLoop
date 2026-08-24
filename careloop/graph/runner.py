@@ -44,11 +44,11 @@ from careloop.graph.builder import (
     build_graph,
 )
 from careloop.graph.context import RunContext, recheck_target
-from careloop.graph.trusted import trusted_facts
+from careloop.graph.trusted import demo_patient_authority, trusted_facts
 from careloop.identity.directory import Caregiver
 from careloop.state.case import ApprovalStatus, Case, CaseState, TimelineKind
 from careloop.state.machine import append_event, transition
-from careloop.state.store import CaseStore, VersionConflict
+from careloop.state.store import CaseNotFound, CaseStore, VersionConflict
 
 
 class NoSuchApproval(Exception):
@@ -280,7 +280,26 @@ def context_for(
     case_id: str,
     **kwargs: Any,
 ) -> RunContext:
-    """Build a run context bound to one case and one inbound event."""
+    """Build a run context bound to one case and one inbound event.
+
+    **The patient authority defaults to the case's own owner against the demo directory**, and a
+    composition root serving anybody real overrides it. That default is a real grant check rather
+    than a permission: a case owned by a caregiver the demo directory does not hold -- which is
+    every production caregiver -- is refused, so a deployment that forgot to bind one stops rather
+    than opens up. See :func:`careloop.graph.trusted.demo_patient_authority`.
+
+    The owner is read here because it is *frozen*: ``Case.caregiver_id`` is written when the case is
+    opened and never rewritten, so capturing it captures a constant. The grant behind it is read
+    live, at the moment a node asks. A case this store does not hold yet gets an authority over no
+    caregiver, which refuses everything -- the fail-closed answer to a question asked too early.
+    """
+    if "patient_authority" not in kwargs:
+        try:
+            owner = store.get(case_id).caregiver_id
+        except CaseNotFound:
+            owner = None
+        kwargs["patient_authority"] = demo_patient_authority(owner)
+
     return RunContext(
         case_id=case_id,
         store=store,

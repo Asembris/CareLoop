@@ -33,19 +33,23 @@ export const AUTHORITY: AuthorityRow[] = [
   }
 ];
 
-export interface Guarantee {
-  text: string;
-  code: string;
-}
-
-/** Only claims the backend actually supports belong here. */
-export const GUARANTEES: Guarantee[] = [
-  { text: "Deterministic policy gate — the model cannot widen its own permissions", code: "GATE" },
-  { text: "Approval is bound to the exact arguments shown to the person", code: "ARG_BIND" },
-  { text: "Durable idempotency — a retry cannot book twice", code: "IDEMPOTENT" },
-  { text: "Every extracted fact carries its source document and page", code: "PROVENANCE" },
-  { text: "Completion requires an independent external read-back", code: "VERIFY" }
-];
+/* `GUARANTEES` was here, and it is gone rather than moved.
+ *
+ * Five hand-written claims about CareLoop's authority — the deterministic gate, approval bound to
+ * exact arguments, durable idempotency, provenance on every fact, and completion requiring an
+ * independent read-back. Each was maintained by nobody and checkable by nothing, which is the
+ * second-source-of-truth problem `My Boundaries` was built to remove: they sat on the page whatever
+ * `rules.yaml` said underneath them.
+ *
+ * All five now render from `GET /api/boundaries` or from a case's own trail — and **one of them was
+ * already false**. "Completion requires an independent external read-back" is true of
+ * `book_appointment` and `upload_document` and untrue of the other two, which are simulated by
+ * design; the derived copy says which is which per capability, because "verified" is a materially
+ * stronger claim when something outside CareLoop agreed.
+ *
+ * `AUTHORITY` below is deliberately kept. It describes the *architecture* — who proposes, who
+ * authorizes, who approves, who confirms — rather than what this caregiver may do, so it is
+ * explanatory rather than a claim about limits, and it is read by the Under the hood drawer. */
 
 export const AGENT_STAGES = ["Triage", "Evidence", "Planner", "Gate", "Execute", "Verify", "Settled"] as const;
 

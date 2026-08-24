@@ -11,7 +11,7 @@ import EvidenceLens from "@/components/cases/EvidenceLens";
 import HomePage from "@/pages/HomePage";
 import DemoPage from "@/pages/DemoPage";
 import CasePage from "@/pages/CasePage";
-import TrustPage from "@/pages/TrustPage";
+import BoundariesPage from "@/pages/BoundariesPage";
 import NotFoundPage from "@/pages/NotFoundPage";
 
 export default function App() {
@@ -52,7 +52,10 @@ export default function App() {
               <Route path="/" element={<HomePage />} />
               <Route path="/demo" element={<DemoPage />} />
               <Route path="/case/:caseId" element={<CasePage />} />
-              <Route path="/trust" element={<TrustPage />} />
+              {/* The route is unchanged and must stay so: `/trust` is what `docs/judges.md`, the
+                  captured goldens and any link a judge has written down already point at. The page
+                  behind it is now derived rather than written, and the nav says so. */}
+              <Route path="/trust" element={<BoundariesPage />} />
               {/* Last, and it swallows nothing above it: React Router v6 ranks by specificity
                   rather than by declaration order, so `/case/:caseId` still wins for a case that
                   does not exist and answers with its own recovery state. `/case/` has no id to

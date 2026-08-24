@@ -189,10 +189,10 @@ function expectNoResidue(seen: Awaited<ReturnType<typeof residue>>, label: strin
 
 /** The application answers a click, which is the only interesting definition of "usable". */
 async function stillUsable(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Trust", exact: true }).click();
+  await page.getByRole("button", { name: "My Boundaries", exact: true }).click();
   await expect(page).toHaveURL(/\/trust$/);
   await expect(
-    page.getByRole("heading", { name: "The model never authorizes its own actions." })
+    page.getByRole("heading", { name: "What CareLoop may do, and what it will not." })
   ).toBeVisible();
   await page.getByRole("button", { name: "CareLoop — home" }).click();
   await expect(page).toHaveURL(/\/$/);
@@ -242,11 +242,11 @@ test.describe("the boot loader", () => {
     /* The half a URL-only switch would miss. Client-side routing drops the query, so a reload
        after navigating is a bare address — and a kill switch a navigation silently undoes is not
        a kill switch. */
-    await page.getByRole("button", { name: "Trust", exact: true }).click();
+    await page.getByRole("button", { name: "My Boundaries", exact: true }).click();
     await expect(page).toHaveURL(/\/trust$/);
     await page.reload();
     await expect(
-      page.getByRole("heading", { name: "The model never authorizes its own actions." })
+      page.getByRole("heading", { name: "What CareLoop may do, and what it will not." })
     ).toBeVisible();
     expect(await page.locator(OVERLAY).count(), "still off after a bare reload").toBe(0);
     await context.close();

@@ -72,16 +72,17 @@ async function seed(page: Page, request: APIRequestContext, key: string): Promis
 
 const NONE: Allowance[] = [];
 
-/** The Trust page's guarantee list is bulleted with `✓` characters. */
+/** My Boundaries bullets each refusal with an aria-hidden dash. */
 const DECORATIVE_GLYPHS: Allowance[] = [
   {
     rule: "color-contrast",
     why:
-      'Each guarantee is prefixed with an aria-hidden "✓" span, and axe reports "element content ' +
+      'Each refusal is prefixed with an aria-hidden "—" span, and axe reports "element content ' +
       'contains only non-text characters" — it declines to judge contrast for a glyph rather than ' +
       "getting it wrong. Correct to allow rather than to repair: the mark is decorative and hidden " +
       "from assistive technology, so it carries no information a contrast ratio would protect, and " +
-      "the words beside it are real text and are scanned normally."
+      "the words beside it are real text and are scanned normally. It replaced the deleted " +
+      "guarantee list's checkmark, which was the same shape of allowance for the same reason."
   }
 ];
 
@@ -142,14 +143,17 @@ for (const theme of THEMES) {
     await scan(page, `case detail (${theme})`, NONE);
   });
 
-  scanState(`trust (${theme})`, async (page) => {
+  scanState(`my boundaries (${theme})`, async (page) => {
     await page.goto("/trust");
     await useTheme(page, theme);
     await page
-      .getByRole("heading", { name: "The model never authorizes its own actions." })
+      .getByRole("heading", { name: "What CareLoop may do, and what it will not." })
       .waitFor();
+    // The bands are what the scan is for, and they arrive on the boundary response rather than on
+    // first paint. Scanning before it lands would scan a skeleton and report nothing useful.
+    await page.getByRole("heading", { name: "CARELOOP MAY, ON ITS OWN" }).waitFor();
 
-    await scan(page, `trust (${theme})`, DECORATIVE_GLYPHS);
+    await scan(page, `my boundaries (${theme})`, DECORATIVE_GLYPHS);
   });
 
   scanState(`under-the-hood drawer (${theme})`, async (page, request) => {

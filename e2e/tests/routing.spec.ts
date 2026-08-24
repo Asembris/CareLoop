@@ -64,7 +64,7 @@ test.describe("direct load", () => {
     await page.goto("/trust");
     await expect(page.getByRole("main")).toBeVisible();
     await expect(
-      page.getByRole("heading", { name: "The model never authorizes its own actions." })
+      page.getByRole("heading", { name: "What CareLoop may do, and what it will not." })
     ).toBeVisible();
   });
 

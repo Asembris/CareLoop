@@ -503,13 +503,19 @@ const REFUSAL_PHRASES: Record<string, string> = {
   REQUIRES_HUMAN_APPROVAL: "without a person's decision",
   NO_RULE_MATCH: "with no rule permitting it",
   NO_SAFE_ACTION_AVAILABLE: "safely",
-  // Never reached in practice: these two are carried by a MANUAL_HANDOFF_REQUIRED entry and never
-  // by a POLICY_DENY, because nothing was refused — an action was carried out and could not be
-  // confirmed, or no action could be formed at all. Listed so the map stays total over the
+  // Never reached in practice: the last four are carried by a MANUAL_HANDOFF_REQUIRED entry and
+  // never by a POLICY_DENY, because nothing was refused — an action was carried out and could not
+  // be confirmed, its outcome was never established, no action could be formed at all, or the case
+  // was about somebody this caregiver may not act for. Listed so the map stays total over the
   // backend's vocabulary rather than falling through to a bare tool phrase if a future writer ever
   // does deny with one.
+  //
+  // It was **not** total until My Boundaries went looking: the last two were missing while the
+  // comment above them claimed completeness. See `decisionCopy` for the one that mattered.
   EXTERNAL_STATE_NOT_CONFIRMED: "and could not be confirmed afterwards",
-  NO_VALID_PROPOSAL_PRODUCED: "before it could be written down"
+  EXTERNAL_OUTCOME_NOT_ESTABLISHED: "and CareLoop never learned whether it happened",
+  NO_VALID_PROPOSAL_PRODUCED: "before it could be written down",
+  PATIENT_AUTHORITY_DENIED: "for somebody your access does not currently cover"
 };
 
 export function blockedFor(toolName: string, reasonCode: string): BlockedAction {
@@ -619,6 +625,51 @@ export function decisionCopy(
       after:
         "Nothing was changed. CareLoop will not try again on its own, and there is nothing here " +
         "to approve — this case has to be picked up by hand.",
+      approveLabel: "Approve",
+      rejectLabel: "Reject",
+      recheckLabel: "Check the clinic again"
+    };
+  }
+
+  // The fourth reason a case stops with nothing to approve, and the one that was being described
+  // wrongly. It has nothing to do with policy refusing a call: `graph/nodes.py` asks the patient
+  // boundary *before* an intent is durably written, so nothing was proposed, nothing was refused,
+  // nothing was prepared and no external system was reached. Falling through to the card below told
+  // a caregiver "every action CareLoop could take here was refused by its own policy", which would
+  // send them looking for a rule that never matched — and would hide the only fact that matters,
+  // which is that this case is about somebody they may not currently act for.
+  if (reasonCode === "PATIENT_AUTHORITY_DENIED") {
+    return {
+      title: "This case is outside your access",
+      body:
+        "CareLoop checked who this case is about before doing anything, and your access does not " +
+        "currently cover them. Nothing was sent, booked or changed, and no outside system was " +
+        "contacted.",
+      facts,
+      after:
+        "Nothing was changed. CareLoop will not work on this case while that is true, and there " +
+        "is nothing here to approve — access is granted outside CareLoop.",
+      approveLabel: "Approve",
+      rejectLabel: "Reject",
+      recheckLabel: "Check the clinic again"
+    };
+  }
+
+  // The fifth, and the counterpart to EXTERNAL_STATE_NOT_CONFIRMED above rather than a synonym for
+  // it. That one means CareLoop holds a receipt an independent read could not confirm, and asks
+  // *is the appointment right*. This one means CareLoop holds no receipt at all, and asks *does an
+  // appointment exist*. Different errands, so different words.
+  if (reasonCode === "EXTERNAL_OUTCOME_NOT_ESTABLISHED") {
+    return {
+      title: "CareLoop doesn’t know whether this happened",
+      body:
+        "CareLoop sent this and no answer ever came back, so it cannot tell whether it was " +
+        "carried out. Rather than assume either way — and rather than do it a second time — it " +
+        "has stopped and left the question to you.",
+      facts,
+      after:
+        "Nothing further happens automatically. Please check the other system for a record of " +
+        "this before anything else is tried.",
       approveLabel: "Approve",
       rejectLabel: "Reject",
       recheckLabel: "Check the clinic again"

@@ -39,7 +39,6 @@ export default function AppHeader() {
   const homeActive = pathname === "/" || pathname.startsWith("/case");
   const trustActive = pathname === "/trust";
   const themeLabel = theme === "dark" ? "Switch to light" : "Switch to dark";
-  const muted = "var(--muted-foreground)";
 
   return (
     <header
@@ -145,7 +144,13 @@ export default function AppHeader() {
           )}
         </button>
 
-        <span style={{ fontSize: 14, color: muted }}>Maya</span>
+        {/* A hardcoded caregiver name used to sit here, directly under an `IdentityStrip` whose
+            whole purpose is to refuse "Signed in as Maya" as a small lie. In demo mode it named a
+            person who does not exist as though somebody had signed in; in production it would have
+            shown that same invented name beside a cryptographically verified identity that is
+            somebody else's. It is removed rather than replaced: the identity strip already says
+            whose session this is and whether anything was verified, and one true statement about
+            identity is enough for one page. */}
       </nav>
     </header>
   );

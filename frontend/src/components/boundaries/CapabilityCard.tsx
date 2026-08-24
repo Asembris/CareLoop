@@ -31,7 +31,17 @@ function toneFor(standing: string): string {
  * and trust levels behind those sentences live in the disclosure below them. Readable language
  * first, the vocabulary that enforces it second.
  */
-export default function CapabilityCard({ capability }: { capability: Capability }) {
+export default function CapabilityCard({
+  capability,
+  locate = false
+}: {
+  capability: Capability;
+  /** Whether this is the card a `/trust#<tool>` link asked for.
+   *
+   *  Driven by the page rather than by `:target`, because the fragment is resolved before these
+   *  cards exist — see the `clLocate` rule in `components.css`. */
+  locate?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const detailId = useId();
   const tone = toneFor(capability.standing);
@@ -40,6 +50,7 @@ export default function CapabilityCard({ capability }: { capability: Capability 
   return (
     <article
       data-capability={capability.toolName}
+      data-locate={locate ? "true" : undefined}
       id={capability.toolName}
       data-scene-exclude
       style={{

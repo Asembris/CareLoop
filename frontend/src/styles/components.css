@@ -234,16 +234,24 @@
 
 /* Deep-linking from a case's ALLOWED BY row. A brief, low-contrast wash rather than a colour
    change, so the highlight is legible in both themes and says nothing semantic — it marks *which*
-   card was asked for, not that anything is wrong with it. */
+   card was asked for, not that anything is wrong with it.
+
+   **Keyed on `data-locate`, not on `:target`, and that was a real defect rather than a preference.**
+   Measured on the deployed demo: following `/trust#book_appointment` left `:target` null while the
+   card sat in the DOM with the matching id. The fragment is resolved by the browser at navigation
+   time, and the capabilities do not exist then — they arrive with the boundary response a moment
+   later. So the browser had nothing to match, nothing scrolled, and no highlight played. The page
+   sets this attribute once it has actually rendered the card, which is the only moment at which
+   either could work. */
 @keyframes clLocate {
   0% { background: color-mix(in oklab, var(--brand-accent) 16%, transparent); }
   100% { background: transparent; }
 }
-[data-capability]:target {
+[data-capability][data-locate="true"] {
   animation: clLocate 1600ms ease both;
 }
 @media (prefers-reduced-motion: reduce) {
-  [data-capability]:target {
+  [data-capability][data-locate="true"] {
     animation: none;
     outline: 2px solid color-mix(in oklab, var(--brand-accent) 60%, transparent);
     outline-offset: 4px;

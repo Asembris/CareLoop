@@ -405,14 +405,14 @@ class TestNothingVanishesSilently:
 
         check_every_stored_field_is_decided(
             models={**SOURCE_MODELS, "Case": CaseWithANewField},
-            withheld={**WITHHELD, "Case": {"assigned_to": "decided: " + "x" * 40}},
+            withheld={**WITHHELD, "Case": {**WITHHELD["Case"], "assigned_to": "d: " + "x" * 40}},
         )
 
     def test_withholding_a_field_the_model_does_not_have_is_caught(self) -> None:
         """Stale entries rot the same way missing ones do, in the other direction."""
         with pytest.raises(UndecidedField, match="is not a field of Case"):
             check_every_stored_field_is_decided(
-                withheld={**WITHHELD, "Case": {"removed_years_ago": "x" * 41}}
+                withheld={**WITHHELD, "Case": {**WITHHELD["Case"], "removed_years_ago": "x" * 41}}
             )
 
 

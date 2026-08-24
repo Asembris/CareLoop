@@ -28,8 +28,8 @@ from tests.schema_checks import (
 class TestTheWithheldVocabularyIsReadFromTheTable:
     """The sweep must inherit new withheld fields rather than needing to be widened."""
 
-    def test_it_names_the_two_fields_the_api_withholds_today(self) -> None:
-        assert withheld_field_names() == frozenset({"diagnostic", "extracted_at"})
+    def test_it_names_the_three_fields_the_api_withholds_today(self) -> None:
+        assert withheld_field_names() == frozenset({"diagnostic", "extracted_at", "caregiver_id"})
 
     def test_it_is_derived_from_withheld_rather_than_hardcoded(self) -> None:
         # The point of reading the table: a third withheld field is swept without a test edit.

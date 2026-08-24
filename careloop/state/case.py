@@ -213,6 +213,26 @@ class Case(BaseModel):
     event_id: str
     """Identifier of the inbound event that opened the case."""
 
+    caregiver_id: str | None = None
+    """Which caregiver this case belongs to. Frozen when the case is opened, never rewritten.
+
+    **Optional, and that is a compatibility decision rather than a soft boundary.** A case
+    persisted before ownership existed cannot truthfully claim an owner, and a required field would
+    make such a case *unreadable* rather than merely unowned -- the distinction
+    :attr:`Approval.is_actionable` already draws, and for the same reason. So reading stays total
+    and the refusal lives where authority is decided: a production app refuses to read or move a
+    case whose owner is ``None``, because a case nobody owns is a case nobody may act on.
+
+    A reopen does **not** rewrite it, exactly as ``event_id`` is not rewritten: it records who the
+    case was opened for, and a follow-up event is not a change of hands. Transferring a case
+    between caregivers would be a deliberate operation with its own audit entry, and there is not
+    one.
+
+    Not on :class:`ActionRecord` and never to be. An action record is what happened externally,
+    keyed by the frozen idempotency key; whose case it was is a property of the case, and putting
+    it on the record would make the same fact answerable in two places.
+    """
+
     summary: str = ""
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)

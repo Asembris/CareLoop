@@ -46,6 +46,7 @@ class TestEverySessionMethodIsSerialised:
     METHODS: ClassVar[tuple[str, ...]] = (
         "_mint",
         "world",
+        "owner_of",
         "sessions",
         "busy",
         "orphans",

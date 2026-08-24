@@ -6,9 +6,16 @@
  * test asserts that over the *whole* of both storages after a successful exchange, rather than over
  * the one key the implementation happens to use — a key rename would defeat the narrower check.
  *
- * **The PKCE verifier survives exactly one redirect.** It has to live in `sessionStorage`, because
- * the exchange happens in a different page load from the one that generated it; it is deleted the
- * moment the code is spent, whether the exchange succeeded or not.
+ * **The PKCE verifier and the OAuth `state` survive exactly one redirect.** Both have to live in
+ * `sessionStorage`, because the exchange happens in a different page load from the one that
+ * generated them; both are deleted the moment a callback is handled, whether it was accepted or
+ * refused. The refusing path is asserted separately, because a `state` that outlived a mismatch
+ * would still be sitting there for the next attempt.
+ *
+ * **A callback this page never asked for is refused.** `state` is what distinguishes "the hosted UI
+ * answering the request we made" from "somebody walked this browser onto a URL carrying their own
+ * authorization code". PKCE cannot see that attack, so removing the `state` check would leave a
+ * green PKCE suite and a login that adopts whichever account the attacker signed in as.
  *
  * **The demo carries none of it.** No discovery of endpoints, no redirect, no token, no
  * `Authorization` header — and `X-Caregiver` still sent, because a synthetic world's audit trail
@@ -55,13 +62,15 @@ function answering(...responses: Array<[number, unknown]>) {
   return calls;
 }
 
-function navigation() {
+const THE_STATE = "the-state";
+
+function navigation(search = `?code=the-code&state=${THE_STATE}`) {
   const assigned: string[] = [];
   const replaced: string[] = [];
   vi.stubGlobal("location", {
     origin: "https://careloop.example",
-    href: "https://careloop.example/?code=the-code",
-    search: "?code=the-code",
+    href: `https://careloop.example/${search}`,
+    search,
     assign: (to: string) => assigned.push(to)
   });
   vi.stubGlobal("history", {
@@ -184,6 +193,30 @@ describe("the authorization redirect", () => {
     expect(sent.searchParams.get("code_verifier")).toBeNull();
   });
 
+  it("carries a one-time state", async () => {
+    answering([200, PRODUCTION]);
+    const { assigned } = navigation();
+
+    await beginLogin();
+
+    const sent = new URL(assigned[0]).searchParams.get("state");
+    expect(sent).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(window.sessionStorage.getItem("careloop.oauth-state")).toBe(sent);
+  });
+
+  it("generates a different state every time, and never reuses the verifier as one", async () => {
+    answering([200, PRODUCTION]);
+    const { assigned } = navigation();
+
+    await beginLogin();
+    await beginLogin();
+
+    const first = new URL(assigned[0]).searchParams.get("state");
+    const second = new URL(assigned[1]).searchParams.get("state");
+    expect(second).not.toBe(first);
+    expect(second).not.toBe(window.sessionStorage.getItem("careloop.pkce"));
+  });
+
   it("keeps the verifier only until the redirect returns", async () => {
     answering([200, PRODUCTION]);
     navigation();
@@ -210,6 +243,7 @@ describe("the code exchange", () => {
     answering([200, PRODUCTION], tokenResponse);
     const nav = navigation();
     window.sessionStorage.setItem("careloop.pkce", "the-verifier");
+    window.sessionStorage.setItem("careloop.oauth-state", THE_STATE);
     const obtained = await completeLoginFromRedirect();
     return { obtained, nav };
   }
@@ -272,6 +306,7 @@ describe("the code exchange", () => {
     const calls = answering([200, PRODUCTION], [200, { access_token: "the-token" }]);
     navigation();
     window.sessionStorage.setItem("careloop.pkce", "the-verifier");
+    window.sessionStorage.setItem("careloop.oauth-state", THE_STATE);
 
     await completeLoginFromRedirect();
 
@@ -280,6 +315,84 @@ describe("the code exchange", () => {
     expect(body).toContain("code_verifier=the-verifier");
     expect(body).toContain("grant_type=authorization_code");
     expect(body).not.toContain("client_secret");
+  });
+
+  it("refuses a callback whose state is not the one it sent", async () => {
+    const calls = answering([200, PRODUCTION], [200, { access_token: "the-token" }]);
+    navigation("?code=the-code&state=an-attackers-state");
+    window.sessionStorage.setItem("careloop.pkce", "the-verifier");
+    window.sessionStorage.setItem("careloop.oauth-state", THE_STATE);
+
+    await expect(completeLoginFromRedirect()).resolves.toBe(false);
+
+    expect(bearerToken()).toBeNull();
+    expect(calls.find((call) => call.url === PRODUCTION.token_endpoint)).toBeUndefined();
+  });
+
+  it("refuses a callback carrying no state at all", async () => {
+    answering([200, PRODUCTION], [200, { access_token: "the-token" }]);
+    navigation("?code=the-code");
+    window.sessionStorage.setItem("careloop.pkce", "the-verifier");
+    window.sessionStorage.setItem("careloop.oauth-state", THE_STATE);
+
+    await expect(completeLoginFromRedirect()).resolves.toBe(false);
+    expect(bearerToken()).toBeNull();
+  });
+
+  it("refuses a callback this page has no state for", async () => {
+    answering([200, PRODUCTION], [200, { access_token: "the-token" }]);
+    navigation();
+    window.sessionStorage.setItem("careloop.pkce", "the-verifier");
+
+    await expect(completeLoginFromRedirect()).resolves.toBe(false);
+    expect(bearerToken()).toBeNull();
+  });
+
+  it("spends the state on the accepting path", async () => {
+    await exchange([200, { access_token: "the-token" }]);
+
+    expect(window.sessionStorage.getItem("careloop.oauth-state")).toBeNull();
+  });
+
+  it("spends the state on the refusing path too", async () => {
+    answering([200, PRODUCTION], [200, { access_token: "the-token" }]);
+    navigation("?code=the-code&state=an-attackers-state");
+    window.sessionStorage.setItem("careloop.pkce", "the-verifier");
+    window.sessionStorage.setItem("careloop.oauth-state", THE_STATE);
+
+    await completeLoginFromRedirect();
+
+    expect(window.sessionStorage.getItem("careloop.oauth-state")).toBeNull();
+    expect(window.sessionStorage.getItem("careloop.pkce")).toBeNull();
+  });
+
+  it("consumes nothing when this load is not a callback", async () => {
+    answering([200, PRODUCTION]);
+    navigation("");
+    window.sessionStorage.setItem("careloop.pkce", "the-verifier");
+    window.sessionStorage.setItem("careloop.oauth-state", THE_STATE);
+
+    await expect(completeLoginFromRedirect()).resolves.toBe(false);
+
+    expect(window.sessionStorage.getItem("careloop.pkce")).toBe("the-verifier");
+    expect(window.sessionStorage.getItem("careloop.oauth-state")).toBe(THE_STATE);
+  });
+
+  it("scrubs the state out of the address bar as well", async () => {
+    const { nav } = await exchange([200, { access_token: "the-token" }]);
+
+    expect(nav.replaced[0]).not.toContain("state=");
+  });
+
+  it("keeps neither single-use value in any storage after a login", async () => {
+    await exchange([200, { access_token: "the-token" }]);
+
+    const everything = [
+      ...Object.values({ ...window.sessionStorage }),
+      ...Object.values({ ...window.localStorage })
+    ].join("|");
+    expect(everything).not.toContain("the-token");
+    expect(everything).not.toContain(THE_STATE);
   });
 
   it("stays unauthenticated when the token endpoint is unreachable", async () => {
@@ -294,6 +407,7 @@ describe("the code exchange", () => {
     );
     navigation();
     window.sessionStorage.setItem("careloop.pkce", "the-verifier");
+    window.sessionStorage.setItem("careloop.oauth-state", THE_STATE);
 
     await expect(completeLoginFromRedirect()).resolves.toBe(false);
     expect(bearerToken()).toBeNull();
@@ -305,6 +419,7 @@ describe("signing out", () => {
     answering([200, PRODUCTION], [200, { access_token: "the-token" }]);
     const { assigned } = navigation();
     window.sessionStorage.setItem("careloop.pkce", "the-verifier");
+    window.sessionStorage.setItem("careloop.oauth-state", THE_STATE);
     await completeLoginFromRedirect();
 
     logout();

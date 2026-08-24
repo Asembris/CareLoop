@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import subprocess
 import tarfile
+from collections.abc import Iterator
+from contextlib import suppress
 from io import BytesIO
 from pathlib import Path
 
@@ -138,11 +140,37 @@ def _extract(payload: bytes) -> dict[str, bytes]:
 
 
 @pytest.fixture(scope="module")
-def shipped() -> tuple[str, ...]:
-    """The real member list. Skipped rather than faked when the bundle has not been built."""
-    if not (ROOT / FRONTEND_DIST / "index.html").exists():
-        pytest.skip(f"{FRONTEND_DIST} is not built; run `npm --prefix frontend run build`")
-    return members(ROOT)
+def shipped() -> Iterator[tuple[str, ...]]:
+    """The real member list, over a real bundle or a stand-in for one.
+
+    CI's ``check`` job runs pytest with no Node, so ``frontend/dist`` is not there. Skipping on that
+    turned every assembly assertion below into a skip on the one machine whose result anybody reads
+    -- measured, ten of them -- and a test that silently stops running is the failure mode this
+    repository refuses everywhere else.
+
+    **The bundle's content is not what any of these tests is about.** They ask which members the
+    artefact carries, where each member's bytes come from, and whether two packs of one tree agree.
+    So a missing build gets one placeholder file and the questions stay askable. A real build is
+    never touched, never overwritten and never removed; the placeholder is deleted afterwards, and
+    it lands under ``dist/``, which is gitignored.
+
+    What this deliberately does **not** paper over is the refusal itself:
+    ``test_an_unbuilt_frontend_is_refused`` drives :func:`built_frontend` against a directory that
+    is not there, and ``scripts/deploy.py`` builds the bundle before packing rather than hoping.
+    """
+    dist = ROOT / FRONTEND_DIST
+    placeholder = dist / "index.html"
+    stood_in = not placeholder.exists()
+    if stood_in:
+        dist.mkdir(parents=True, exist_ok=True)
+        placeholder.write_bytes(b"<!doctype html><!-- stand-in for a built bundle -->")
+    try:
+        yield members(ROOT)
+    finally:
+        if stood_in:
+            placeholder.unlink(missing_ok=True)
+            with suppress(OSError):
+                dist.rmdir()
 
 
 class TestTheExclusionsCoverWhatTheAuditNamed:
@@ -322,11 +350,8 @@ class TestTheBuildRefusesRatherThanShips:
 class TestTheContentIsTheCommitsAndNotTheDisks:
     """A tracked member carries the bytes ``HEAD`` records, whatever the checkout looks like."""
 
-    def test_a_tracked_member_comes_from_the_commit(self, tmp_path: Path, shipped) -> None:
-        scratch = tmp_path / "planted.txt"
+    def test_a_tracked_member_comes_from_the_commit(self, shipped) -> None:
         target = "README.md"
-        scratch.write_bytes(b"planted")
-
         packed = _extract(pack(ROOT, (target, *REQUIRED_MEMBERS)))
         assert packed[f"./{target}"] == deploy_artifact.head_blobs(ROOT)[target]
 
@@ -352,7 +377,7 @@ class TestTheBytesAreDeterministic:
         assert pack(ROOT, shipped) == pack(ROOT, shipped)
 
     def test_the_build_reports_the_digest_of_what_it_wrote(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, shipped: tuple[str, ...]
     ) -> None:
         import hashlib
 

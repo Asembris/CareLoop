@@ -28,6 +28,18 @@ dependencies = [
     # TestClient onto httpx2 for an unrelated starlette deprecation; the two are different
     # distributions providing different modules and do not contend.
     "httpx>=0.27",
+    # Verifies the OIDC access token production identity is derived from. A runtime dependency
+    # rather than an extra for the reason fastapi and pdfplumber are: careloop/identity/oidc.py
+    # ships in the wheel and a production deployment cannot start without it, so an extra would be
+    # a step the SSM deploy has to remember. It arrives transitively today via the pinned
+    # strands-agents tree, and session 4's lesson was that an undeclared dependency you rely on is
+    # one you find out about on CI.
+    #
+    # The `crypto` extra is what pulls in `cryptography`, which is what RS256 and PyJWKClient need;
+    # bare PyJWT can only do HMAC and would fail at the first real token rather than at install.
+    # No custom cryptography and no home-grown parser: this library owns signature verification,
+    # base64url handling and JWKS caching, and careloop/identity/oidc.py owns only the policy.
+    "PyJWT[crypto]>=2.10",
 ]
 
 [project.optional-dependencies]

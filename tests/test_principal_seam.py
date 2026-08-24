@@ -144,15 +144,19 @@ class TestOnlyOneThingMintsASyntheticPrincipal:
             f"identity to come into existence"
         )
 
-    def test_only_the_demo_source_constructs_one(self) -> None:
-        """The stricter half: naming the member is not the same as building a principal with it."""
+    def test_only_the_two_verifiers_construct_one(self) -> None:
+        """The stricter half: naming the member is not the same as building a principal with it.
+
+        Two writers, one per mode, and no third. A principal built anywhere else would be an
+        identity nothing verified and nothing chose.
+        """
         constructing = sorted(
             path.relative_to(package_root()).as_posix()
             for path in sorted(package_root().rglob("*.py"))
             if builds_a_principal(path.read_text(encoding="utf-8"))
         )
 
-        assert constructing == ["identity/demo.py"], (
+        assert constructing == ["identity/demo.py", "identity/oidc.py"], (
             f"{constructing} construct a Principal. Production principals come out of the OIDC "
             f"verifier and synthetic ones out of identity/demo.py; anywhere else is a third source"
         )

@@ -16,6 +16,18 @@ third-party JWT library, and importing this package must not drag one in. Reach 
 which is the arrangement ``careloop.policy``'s three loader steps already use.
 """
 
+from careloop.identity.config import (
+    AUDIENCE_VAR,
+    AUTH_MODE_VAR,
+    DEMO_MODE,
+    ISSUER_VAR,
+    PRODUCTION_MODE,
+    IncompleteAuthConfiguration,
+    UnknownAuthMode,
+    auth_from_environment,
+    configured_mode,
+    wants_production,
+)
 from careloop.identity.demo import DemoPrincipals
 from careloop.identity.directory import (
     Caregiver,
@@ -34,6 +46,11 @@ from careloop.identity.principal import (
 )
 
 __all__ = [
+    "AUDIENCE_VAR",
+    "AUTH_MODE_VAR",
+    "DEMO_MODE",
+    "ISSUER_VAR",
+    "PRODUCTION_MODE",
     "AuthMethod",
     "AuthenticationFailed",
     "Caregiver",
@@ -41,9 +58,14 @@ __all__ = [
     "DemoPrincipals",
     "Grant",
     "InMemoryCaregiverDirectory",
+    "IncompleteAuthConfiguration",
     "Principal",
     "PrincipalVerifier",
     "SubjectMapping",
+    "UnknownAuthMode",
     "UnknownCaregiver",
     "UnknownSubject",
+    "auth_from_environment",
+    "configured_mode",
+    "wants_production",
 ]

@@ -45,6 +45,7 @@ from careloop.api.deps import provider_context_factory
 from careloop.api.faults import booking_response_loss
 from careloop.api.sessions import DEFAULT_SESSION_LIMIT, demo_session_worlds
 from careloop.graph.witness import NullWitness
+from careloop.identity.config import auth_from_environment
 from careloop.state.sqlite_store import SqliteCaseStore
 from careloop.tools.clinic import ClinicClient
 from careloop.tools.objectstore import ObjectStoreClient
@@ -122,6 +123,18 @@ def main() -> None:
     # other. A run is handed the result and never asks which one it got.
     witness = span_witness()
 
+    # **The identity mode comes from configuration and there is no flag for it.** A command-line
+    # switch would be one more place a production deployment could be started as a demo by a typo;
+    # an environment variable that must name the mode explicitly, and that refuses anything it does
+    # not recognise, is the smallest thing that cannot be got wrong quietly.
+    #
+    # `directory=None` is deliberate and is why production refuses to start here today: a real
+    # deployment supplies a real caregiver directory, and this entry point is the judge-facing demo
+    # server. Starting production without one would be an app that authenticates callers and then
+    # has nowhere to resolve them.
+    auth = auth_from_environment(directory=None)
+    print(f"identity      {auth.mode}")
+
     if arguments.isolate_sessions:
         app = create_app(
             sessions=demo_session_worlds(
@@ -131,6 +144,7 @@ def main() -> None:
             ),
             demo=True,
             static_dir=arguments.static_dir or None,
+            auth=auth,
         )
         where = f"per visitor, in memory (up to {DEFAULT_SESSION_LIMIT} worlds)"
     else:
@@ -153,6 +167,7 @@ def main() -> None:
             demo=True,
             static_dir=arguments.static_dir or None,
             faults=faults,
+            auth=auth,
         )
         where = arguments.db
 

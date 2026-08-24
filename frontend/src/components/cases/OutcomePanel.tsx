@@ -98,6 +98,35 @@ export default function OutcomePanel({ careCase }: { careCase: CareCase }) {
           </div>
         ) : null}
 
+        {careCase.authorisedBy ? (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "baseline",
+              gap: 12,
+              flexWrap: "wrap",
+              marginTop: 6,
+              paddingTop: 12,
+              borderTop: "1px solid color-mix(in oklab, currentColor 10%, transparent)"
+            }}
+          >
+            <span style={LABEL}>ALLOWED BY</span>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}>
+              {careCase.authorisedBy.ruleId}
+            </span>
+            {/* A real anchor rather than a router push: the fragment is what scrolls the matching
+                capability into view and plays its locate highlight, and a programmatic navigate
+                would leave `:target` unset. Same-origin and same route, so nothing reloads. */}
+            <a
+              className="cl-quiet"
+              href={`/trust#${careCase.authorisedBy.toolName}`}
+              style={{ fontSize: 13, color: "var(--nav-ink, var(--muted-foreground))", transition: "color 120ms ease" }}
+            >
+              What this means →
+            </a>
+          </div>
+        ) : null}
+
         {readback?.observationText ? (
           <div
             style={{

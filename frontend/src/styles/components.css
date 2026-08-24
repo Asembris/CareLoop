@@ -184,3 +184,68 @@
 .cl-source:focus-visible {
   --chip-underline: solid;
 }
+
+/* --- My Boundaries --------------------------------------------------------------------- */
+
+/* A condition reads as "label · value · what must be true of it". Two columns while there is room
+   and one when there is not, because the label is a phrase ("Only with") rather than a heading and
+   a squeezed two-column row breaks it mid-phrase — the same failure the nav's `white-space` guards
+   against. Declared here rather than inline because a media query cannot be an inline style. */
+.cl-condition {
+  display: grid;
+  grid-template-columns: 8.5rem 1fr;
+  gap: 4px 18px;
+  align-items: baseline;
+  padding: 11px 0;
+  border-top: 1px solid color-mix(in oklab, currentColor 10%, transparent);
+}
+.cl-condition > .cl-condition-label {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+
+@media (max-width: 700px) {
+  .cl-condition {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* The "Why this is enforced" disclosure. `grid-template-rows: 0fr -> 1fr` animates a height nobody
+   has to measure, so the panel opens smoothly at whatever height its content needs. The inner
+   element carries `overflow: hidden`, which is what makes the collapsed row actually clip.
+
+   `[hidden]` is not used and must not be: the panel is removed from the tree when closed, so there
+   is nothing for a screen reader to reach into and nothing focusable inside a zero-height box. */
+.cl-disclosure {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 260ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+.cl-disclosure[data-open="true"] {
+  grid-template-rows: 1fr;
+}
+.cl-disclosure > div {
+  overflow: hidden;
+}
+
+/* Deep-linking from a case's ALLOWED BY row. A brief, low-contrast wash rather than a colour
+   change, so the highlight is legible in both themes and says nothing semantic — it marks *which*
+   card was asked for, not that anything is wrong with it. */
+@keyframes clLocate {
+  0% { background: color-mix(in oklab, var(--brand-accent) 16%, transparent); }
+  100% { background: transparent; }
+}
+[data-capability]:target {
+  animation: clLocate 1600ms ease both;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-capability]:target {
+    animation: none;
+    outline: 2px solid color-mix(in oklab, var(--brand-accent) 60%, transparent);
+    outline-offset: 4px;
+  }
+}

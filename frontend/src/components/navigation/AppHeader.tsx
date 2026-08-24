@@ -89,7 +89,7 @@ export default function AppHeader() {
           data-scene-zone="trust"
           style={NAV_BUTTON}
         >
-          Trust
+          My Boundaries
           <span aria-hidden="true" style={{ ...UNDERLINE, opacity: trustActive ? 0.75 : 0 }} />
         </button>
 

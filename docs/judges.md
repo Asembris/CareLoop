@@ -56,6 +56,34 @@ processes over a SQLite file on disk, with `tests/test_resume.py` asserting it.
 
 ---
 
+## What it may do, before it does anything
+
+Click **My Boundaries** in the header, before pressing any scenario.
+
+The page states what CareLoop may do for this caregiver, what it must ask about, and what nothing
+in the current configuration can authorize. **None of it is written there.** Every line is derived
+by `GET /api/boundaries` from the ruleset the policy gate actually decides by, the tool registry,
+and the caregiver's own configured destinations — so it cannot describe rules other than the ones
+in force. If the backend cannot be read, the page says so and shows nothing; there is no fallback
+copy, because a page that quietly substituted its own account of CareLoop's authority would read
+exactly like one telling the truth.
+
+Three things are worth reading there:
+
+- **Book an appointment** is the one thing CareLoop does on its own, and it names the single
+  provider it may book with. Press scenario 01 afterwards and that is the provider the case books.
+  The page made a falsifiable prediction before the case existed.
+- **Send an email** always stops for you, and names the one address it may ever reach. Scenario 02
+  is a document trying to name a different one.
+- **Grant portal access** is *currently unavailable*: nothing in this caregiver's configuration
+  establishes a trusted role, and neither a document nor an approval can supply one. That is a fact
+  about the configuration rather than a missing feature, and the page says it in those words.
+
+A completed case links back: its outcome names the rule that authorized it and points at the
+capability on this page that the action was an instance of.
+
+---
+
 ## The claim worth checking
 
 The interesting claim is not that an agent can book an appointment. It is that **a document telling

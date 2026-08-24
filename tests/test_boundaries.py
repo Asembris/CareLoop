@@ -690,27 +690,79 @@ class TestConstraintsAreNotInventedFromPartialCoverage:
         assert decision.verdict is Verdict.ALLOW
         assert decision.arg_trust["subject_id"] is TrustLevel.UNTRUSTED
 
-    def test_a_conditional_deny_is_not_read_as_a_universal_floor(self) -> None:
-        """A ``DENY`` that fires only in some states says nothing about every path."""
+    def with_deny(self, when: dict[str, Any]) -> RuleSet:
+        """The synthetic rules plus one ``DENY`` about ``tool_alpha.subject_id``."""
         rules = dict(SYNTHETIC_RULES)
         rules["rules"] = [
             {
-                "id": "deny-beta-target-while-new",
+                "id": "deny-alpha-subject",
                 "effect": "DENY",
-                "tools": ["tool_beta"],
-                "when": {
-                    "case_state_in": ["NEW"],
-                    "arg_trust_below": [{"arg": "target", "level": "TRUSTED"}],
-                },
-                "reason_code": "DESTINATION_NOT_TRUSTED",
-                "diagnostic": "only while NEW",
+                "tools": ["tool_alpha"],
+                "when": when,
+                "reason_code": "INSUFFICIENT_FACT_TRUST",
+                "diagnostic": "a DENY about the alpha subject",
             },
             *SYNTHETIC_RULES["rules"],
         ]
-        ruleset = load_rules_from_mapping(rules, SYNTHETIC_REGISTRY)
-        # allow-beta still requires TRUSTED, so the level is unchanged -- what is being asserted is
-        # that the conditional DENY contributed nothing, which the alpha subject makes visible.
-        assert required_trust(ruleset, "tool_beta", "target") is TrustLevel.TRUSTED
+        return load_rules_from_mapping(rules, SYNTHETIC_REGISTRY)
+
+    def test_an_unconditional_deny_does_raise_the_floor(self) -> None:
+        """The positive half, so the two below are refusals rather than a function that never fires.
+
+        ``allow-alpha`` requires ``subject_id`` at ``CONTROLLED``. A bare ``DENY`` demanding
+        ``TRUSTED`` fires whatever else is true, so the level every path must clear really is
+        ``TRUSTED`` -- and the projection has to say so.
+        """
+        ruleset = self.with_deny({"arg_trust_below": [{"arg": "subject_id", "level": "TRUSTED"}]})
+        assert required_trust(ruleset, "tool_alpha", "subject_id") is TrustLevel.TRUSTED
+
+    def test_a_state_scoped_deny_is_not_read_as_a_universal_floor(self) -> None:
+        """A ``DENY`` that fires only in some states says nothing about every path.
+
+        The same ``TRUSTED`` demand as above, restricted to one state the effect rules do not even
+        permit. Reading it as a floor would print a requirement no authorising path imposes, and the
+        engine below is what settles which of the two answers is right.
+        """
+        ruleset = self.with_deny(
+            {
+                "case_state_in": ["NEW"],
+                "arg_trust_below": [{"arg": "subject_id", "level": "TRUSTED"}],
+            }
+        )
+        assert required_trust(ruleset, "tool_alpha", "subject_id") is TrustLevel.CONTROLLED
+
+        # And the engine agrees: a CONTROLLED subject really is authorised while PLANNING.
+        statement = boundaries(
+            ruleset,
+            SYNTHETIC_REGISTRY,
+            SYNTHETIC_DESTINATIONS,
+            observable=SYNTHETIC_OBSERVABLE,
+            recovery=SYNTHETIC_RECOVERY,
+        )
+        alpha = next(c for c in statement.capabilities if c.tool_name == "tool_alpha")
+        args, facts = legitimate_call(alpha, SYNTHETIC_DESTINATIONS)
+        decision = engine_for(ruleset, SYNTHETIC_REGISTRY).evaluate(
+            "tool_alpha", args, case_for(facts)
+        )
+        assert decision.verdict is Verdict.ALLOW
+        assert decision.arg_trust["subject_id"] is TrustLevel.CONTROLLED
+
+    def test_a_multi_argument_deny_is_not_read_as_a_floor_on_either(self) -> None:
+        """``arg_trust_below`` with two predicates denies only when *both* are below.
+
+        So it is a weaker statement about each one than a per-argument floor, and counting it would
+        claim ``subject_id`` must be ``TRUSTED`` when a ``CONTROLLED`` one beside a trusted target
+        never trips the rule at all.
+        """
+        ruleset = self.with_deny(
+            {
+                "arg_trust_below": [
+                    {"arg": "subject_id", "level": "TRUSTED"},
+                    {"arg": "target", "level": "TRUSTED"},
+                ]
+            }
+        )
+        assert required_trust(ruleset, "tool_alpha", "subject_id") is TrustLevel.CONTROLLED
 
 
 # -- the mutants ----------------------------------------------------------------------------------

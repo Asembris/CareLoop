@@ -190,6 +190,57 @@ export interface RecoveryProof {
   observation: string;
 }
 
+/** Where one CareLoop effect stands under the current caregiver's configuration.
+ *
+ *  Backend truth, carried through unchanged. Nothing in the frontend computes it — see
+ *  `services/backend.ts` and `careloop/policy/boundaries.py`. */
+export type CapabilityStanding = "AUTONOMOUS" | "REQUIRES_HUMAN" | "UNAVAILABLE";
+
+/** One argument of one capability, in the caregiver's words with the technical detail behind it. */
+export interface BoundaryCondition {
+  name: string;
+  /** "Only with", "Only for", "Written by CareLoop" — the row's label. */
+  label: string;
+  /** What must be true of this argument, in plain language. */
+  requirement: string;
+  /** The caregiver's own configured destination, or the literal CareLoop composes. */
+  value?: string;
+  /** The tier word for the required trust. Absent when the rules require no trust of it. */
+  trustLabel?: string;
+  /** Raw backend fields, for the collapsed "Why?" detail. Never the primary rendering. */
+  argClass: string;
+  requiredTrust: string | null;
+  trustKey: string | null;
+}
+
+/** One thing CareLoop may do, must ask about, or currently cannot do.
+ *
+ *  Every field is copy over a value the backend derived. The frontend reconstructs no standing, no
+ *  requirement and no availability — doing so would rebuild the second source of truth that
+ *  `My Boundaries` exists to have removed. */
+export interface Capability {
+  toolName: string;
+  /** "Book an appointment" — the same phrase the decision card and the timeline already use. */
+  title: string;
+  standing: CapabilityStanding;
+  /** One sentence saying what this standing means for this caregiver. */
+  summary: string;
+  /** Why it is out of reach, scoped to the current configuration. Absent unless unavailable. */
+  unavailableReason?: string;
+  conditions: BoundaryCondition[];
+  /** What happens after the effect: an independent read-back, or CareLoop's own record only. */
+  afterwards: string;
+  /** What happens if the provider's answer never arrives. */
+  ifTheAnswerIsLost: string;
+}
+
+/** The standing boundary, as `My Boundaries` renders it. */
+export interface Boundaries {
+  capabilities: Capability[];
+  /** Plain-language refusals the active configuration actually implies. */
+  refusals: string[];
+}
+
 export interface AgentRun {
   id: string;
   scenario: ScenarioId | null;

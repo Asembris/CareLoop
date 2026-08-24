@@ -101,6 +101,18 @@ class Unavailability(StrEnum):
     NO_AUTHORISING_RULE = "NO_AUTHORISING_RULE"
     """No ``ALLOW`` rule names the tool at all, so deny-by-default refuses every call."""
 
+    NO_ROUTE_TO_A_DECISION = "NO_ROUTE_TO_A_DECISION"
+    """Authorising it needs an approval, and nothing in the rules ever asks for one.
+
+    An :class:`~careloop.state.case.Approval` exists only because a ``REQUIRE_HUMAN`` verdict raised
+    one, so an ``ALLOW`` rule carrying ``args_approved: true`` with no ``REQUIRE_HUMAN`` rule in
+    front of it authorises nothing -- every call falls through to deny-by-default. Unreachable in
+    the shipped rules and found by the engine cross-check rather than by review: dropping
+    ``require-human-for-outbound-email`` does not make email autonomous, it makes email impossible,
+    and a page reporting *"CareLoop must ask you"* about it would be describing a conversation that
+    never happens.
+    """
+
 
 class RefusalPrinciple(StrEnum):
     """A standing refusal the configuration actually implies.
@@ -278,20 +290,32 @@ def required_trust(ruleset: RuleSet, tool_name: str, arg_name: str) -> TrustLeve
     )
 
 
-def _human_gates(ruleset: RuleSet, tool_name: str) -> bool:
-    """Whether a ``REQUIRE_HUMAN`` rule for this tool fires when no approval is held."""
+def _fires(ruleset: RuleSet, effect: Verdict, tool_name: str, *, approval_held: bool) -> bool:
+    """Whether some rule of ``effect`` for ``tool_name`` can fire in a world with (or without) an
+    approval.
+
+    Only the ``args_approved`` clause is read, because it is the one clause whose truth an approval
+    changes. Every other clause is about facts and states, and treating an unmet one as "cannot
+    fire" would let this module claim a capability is unreachable when it is merely not established
+    yet -- the difference between a boundary and a to-do list.
+    """
     return any(
-        tool_name in rule.tools and rule.when.args_approved is not True
-        for rule in ruleset.by_effect(Verdict.REQUIRE_HUMAN)
+        tool_name in rule.tools and rule.when.args_approved is not (not approval_held)
+        for rule in ruleset.by_effect(effect)
     )
 
 
-def _authorises_without_a_person(ruleset: RuleSet, tool_name: str) -> bool:
-    """Whether some ``ALLOW`` rule for this tool does not depend on an approval."""
-    return any(
-        tool_name in rule.tools and rule.when.args_approved is not True
-        for rule in ruleset.by_effect(Verdict.ALLOW)
-    )
+def _reachable(ruleset: RuleSet, tool_name: str, *, approval_held: bool) -> bool:
+    """Whether a call could be authorised in that world, in the engine's own match order.
+
+    ``DENY`` is deliberately not consulted: a ``DENY`` rule refuses *some* calls, and whether this
+    caregiver can present one that clears it is the question :func:`required_trust` and the unmet
+    keys answer. What is asked here is only whether ``REQUIRE_HUMAN`` sits in front of every
+    ``ALLOW``, which is a fact about the rules rather than about any particular call.
+    """
+    if _fires(ruleset, Verdict.REQUIRE_HUMAN, tool_name, approval_held=approval_held):
+        return False
+    return _fires(ruleset, Verdict.ALLOW, tool_name, approval_held=approval_held)
 
 
 def _argument_boundary(
@@ -309,7 +333,12 @@ def _argument_boundary(
 
 
 def _capability(
-    ruleset: RuleSet, registry: ToolRegistry, tool_name: str, configured: Mapping[str, str]
+    ruleset: RuleSet,
+    registry: ToolRegistry,
+    tool_name: str,
+    configured: Mapping[str, str],
+    observable: frozenset[str],
+    recovery: Mapping[str, RecoveryClass],
 ) -> Capability:
     spec = registry.get(tool_name)
     if spec is None:  # pragma: no cover - callers iterate the registry's own names
@@ -332,22 +361,29 @@ def _capability(
     )
 
     authorising = any(tool_name in rule.tools for rule in ruleset.by_effect(Verdict.ALLOW))
+    asked = _fires(ruleset, Verdict.REQUIRE_HUMAN, tool_name, approval_held=False)
+
     if not authorising:
         standing, because = CapabilityStanding.UNAVAILABLE, Unavailability.NO_AUTHORISING_RULE
     elif unmet:
         standing, because = CapabilityStanding.UNAVAILABLE, Unavailability.NO_TRUSTED_SOURCE
-    elif _human_gates(ruleset, tool_name) or not _authorises_without_a_person(ruleset, tool_name):
+    elif _reachable(ruleset, tool_name, approval_held=False):
+        standing, because = CapabilityStanding.AUTONOMOUS, None
+    elif asked and _reachable(ruleset, tool_name, approval_held=True):
+        # A person is really asked, and their answer really releases it. Both halves are needed:
+        # an approval exists only because a REQUIRE_HUMAN verdict raised one, so a rule set whose
+        # only ALLOW demands an approval that nothing requests authorises nothing at all.
         standing, because = CapabilityStanding.REQUIRES_HUMAN, None
     else:
-        standing, because = CapabilityStanding.AUTONOMOUS, None
+        standing, because = CapabilityStanding.UNAVAILABLE, Unavailability.NO_ROUTE_TO_A_DECISION
 
     return Capability(
         tool_name=tool_name,
         standing=standing,
         unavailable_because=because,
         unmet_trust_keys=unmet,
-        independently_observed=tool_name in INDEPENDENTLY_OBSERVABLE,
-        recovery_class=RECOVERY_CLASS[tool_name],
+        independently_observed=tool_name in observable,
+        recovery_class=recovery[tool_name],
         arguments=arguments,
     )
 
@@ -388,7 +424,12 @@ def _refusals(capabilities: tuple[Capability, ...]) -> tuple[RefusalPrinciple, .
 
 
 def boundaries(
-    ruleset: RuleSet, registry: ToolRegistry, destinations: tuple[tuple[str, str], ...]
+    ruleset: RuleSet,
+    registry: ToolRegistry,
+    destinations: tuple[tuple[str, str], ...],
+    *,
+    observable: frozenset[str] = INDEPENDENTLY_OBSERVABLE,
+    recovery: Mapping[str, RecoveryClass] = RECOVERY_CLASS,
 ) -> Boundaries:
     """What ``destinations`` may reach under ``ruleset``, over ``registry``'s external effects.
 
@@ -402,10 +443,16 @@ def boundaries(
         destinations: the owning caregiver's ``(fact key, value)`` pairs, in exactly the shape
             :func:`careloop.graph.trusted.trusted_facts` seeds. It is CareLoop's own directory
             record and never a token claim; see ``tests/test_identity_boundary.py``.
+        observable: which action types something other than CareLoop can read back. Defaults to
+            the shipped declaration and is a parameter for the reason the projection checks take
+            their tables: a derivation that can only run against four known tool names is a
+            derivation nobody can prove generic. Production passes the default; nothing else may.
+        recovery: what may be done when a dispatch's answer is lost, per action type. Same
+            defaulting, same reason.
     """
     configured = dict(destinations)
     capabilities = tuple(
-        _capability(ruleset, registry, tool_name, configured)
+        _capability(ruleset, registry, tool_name, configured, observable, recovery)
         for tool_name in sorted(registry.external_effect_tools)
     )
     return Boundaries(capabilities=capabilities, refusals=_refusals(capabilities))
@@ -415,7 +462,9 @@ class UnclassifiedCapability(Exception):
     """Raised when an external-effect tool cannot be described at all."""
 
 
-def check_every_external_effect_is_describable(registry: ToolRegistry = REGISTRY) -> None:
+def check_every_external_effect_is_describable(
+    registry: ToolRegistry = REGISTRY, recovery: Mapping[str, RecoveryClass] = RECOVERY_CLASS
+) -> None:
     """Fail at import unless every external-effect tool has a recovery classification.
 
     :data:`careloop.graph.recovery.RECOVERY_CLASS` is subscripted rather than defaulted in
@@ -427,7 +476,7 @@ def check_every_external_effect_is_describable(registry: ToolRegistry = REGISTRY
     Raises:
         UnclassifiedCapability: naming every external-effect tool with no recovery class.
     """
-    missing = sorted(registry.external_effect_tools - frozenset(RECOVERY_CLASS))
+    missing = sorted(registry.external_effect_tools - frozenset(recovery))
     if missing:
         raise UnclassifiedCapability(
             f"external-effect tool(s) {missing} carry no RECOVERY_CLASS, so their boundary "

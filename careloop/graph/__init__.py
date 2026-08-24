@@ -49,7 +49,16 @@ from careloop.graph.runner import (
     request_recheck,
     run_case,
 )
-from careloop.graph.trusted import CONFIG_SOURCE, TRUSTED_CONFIG, configured, trusted_facts
+from careloop.graph.trusted import (
+    CONFIG_SOURCE,
+    DEMO_CAREGIVER,
+    DEMO_CAREGIVER_ID,
+    DEMO_PATIENT_ID,
+    TRUSTED_CONFIG,
+    configured,
+    demo_directory,
+    trusted_facts,
+)
 from careloop.graph.verify import (
     INDEPENDENTLY_OBSERVABLE,
     VERIFIERS,
@@ -60,6 +69,9 @@ from careloop.graph.verify import (
 
 __all__ = [
     "CONFIG_SOURCE",
+    "DEMO_CAREGIVER",
+    "DEMO_CAREGIVER_ID",
+    "DEMO_PATIENT_ID",
     "EXCERPT_PREFIX",
     "EXECUTION_TIMEOUT",
     "INDEPENDENTLY_OBSERVABLE",
@@ -90,6 +102,7 @@ __all__ = [
     "build_graph",
     "configured",
     "context_for",
+    "demo_directory",
     "entered_verifying_from",
     "excerpt_key",
     "extract",

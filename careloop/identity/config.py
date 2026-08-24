@@ -165,10 +165,21 @@ def auth_from_environment(
             f"Set {CAREGIVERS_FILE_VAR}, or pass one in"
         )
 
-    from careloop.identity.oidc import cognito_verifier
+    from careloop.identity.oidc import ACCESS_TOKEN, cognito_verifier
 
+    # **``token_use`` is named here rather than left to a default**, and the difference is what a
+    # test can pin. Measured before it was: flipping ``cognito_verifier``'s default to ``"id"`` --
+    # which would make every deployment accept ID tokens as API credentials and refuse every access
+    # token -- turned 0 of 100 tests red. A default is correct behaviour nobody is holding in place.
+    #
+    # Access and not ID, because these are genuinely different credentials. A Cognito access token
+    # carries ``client_id`` and no ``aud`` at all; an ID token carries ``aud`` and is minted for a
+    # user agent to read, not for an API to be called with. Accepting either would make the audience
+    # check ambiguous -- see :data:`careloop.identity.oidc.AUDIENCE_CLAIM`.
     return production_auth(
-        verifier=cognito_verifier(issuer=issuer, audience=audience, directory=directory),
+        verifier=cognito_verifier(
+            issuer=issuer, audience=audience, directory=directory, token_use=ACCESS_TOKEN
+        ),
         directory=directory,
     )
 

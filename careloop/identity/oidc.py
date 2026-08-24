@@ -64,6 +64,19 @@ ALLOWED_ALGORITHMS: Final[tuple[str, ...]] = ("RS256",)
 #: construction instead of an unchecked third case.
 AUDIENCE_CLAIM: Final[dict[str, str]] = {"access": "client_id", "id": "aud"}
 
+#: The token use CareLoop's API accepts. Named so a composition root can state it rather than
+#: inherit it, and so a test can assert on the name rather than on a string literal.
+#:
+#: An access token is the credential an API is *called with*; an ID token is minted for a user agent
+#: to read. A deployment that accepted the second would be accepting a credential issued for a
+#: different purpose, with a different lifetime and a different audience claim.
+ACCESS_TOKEN: Final[str] = "access"
+
+#: The other token use this verifier knows how to check. Constructible for a deployment whose
+#: credential really is an ID token, and deliberately **not** what
+#: :func:`careloop.identity.config.auth_from_environment` composes.
+ID_TOKEN: Final[str] = "id"
+
 #: How much clock skew between CareLoop and the issuer is tolerated, in seconds.
 #:
 #: Applied to ``exp``, ``nbf`` and ``iat`` alike. Sixty seconds is the usual allowance for hosts
@@ -126,7 +139,7 @@ class OidcVerifier:
     audience: str
     directory: CaregiverDirectory
     keys: SigningKeys
-    token_use: str = "access"
+    token_use: str = ACCESS_TOKEN
     algorithms: tuple[str, ...] = ALLOWED_ALGORITHMS
     leeway_seconds: int = DEFAULT_LEEWAY_SECONDS
 
@@ -251,7 +264,7 @@ def cognito_verifier(
     issuer: str,
     audience: str,
     directory: CaregiverDirectory,
-    token_use: str = "access",
+    token_use: str = ACCESS_TOKEN,
 ) -> PrincipalVerifier:
     """The production verifier, with the JWKS endpoint derived from the issuer.
 
@@ -269,9 +282,11 @@ def cognito_verifier(
 
 
 __all__ = [
+    "ACCESS_TOKEN",
     "ALLOWED_ALGORITHMS",
     "AUDIENCE_CLAIM",
     "DEFAULT_LEEWAY_SECONDS",
+    "ID_TOKEN",
     "JwksSigningKeys",
     "OidcVerifier",
     "SigningKeys",

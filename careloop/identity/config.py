@@ -26,9 +26,16 @@ read, and it does that before this is asked anything.
 from __future__ import annotations
 
 import os
+import pathlib
 from typing import Final
 
-from careloop.identity.directory import CaregiverDirectory
+from careloop.identity.directory import (
+    Caregiver,
+    CaregiverDirectory,
+    Grant,
+    InMemoryCaregiverDirectory,
+    SubjectMapping,
+)
 
 #: Which mode to run in. ``production`` or ``demo``; unset means demo.
 AUTH_MODE_VAR: Final[str] = "CARELOOP_AUTH_MODE"
@@ -57,6 +64,20 @@ LOGIN_DOMAIN_VAR: Final[str] = "CARELOOP_OIDC_LOGIN_DOMAIN"
 #: ``openid`` because this is OIDC; nothing else, because CareLoop reads no claim but ``sub`` and
 #: asking for ``email`` or ``profile`` would collect personal data with no consumer.
 DEFAULT_SCOPES: Final[str] = "openid"
+
+#: A JSON file holding the caregiver directory production resolves subjects against.
+#:
+#: A file rather than a table because the durable store this eventually wants is a decision of its
+#: own, and a deployment that cannot start until somebody picks one is a deployment nobody starts.
+#: :class:`~careloop.identity.directory.InMemoryCaregiverDirectory` is replaced the way
+#: ``SqliteCaseStore`` replaces ``InMemoryCaseStore``: same protocol, no caller changes.
+#:
+#: **Not a secret, and it must not become one.** It holds caregiver ids, their trusted destinations,
+#: their grants and the ``(issuer, subject)`` pairs those map from. A subject is an opaque IdP
+#: identifier and an email address here is *configuration* -- the address CareLoop may write to --
+#: rather than a credential. Nothing in it is a token, a password or a key, and if a future field
+#: would be one it belongs somewhere else entirely.
+CAREGIVERS_FILE_VAR: Final[str] = "CARELOOP_CAREGIVERS_FILE"
 
 #: The value of :data:`AUTH_MODE_VAR` that means "verify a real token".
 PRODUCTION_MODE: Final[str] = "production"
@@ -125,6 +146,9 @@ def auth_from_environment(
     if not wants_production(source):
         return demo_auth()
 
+    if directory is None:
+        directory = directory_from_environment(source)
+
     issuer = (source.get(ISSUER_VAR) or "").strip()
     audience = (source.get(AUDIENCE_VAR) or "").strip()
     required = ((ISSUER_VAR, issuer), (AUDIENCE_VAR, audience))
@@ -137,7 +161,8 @@ def auth_from_environment(
     if directory is None:
         raise IncompleteAuthConfiguration(
             f"{AUTH_MODE_VAR}={PRODUCTION_MODE} needs a caregiver directory: a verified token "
-            f"names a subject, and without a directory there is nothing to resolve it into"
+            f"names a subject, and without a directory there is nothing to resolve it into. "
+            f"Set {CAREGIVERS_FILE_VAR}, or pass one in"
         )
 
     from careloop.identity.oidc import cognito_verifier
@@ -146,6 +171,117 @@ def auth_from_environment(
         verifier=cognito_verifier(issuer=issuer, audience=audience, directory=directory),
         directory=directory,
     )
+
+
+class MalformedDirectory(Exception):
+    """Raised when the caregivers file cannot be read as a directory.
+
+    Refused at startup rather than skipped. A production CareLoop whose directory failed to load
+    would authenticate every caller and then resolve none of them -- every request a 401, for a
+    reason nothing on the surface explains.
+    """
+
+
+def directory_from_file(path: str) -> InMemoryCaregiverDirectory:
+    """Read the caregiver directory from a JSON file.
+
+    The shape, in full:
+
+    .. code-block:: json
+
+        {
+          "caregivers": [
+            {"caregiver_id": "cg-rosa",
+             "active": true,
+             "destinations": {"caregiver_email": "rosa@carer.example",
+                              "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+                              "portal_id": "PORTAL-NORTHGATE-RECORDS"}}
+          ],
+          "grants": [{"caregiver_id": "cg-rosa", "patient_id": "PT-4417", "active": true}],
+          "subjects": [
+            {"issuer": "https://cognito-idp...", "subject": "...", "caregiver_id": "cg-rosa"}
+          ]
+        }
+
+    ``active`` defaults to ``true`` on both records, because the ordinary entry is a live one and a
+    file that had to say so everywhere is a file where a missing ``false`` is invisible.
+
+    Raises:
+        MalformedDirectory: if the file is missing, is not JSON, or a record lacks its identifiers.
+    """
+    import json
+
+    try:
+        raw = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise MalformedDirectory(
+            f"{CAREGIVERS_FILE_VAR} names {path!r}, which does not exist"
+        ) from None
+    except (OSError, ValueError) as unreadable:
+        # The message is deliberately not interpolated with the file's contents: a parse error can
+        # quote the line it failed on, and that line is somebody's identifier.
+        raise MalformedDirectory(
+            f"{CAREGIVERS_FILE_VAR} names {path!r}, which could not be read as JSON "
+            f"({type(unreadable).__name__})"
+        ) from None
+
+    if not isinstance(raw, dict):
+        raise MalformedDirectory(f"{path!r} is not a JSON object")
+
+    try:
+        caregivers = {
+            str(entry["caregiver_id"]): Caregiver(
+                caregiver_id=str(entry["caregiver_id"]),
+                destinations=tuple(
+                    (str(key), str(value))
+                    for key, value in dict(entry.get("destinations") or {}).items()
+                ),
+                active=bool(entry.get("active", True)),
+            )
+            for entry in raw.get("caregivers") or ()
+        }
+        grants = tuple(
+            Grant(
+                caregiver_id=str(entry["caregiver_id"]),
+                patient_id=str(entry["patient_id"]),
+                active=bool(entry.get("active", True)),
+            )
+            for entry in raw.get("grants") or ()
+        )
+        subjects = tuple(
+            SubjectMapping(
+                issuer=str(entry["issuer"]),
+                subject=str(entry["subject"]),
+                caregiver_id=str(entry["caregiver_id"]),
+            )
+            for entry in raw.get("subjects") or ()
+        )
+    except (KeyError, TypeError, AttributeError) as incomplete:
+        raise MalformedDirectory(
+            f"a record in {path!r} is missing a required field ({type(incomplete).__name__})"
+        ) from None
+
+    named = {grant.caregiver_id for grant in grants} | {
+        mapping.caregiver_id for mapping in subjects
+    }
+    unknown = sorted(named - set(caregivers))
+    if unknown:
+        # A grant or a mapping naming nobody is a silent no-op that reads as working configuration,
+        # which is exactly the shape that gets deployed and discovered by somebody being refused.
+        raise MalformedDirectory(f"{path!r} names caregiver(s) it does not declare: {unknown}")
+
+    return InMemoryCaregiverDirectory(caregivers=caregivers, grants=grants, subjects=subjects)
+
+
+def directory_from_environment(environ: dict[str, str] | None = None):
+    """The directory this environment describes, or ``None`` if it describes none.
+
+    ``None`` is only ever a demo answer: :func:`auth_from_environment` refuses production without
+    one, so an unset file in production stops the process rather than starting it directoryless.
+    """
+    source = os.environ if environ is None else environ
+    path = (source.get(CAREGIVERS_FILE_VAR) or "").strip()
+    return directory_from_file(path) if path else None
 
 
 def browser_login(environ: dict[str, str] | None = None) -> dict[str, str]:
@@ -175,15 +311,19 @@ def browser_login(environ: dict[str, str] | None = None) -> dict[str, str]:
 __all__ = [
     "AUDIENCE_VAR",
     "AUTH_MODE_VAR",
+    "CAREGIVERS_FILE_VAR",
     "DEFAULT_SCOPES",
     "DEMO_MODE",
     "ISSUER_VAR",
     "LOGIN_DOMAIN_VAR",
     "PRODUCTION_MODE",
     "IncompleteAuthConfiguration",
+    "MalformedDirectory",
     "UnknownAuthMode",
     "auth_from_environment",
     "browser_login",
     "configured_mode",
+    "directory_from_environment",
+    "directory_from_file",
     "wants_production",
 ]

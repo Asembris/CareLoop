@@ -125,11 +125,41 @@ same edit in reverse. A production mode with a missing issuer or audience **refu
 rather than serving anonymous traffic, and a value that is neither `demo` nor `production` is
 refused too — a typo must not be the difference between authenticating and not.
 
-The caregiver directory is composed at the composition root and `scripts/demo_serve.py` passes
-`directory=None`, so **that entry point refuses to start in production mode today**. That is
-deliberate and is the remaining code-side gap: a real deployment supplies a real directory holding
-the caregivers, their trusted destinations, their grants and the `(issuer, subject) → caregiver_id`
-mapping, and this server is the judge-facing demo.
+The caregiver directory is read from `CARELOOP_CAREGIVERS_FILE`, a JSON document holding the
+caregivers, their trusted destinations, their grants and the `(issuer, subject) → caregiver_id`
+mapping. So switching production on is **configuration and not code**: three identifiers from the
+bootstrap above, one file, and a redeploy. A file that is missing, unparseable, or names a caregiver
+it does not declare stops the process at startup rather than answering every request `401` for a
+reason nothing on the surface explains.
+
+A minimal one, once the bootstrap returns a `sub`:
+
+```json
+{
+  "caregivers": [
+    {
+      "caregiver_id": "cg-rosa",
+      "destinations": {
+        "caregiver_email": "rosa.marlowe@carer.example",
+        "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+        "portal_id": "PORTAL-NORTHGATE-RECORDS"
+      }
+    }
+  ],
+  "grants": [{ "caregiver_id": "cg-rosa", "patient_id": "PT-4417" }],
+  "subjects": [
+    {
+      "issuer": "https://cognito-idp.<region>.amazonaws.com/<POOL-ID>",
+      "subject": "<SUB-FROM-ADMIN-GET-USER>",
+      "caregiver_id": "cg-rosa"
+    }
+  ]
+}
+```
+
+Nothing in it is a credential — no token, no password, no key. An address is *configuration*, the
+address CareLoop may write to; a subject is an opaque identifier the issuer already puts in every
+token.
 
 ## What the deployed proof must show, once this exists
 

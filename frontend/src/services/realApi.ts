@@ -50,6 +50,7 @@ import type {
   VerificationState
 } from "@/types/domain";
 import type {
+  BoundariesView,
   CaseCard,
   CaseDetail,
   CaseSections,
@@ -1068,6 +1069,21 @@ export class RealCareLoopApi implements CareLoopApi {
 
     const detail = await request<CaseDetail>(`/api/cases/${encodeURIComponent(run.data.case_id)}`);
     return buildRun(run.data, detail.data ?? null, this.scenario);
+  }
+
+  /** The standing boundary for whoever is asking.
+   *
+   *  One request, no polling and no cache: `My Boundaries` asks when it opens and that is all. The
+   *  wire shape is returned untouched — every value in it was derived server-side and proven there
+   *  against the real policy engine, and anything this method computed would be outside that proof.
+   *
+   *  `null` on any non-200, including the 0 `request` reports for a network failure. The page
+   *  renders an honest "cannot read this right now" for all of them rather than falling back to
+   *  copy, which is the whole reason the endpoint exists.
+   */
+  async getBoundaries(): Promise<BoundariesView | null> {
+    const result = await request<BoundariesView>("/api/boundaries");
+    return result.data ?? null;
   }
 
   /* -------------------- writes -------------------- */

@@ -2,6 +2,8 @@
    These types are the seam between the approved UI and the real backend.
    Where the backend's own schema differs, adapt the ADAPTER (services/), not the components. */
 
+import type { BoundariesView } from "@/services/backend";
+
 export type CaseSection = "needs" | "working" | "done";
 
 /** Public status vocabulary. The UI groups by CaseSection; this is the exported equivalent. */
@@ -254,6 +256,21 @@ export interface CareLoopApi {
    *  confirmation id or an action: the backend resolves what to read entirely from durable case
    *  state, and a client that could name it would be choosing what CareLoop looks at. */
   recheckCase(caseId: string): Promise<ApprovalResult>;
+  /** The standing boundary for whoever is asking, exactly as the backend derived it.
+   *
+   *  Returns the **wire** shape rather than a domain shape, deliberately. Everything in it is
+   *  already derived server-side from `rules.yaml`, the tool registry and this caller's own
+   *  caregiver record, and cross-checked there against the real policy engine; a second near
+   *  identical domain object would only carry copy, which is `presentation.ts`'s job and is applied
+   *  at render. Nothing between here and the screen may recompute a standing.
+   *
+   *  Read once when `My Boundaries` opens, deliberately **not** part of the dashboard poller: a
+   *  boundary changes when the ruleset or the caregiver record changes, neither of which happens
+   *  mid-session, so polling it would add load and imply a volatility that does not exist.
+   *
+   *  Resolves `null` when the backend could not be read. The page must then say so — there is no
+   *  fallback copy, because hand-written authority claims are the thing this feature removed. */
+  getBoundaries(): Promise<BoundariesView | null>;
   runScenario(id: ScenarioId): Promise<ScenarioRun>;
   resetDemo(): Promise<void>;
   /** Mock stand-in for run polling. The real adapter should poll /api/runs/:id

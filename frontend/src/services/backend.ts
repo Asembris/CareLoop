@@ -196,6 +196,68 @@ export interface CaseDetail {
   timeline: TimelineEventView[];
 }
 
+/** `careloop.policy.boundaries.CapabilityStanding`. Where one effect stands right now. */
+export type CapabilityStanding = "AUTONOMOUS" | "REQUIRES_HUMAN" | "UNAVAILABLE";
+
+/** `careloop.policy.boundaries.Unavailability`. Why a capability cannot currently be reached.
+ *
+ *  Both members are statements about **this caregiver's current configuration**, never about the
+ *  product. `NO_TRUSTED_SOURCE` means nothing they hold configures a fact under the key an argument
+ *  needs at `TRUSTED`; a different configuration answers differently. Copy that reads as a
+ *  permanent product limitation would be overstating what the backend derived. */
+export type Unavailability = "NO_TRUSTED_SOURCE" | "NO_AUTHORISING_RULE" | "NO_ROUTE_TO_A_DECISION";
+
+/** `careloop.policy.boundaries.RefusalPrinciple`. A standing refusal the configuration implies. */
+export type RefusalPrinciple =
+  | "UNTRUSTED_DESTINATION"
+  | "UNEARNED_VALUE_TRUST"
+  | "DOCUMENT_AUTHORITY"
+  | "SECOND_RECORDED_EFFECT";
+
+/** `careloop.graph.recovery.RecoveryClass`. What may be done when a dispatch's answer is lost. */
+export type RecoveryClass = "IDEMPOTENT_REPLAYABLE" | "NOT_REPLAYABLE";
+
+export interface BoundaryArgumentView {
+  name: string;
+  arg_class: "VALUE" | "DESTINATION" | "AUTHORITY" | string;
+  /** The trust every authorising path demands — `null` when the rules demand none.
+   *
+   *  `null` is an answer, not a gap. `send_email.subject` declares no trust key and no rule names
+   *  it, so rendering a requirement there would assert a guard that does not exist. */
+  required_trust: TrustLevel | null;
+  trust_key: string | null;
+  /** This caregiver's own configured destination, when the argument draws on one. */
+  configured_value: string | null;
+  /** The fixed literal CareLoop composes itself, when it composes one. */
+  authored_value: string | null;
+  identifies: boolean;
+}
+
+export interface CapabilityView {
+  tool_name: string;
+  standing: CapabilityStanding | string;
+  unavailable_because: Unavailability | string | null;
+  /** Fact keys an argument needs at `TRUSTED` that this caregiver does not configure. */
+  unmet_trust_keys: string[];
+  independently_observed: boolean;
+  recovery_class: RecoveryClass | string;
+  arguments: BoundaryArgumentView[];
+}
+
+/** `GET /api/boundaries`. The only read here that is not a projection of a stored case.
+ *
+ *  It answers what the *configuration* permits, derived server-side from the loaded ruleset, the
+ *  tool registry and this caller's own caregiver record — see `careloop/policy/boundaries.py`, whose
+ *  every claim is cross-checked against the real `PolicyEngine`.
+ *
+ *  **Nothing in the frontend may re-derive any of this.** The whole point of the endpoint is that
+ *  the standing statement of CareLoop's authority stopped being hand-written copy; recomputing a
+ *  standing from these fields would put the second source of truth straight back. */
+export interface BoundariesView {
+  capabilities: CapabilityView[];
+  refusals: (RefusalPrinciple | string)[];
+}
+
 export interface RunView {
   run_id: string;
   case_id: string;

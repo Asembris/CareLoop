@@ -10,6 +10,7 @@ import type {
   ScenarioRun,
   TimelineEvent
 } from "@/types/domain";
+import type { BoundariesView } from "@/services/backend";
 import { seedCases } from "@/data/mock/cases";
 import { idleRun } from "@/data/mock/runs";
 import { EXCERPTS } from "@/data/mock/evidence";
@@ -126,6 +127,17 @@ class MockCareLoopApi implements CareLoopApi {
   /** Not offered by the mock: a re-check needs a real recorded effect and a real observer. */
   async recheckCase(caseId: string): Promise<ApprovalResult> {
     return { caseId, runId: this.run.id, accepted: false };
+  }
+
+  /** Refused, exactly as `recheckCase` and the recovery scenario are, and for the same reason.
+   *
+   *  A boundary is *derived from the live ruleset, the tool registry and the caller's own caregiver
+   *  record*, and its whole claim is that nothing hand-written stands between the enforcement and
+   *  the screen. A mock returning a plausible-looking statement would be precisely the second
+   *  source of truth this feature was built to delete — and it would look right, which is worse.
+   *  `null` puts the page into its honest "cannot read this right now" state. */
+  async getBoundaries(): Promise<BoundariesView | null> {
+    return null;
   }
 
   async approveAction(input: ApprovalInput): Promise<ApprovalResult> {

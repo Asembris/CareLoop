@@ -50,6 +50,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
+# `python scripts/deploy.py` puts *this directory* on sys.path and never the repository root, so
+# `scripts.deploy_artifact` does not resolve without help. That is the same defect
+# `careloop-api.service` documents for `scripts/demo_serve.py`, where the fix is a PYTHONPATH the
+# unit declares; an operator running a deploy has no unit to declare one, so it is done here.
+if __package__ in (None, ""):  # pragma: no cover - only when run as a file rather than imported
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from scripts.deploy_artifact import Artifact, ArtifactRefused, build
 
 REGION: Final[str] = "us-east-1"

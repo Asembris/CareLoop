@@ -224,13 +224,32 @@ def principal(
     that was not happening. Here the check happens, so ``401`` says what is true.
     """
     try:
-        return bound.principal(authorization)
+        established = bound.principal(authorization)
     except AuthenticationFailed:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=AUTHENTICATION_FAILED_DETAIL,
-            headers={"WWW-Authenticate": "Bearer"},
-        ) from None
+        raise _unauthenticated() from None
+
+    # **The second enforcement point, and it is independent of the first.** The boundary already
+    # refuses at construction to hold a verifier that establishes the wrong kind of principal, so
+    # this cannot fire today -- which is exactly why it is here. It is the policy layer's
+    # arrangement applied to identity: a hook and a decorator, either of which alone would do, so
+    # that a future edit has to defeat both. What it refuses is the one shape this whole boundary
+    # exists to make unreachable: a synthetic identity answering a production request.
+    if established.auth_method is not REQUIRED_METHOD[bound.mode]:
+        logger.error(
+            "a %s boundary established a %s principal; refusing",
+            bound.mode,
+            established.auth_method,
+        )
+        raise _unauthenticated()
+    return established
+
+
+def _unauthenticated() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail=AUTHENTICATION_FAILED_DETAIL,
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 Caller = Annotated[Principal, Depends(principal)]

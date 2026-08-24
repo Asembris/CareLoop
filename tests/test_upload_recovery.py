@@ -25,7 +25,7 @@ from the durable ``PLAN_PROPOSED`` entry the preparation was derived from.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import pytest
@@ -82,6 +82,10 @@ def held_bytes() -> bytes:
     return default_document_store().content(DOCUMENT)
 
 
+#: Something CareLoop never sent, for the two tests that need the store to be holding it.
+INTRUDER_BYTES = b"%PDF-1.4 somebody else's document"
+
+
 class LosesTheAnswer:
     """A boto3 client whose next ``put_object`` really happens and then reports nothing.
 
@@ -98,6 +102,7 @@ class LosesTheAnswer:
         self._inner = inner
         self.armed = True
         self.puts = 0
+        self.gets = 0
 
     def put_object(self, **kwargs: Any) -> Any:
         self.puts += 1
@@ -105,6 +110,50 @@ class LosesTheAnswer:
         if self.armed:
             self.armed = False
             raise ObjectStoreUnavailable(operation="put_object", code="ConnectionClosed")
+        return answer
+
+    def get_object(self, **kwargs: Any) -> Any:
+        """Counted, and otherwise untouched.
+
+        The count is a **test invariant** rather than a claim CareLoop makes about itself: nothing
+        in the product asserts how many requests a recovery makes, and nothing should. What it is
+        here for is to distinguish two reads from one, which is the difference between
+        reconstructing a lost write and independently settling it.
+        """
+        self.gets += 1
+        return self._inner.get_object(**kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+
+class DivergesAfterTheFirstRead:
+    """A store whose object is replaced in the moment between the two reads of it.
+
+    The two reads exist for different reasons and this is what makes them tell them apart. The
+    first is :meth:`careloop.tools.objectstore.ObjectStoreClient.put_once` answering a ``412`` —
+    reconstructing what the frozen identity already created, so the lost write can be recorded. The
+    second is :func:`careloop.graph.providers.object_store_readback`, run by ``VerifyNode`` against
+    the recorded result, asking what the store holds *now*.
+
+    Arranged so the first read finds exactly what CareLoop was authorised to file, and the world
+    then changes underneath it. If the observation were the reconstruction — cached, carried
+    forward on the result, or re-derived from anything the dispatch path already had — verification
+    would pass on stale evidence. It has to fail.
+
+    ``on_read`` fires **after** the inner call returns, so the read it is counting is genuinely
+    served before anything moves.
+    """
+
+    def __init__(self, inner: Any, on_read: Callable[[int], None]) -> None:
+        self._inner = inner
+        self._on_read = on_read
+        self.gets = 0
+
+    def get_object(self, **kwargs: Any) -> Any:
+        answer = self._inner.get_object(**kwargs)
+        self.gets += 1
+        self._on_read(self.gets)
         return answer
 
     def __getattr__(self, name: str) -> Any:
@@ -117,6 +166,36 @@ def world() -> Iterator[tuple[ObjectStore, LosesTheAnswer, ObjectStoreClient]]:
     held = ObjectStore()
     with object_store_server(held) as (endpoint, store):
         transport = LosesTheAnswer(object_store_client(endpoint))
+        yield store, transport, ObjectStoreClient(BUCKET, session=SESSION, client=transport)
+
+
+@pytest.fixture
+def diverging_world() -> Iterator[tuple[ObjectStore, DivergesAfterTheFirstRead, ObjectStoreClient]]:
+    """The same world, with the object replaced the instant the reconstruction read returns.
+
+    Both faults are stacked deliberately: the lost answer is what puts the case on the recovery
+    path at all, and the divergence is what asks whether the read that settles the write is the
+    same read that certifies it.
+    """
+    held = ObjectStore()
+    with object_store_server(held) as (endpoint, store):
+
+        def replace_after_the_reconstruction(read: int) -> None:
+            if read != 1:
+                return
+            (key,) = store.keys_under("")
+            store.put(
+                key,
+                StoredObject(
+                    body=INTRUDER_BYTES,
+                    metadata={DOCUMENT_METADATA: DOCUMENT, PORTAL_METADATA: PORTAL},
+                ),
+                only_if_absent=False,
+            )
+
+        transport = DivergesAfterTheFirstRead(
+            LosesTheAnswer(object_store_client(endpoint)), replace_after_the_reconstruction
+        )
         yield store, transport, ObjectStoreClient(BUCKET, session=SESSION, client=transport)
 
 
@@ -296,6 +375,114 @@ class TestALostAnswerConvergesOnOneObject:
 
         assert case.state is CaseState.DONE
         assert context_calls(case) == 1, "a second plan was proposed during recovery"
+
+
+class TestTheReconstructionReadIsNotTheSettlementRead:
+    """Two reads, two questions, and the second may never be answered by the first.
+
+    The object store reaches ``IDEMPOTENT_REPLAYABLE`` by a route the clinic does not need. A
+    duplicate ``PutObject`` is *refused*, so CareLoop has to assemble the answer itself::
+
+        replay PutObject       -> 412, the key is taken
+        GET #1  (put_once)     -> what is there; equal to what CareLoop was about to write
+        record + VERIFYING     -> the lost write is settled
+        GET #2  (read-back)    -> what the store holds now, keyed on the recorded result
+        verification
+
+    **GET #1 is reconstruction and GET #2 is observation, and they are not interchangeable.** The
+    first runs on the dispatch path and its whole job is to establish *what CareLoop's own frozen
+    identity already created*. The second runs in another node, at another time, and its job is to
+    say what the world holds. Reusing the first as the second would be cheaper, would look correct
+    on every green run, and would delete the only evidence verification has — the same tautology
+    ``tests/test_verify_readback.py::TestTheIndependenceProof`` removes for the clinic.
+
+    The clinic never had this hazard, because its replay hands back the record and no separate read
+    is involved on the dispatch path at all. That is precisely why this is the provider that needs
+    the proof.
+    """
+
+    def test_two_writes_and_two_reads(self, world) -> None:
+        """A: count them. One read would mean the settlement rests on the dispatch path's evidence.
+
+        The put count is the shape ``test_exactly_one_object_exists_afterwards`` already asserts —
+        the replay is a real request. The get count is the new half.
+        """
+        _held, transport, client = world
+        store = InMemoryCaseStore()
+        stranded(store)
+
+        run(store, client)
+        assert (transport.puts, transport.gets) == (1, 0), "the first attempt reads nothing"
+
+        case, _context = run(store, client)
+
+        assert case.state is CaseState.DONE
+        assert transport.puts == 2, "the replay is a real request"
+        assert transport.gets == 2, (
+            "the reconstruction that settles the write and the observation that certifies it are "
+            "one read; the settlement rests on evidence the dispatch path already had"
+        )
+
+    def test_a_store_that_changes_between_them_is_not_certified(self, diverging_world) -> None:
+        """B: the load-bearing one. The reconstruction matched; the world then moved."""
+        held, transport, client = diverging_world
+        store = InMemoryCaseStore()
+        stranded(store)
+
+        run(store, client)
+        case, _context = run(store, client)
+
+        assert transport.gets == 2, "the divergence was never given a second read to be seen by"
+        assert case.state is not CaseState.DONE
+        assert case.state is CaseState.AWAITING_HUMAN
+        assert held.get(next(iter(held.keys_under("")))).body == INTRUDER_BYTES
+
+    def test_the_write_was_still_settled_before_it_failed_to_certify(self, diverging_world) -> None:
+        """The reconstruction did its job. What it may not do is stand in for the observation.
+
+        One ``ActionRecord`` under the frozen identity, carrying the bytes GET #1 found, and a
+        verification that then refused them. If the record were missing this test would prove
+        nothing about the second read — it would prove the first one failed.
+        """
+        _held, _transport, client = diverging_world
+        store = InMemoryCaseStore()
+        stranded(store)
+
+        run(store, client)
+        case, _context = run(store, client)
+
+        assert len(case.actions) == 1
+        assert case.actions[0].idempotency_key == KEY
+        assert rehydrate("upload_document", case.actions[0].result).content_sha256 == (
+            content_digest(held_bytes())
+        )
+
+    def test_it_is_recorded_as_a_disagreement_with_the_world(self, diverging_world) -> None:
+        """``DIVERGED`` rather than ``MATCHED`` or an unavailable read: the store answered."""
+        _held, _transport, client = diverging_world
+        store = InMemoryCaseStore()
+        stranded(store)
+
+        run(store, client)
+        case, _context = run(store, client)
+
+        (failed,) = [
+            entry for entry in case.timeline if entry.kind is TimelineKind.VERIFICATION_FAILED
+        ]
+        assert failed.payload["observation"] == ObservationOutcome.DIVERGED
+        assert failed.payload["read_back"] == "true"
+
+    def test_no_third_write_was_attempted(self, diverging_world) -> None:
+        """A divergence is not a licence to file again, any more than an absence is."""
+        held, transport, client = diverging_world
+        store = InMemoryCaseStore()
+        stranded(store)
+
+        run(store, client)
+        run(store, client)
+
+        assert transport.puts == 2
+        assert len(held) == 1
 
 
 class TestDivergentExistingContentNeverSucceeds:

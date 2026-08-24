@@ -1,0 +1,27 @@
+{
+  "caregivers": [
+    {
+      "caregiver_id": "cg-proof-01",
+      "active": true,
+      "destinations": {
+        "caregiver_email": "proof.caregiver@carer.example",
+        "provider_id": "PROV-NORTHGATE-CARDIOLOGY",
+        "portal_id": "PORTAL-NORTHGATE-RECORDS"
+      }
+    }
+  ],
+  "grants": [
+    {
+      "caregiver_id": "cg-proof-01",
+      "patient_id": "PT-4417",
+      "active": true
+    }
+  ],
+  "subjects": [
+    {
+      "issuer": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_5fK05WAd8",
+      "subject": "34281468-b0a1-7023-89d9-96d2e26421e6",
+      "caregiver_id": "cg-proof-01"
+    }
+  ]
+}

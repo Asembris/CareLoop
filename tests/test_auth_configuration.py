@@ -28,6 +28,7 @@ from careloop.api.auth import AuthMode
 from careloop.identity.config import (
     AUDIENCE_VAR,
     AUTH_MODE_VAR,
+    CAREGIVERS_FILE_VAR,
     DEMO_MODE,
     ISSUER_VAR,
     PRODUCTION_MODE,
@@ -189,9 +190,43 @@ class TestTheDeploymentFileSaysAllOfThis:
         for forbidden in ("CLIENT_SECRET", "OIDC_SECRET", "COGNITO_SECRET"):
             assert f"{forbidden}=" not in text
 
-    def test_the_shipped_file_is_still_demo(self) -> None:
-        """The committed deployment file must not be the thing that switches production on."""
+    def test_the_shipped_file_declares_a_mode_this_library_knows(self) -> None:
+        """Whatever the deployment asks for, it must be one of the two things that exist.
+
+        This used to assert the shipped file was ``demo``, on the ground that a committed file
+        should not be what switches production on. That was right while there was no user pool to
+        switch to and became a stale claim the moment there was one: the deployed distribution now
+        verifies real tokens, and a test asserting otherwise would be asserting the deployment is
+        something it is not. What survives is the part that was always the real property -- a mode
+        this library recognises, since :func:`configured_mode` refuses anything else at startup.
+        """
         from pathlib import Path
 
         text = Path("deploy/careloop.env").read_text(encoding="utf-8")
-        assert f"{AUTH_MODE_VAR}={DEMO_MODE}" in text
+        declared = [
+            line.partition("=")[2].strip()
+            for line in text.splitlines()
+            if line.startswith(f"{AUTH_MODE_VAR}=")
+        ]
+        assert declared == [configured_mode({AUTH_MODE_VAR: declared[0]})]
+        assert declared[0] in (PRODUCTION_MODE, DEMO_MODE)
+
+    def test_a_shipped_production_mode_is_complete(self) -> None:
+        """If the file asks for production it must carry everything production needs.
+
+        Incompleteness here is not a test failure somewhere quiet -- it is
+        :class:`IncompleteAuthConfiguration` on the instance, which is the unit refusing to start
+        and a deploy that fails its own health check. Cheaper to find here.
+        """
+        from pathlib import Path
+
+        text = Path("deploy/careloop.env").read_text(encoding="utf-8")
+        declared = {
+            line.partition("=")[0]: line.partition("=")[2].strip()
+            for line in text.splitlines()
+            if "=" in line and not line.startswith("#")
+        }
+        if declared.get(AUTH_MODE_VAR) != PRODUCTION_MODE:
+            return
+        for required in (ISSUER_VAR, AUDIENCE_VAR, CAREGIVERS_FILE_VAR):
+            assert declared.get(required), f"{required} is empty in a production careloop.env"

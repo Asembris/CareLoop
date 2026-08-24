@@ -18,8 +18,10 @@ from test_approval_identity import HISTORICAL_ID, historical, legacy_store
 from test_no_safe_action import CASE_ID as HANDOFF_CASE_ID
 from test_no_safe_action import handoff_store, historical_handoff_store
 
+from careloop.api.access import CaseAccess
 from careloop.api.app import create_app, resume_event
 from careloop.api.app import decide as decide_directly
+from careloop.api.auth import demo_auth
 from careloop.api.deps import ApiDeps
 from careloop.api.projections import COMPLETED, NEEDS_YOU, WORKING
 from careloop.events.inbound import CLAIM_REJECTION_EVENT_ID, REFERRAL_EVENT_ID
@@ -385,6 +387,18 @@ class TestAManualHandoffCannotBeApprovedThroughTheApi:
         assert card["decision"]["reason_code"] == "NO_SAFE_ACTION_AVAILABLE"
 
 
+def demo_access(deps) -> CaseAccess:
+    """A ``CaseAccess`` over demo identity, for the two tests that call ``decide`` directly."""
+    boundary = demo_auth()
+    who = boundary.principal(None)
+    return CaseAccess(
+        deps=deps,
+        boundary=boundary,
+        principal=who,
+        caregiver=boundary.directory.caregiver(who.caregiver_id),
+    )
+
+
 class TestADecisionDuringARunIsRefusedBeforeAnythingIsRecorded:
     """The window is narrow and it is real.
 
@@ -411,9 +425,10 @@ class TestADecisionDuringARunIsRefusedBeforeAnythingIsRecorded:
 
             deps = ApiDeps(store=store)
             deps.runs.start(CASE_ID, occupying)
+            access = demo_access(deps)
 
             with pytest.raises(HTTPException) as raised:
-                await decide_directly(approve_directly, CASE_ID, approval_id, deps, CARER, 0.0)
+                await decide_directly(approve_directly, CASE_ID, approval_id, access, CARER, 0.0)
 
             assert raised.value.status_code == 409
             await deps.runs.drain()

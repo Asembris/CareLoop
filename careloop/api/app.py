@@ -17,6 +17,7 @@ from typing import Any, Final
 
 from fastapi import FastAPI, HTTPException, Request, Response, status
 
+from careloop.api.auth import AuthBoundary, demo_auth
 from careloop.api.demo import DEMO_SCENARIOS, DemoScenario
 from careloop.api.deps import (
     CAREGIVER_HEADER,
@@ -284,6 +285,7 @@ def create_app(
     demo: bool = False,
     static_dir: str | Path | None = None,
     faults: BookingResponseLoss | None = None,
+    auth: AuthBoundary | None = None,
 ) -> FastAPI:
     """Build the app over a store, or over a world per visitor.
 
@@ -320,9 +322,17 @@ def create_app(
     here alongside ``sessions=`` is refused with the rest. ``None``, which is the default, leaves
     the recovery scenario refusing truthfully rather than pretending to run.
 
+    ``auth`` is the identity boundary: which mode this app runs in and the one verifier that
+    establishes principals for it. Omitting it gives the judge-facing demo's synthetic caregiver,
+    which is what every offline test and local run has always effectively had. A production app is
+    built with :func:`careloop.api.auth.production_auth`, which requires a verifier and a directory
+    by signature -- so an app that authenticates nobody while claiming to be production cannot be
+    constructed, and there is no fallback from one mode to the other at request time.
+
     Raises:
         ValueError: if neither ``store`` nor ``sessions`` is given, if both are, or if a per-world
             collaborator is passed alongside ``sessions``.
+        AuthModeMismatch: if ``auth`` names a mode its verifier does not establish.
     """
     bound = build_dependencies(
         store,
@@ -380,6 +390,11 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.careloop = bound
+    # Beside the dependencies rather than among them. An isolated app deliberately holds no
+    # app-scoped dependency that resolves to a world; this resolves to no world, holds no case and
+    # answers one question about the caller -- and it has to be app-scoped, because a workspace
+    # whose owner is checked against a principal cannot be the thing that produces the principal.
+    app.state.careloop_auth = auth if auth is not None else demo_auth()
 
     @app.get(f"{API_PREFIX}/health")
     def health() -> dict[str, str]:

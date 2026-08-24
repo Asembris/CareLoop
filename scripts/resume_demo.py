@@ -54,7 +54,7 @@ from careloop.agents.schemas import (
 from careloop.agents.triage import TriageAgent
 from careloop.events.inbound import CLAIM_REJECTION_EVENT, REFERRAL_EVENT, InboundEvent
 from careloop.graph.runner import approve, context_for, open_case, reopen_case, run_case
-from careloop.graph.trusted import configured
+from careloop.graph.trusted import DEMO_CAREGIVER, configured
 from careloop.llm.mock import mock_model
 from careloop.state.case import Case
 from careloop.state.sqlite_store import SqliteCaseStore
@@ -133,7 +133,7 @@ def drive(
 
 def phase_one(store: SqliteCaseStore, now: datetime) -> Case:
     """A referral arrives. The case parks for a caregiver decision."""
-    open_case(store, REFERRAL_EVENT, case_id=CASE_ID, now=now)
+    open_case(store, REFERRAL_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=now)
     case = drive(
         store,
         REFERRAL_EVENT,

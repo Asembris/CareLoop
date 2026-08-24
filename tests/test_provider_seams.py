@@ -43,6 +43,7 @@ from careloop.graph.recovery import (
     dispatch_prepared,
 )
 from careloop.graph.runner import context_for, open_case
+from careloop.graph.trusted import DEMO_CAREGIVER
 from careloop.state import InMemoryCaseStore
 from careloop.tools.clinic import ClinicClient, ClinicRefused, ClinicUnavailable
 from careloop.tools.executor import DEFAULT_HANDLERS, MockExternalExecutor
@@ -227,7 +228,7 @@ class TestARunIsBoundToProviders:
     @staticmethod
     def _context(**kwargs: object) -> RunContext:
         store = InMemoryCaseStore()
-        open_case(store, REFERRAL_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+        open_case(store, REFERRAL_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW)
         return context_for(store, REFERRAL_EVENT, case_id=CASE_ID, **kwargs)
 
 
@@ -496,7 +497,9 @@ class TestTheOneToleratedProviderCoupling:
         with clinic_server() as (base_url, _world):
             client = ClinicClient(base_url)
             store = InMemoryCaseStore()
-            open_case(store, REFERRAL_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+            open_case(
+                store, REFERRAL_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW
+            )
             by_field = context_for(store, REFERRAL_EVENT, case_id=CASE_ID, clinic=client)
             by_provider = context_for(
                 store, REFERRAL_EVENT, case_id=CASE_ID, providers=(clinic_provider(client),)

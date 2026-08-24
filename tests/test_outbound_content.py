@@ -40,6 +40,7 @@ from careloop.agents.schemas import (
 from careloop.agents.triage import TriageAgent
 from careloop.events.inbound import POISONED_EVENT
 from careloop.graph.runner import context_for, open_case, run_case
+from careloop.graph.trusted import DEMO_CAREGIVER
 from careloop.llm.mock import mock_model
 from careloop.policy import Verdict, default_rules
 from careloop.policy.engine import PolicyEngine
@@ -117,7 +118,7 @@ def _planner_trying_to_smuggle(repeats: int = 4) -> PlannerAgent:
 
 def _run_against(clinic: ClinicClient):
     store = InMemoryCaseStore()
-    open_case(store, POISONED_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+    open_case(store, POISONED_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW)
     context = context_for(
         store,
         POISONED_EVENT,

@@ -44,6 +44,7 @@ from careloop.agents.schemas import PlannerIntent, proposal_tool_call_for
 from careloop.api.projections import case_detail
 from careloop.events.inbound import REFERRAL_EVENT
 from careloop.graph.runner import context_for, open_case, request_recheck, run_case
+from careloop.graph.trusted import DEMO_CAREGIVER
 from careloop.graph.verify import ObservationOutcome
 from careloop.graph.witness import (
     EffectClaim,
@@ -144,7 +145,7 @@ def run_booking(
     """Open a referral case and run it to rest, with ``witness`` bound to the run."""
     if store is None:
         store = InMemoryCaseStore()
-        open_case(store, REFERRAL_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+        open_case(store, REFERRAL_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW)
     context = context_for(
         store,
         REFERRAL_EVENT,
@@ -386,7 +387,9 @@ class TestPerformedIsNotClaimedUntilTheCallHasReturned:
         """The lifecycle half, and the one the saga moved. ``FAILED`` closed a door too early."""
         with clinic_server() as (base_url, _world):
             store = InMemoryCaseStore()
-            open_case(store, REFERRAL_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+            open_case(
+                store, REFERRAL_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW
+            )
             run_booking(self.RefusesToBook(base_url), RecordingWitness(), store=store)
             case = store.get(CASE_ID)
             assert case.state is CaseState.WAITING_EXTERNAL
@@ -782,7 +785,7 @@ class TestOneRunProducesAtMostOneOfEachClaim:
         matters is that a proposal for an unobservable tool was gated and nothing was claimed.
         """
         store = InMemoryCaseStore()
-        open_case(store, REFERRAL_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+        open_case(store, REFERRAL_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW)
         witness = RecordingWitness()
         context = context_for(
             store,

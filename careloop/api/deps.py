@@ -23,6 +23,7 @@ from typing import Annotated, Any, Final
 
 from fastapi import Depends, Header, HTTPException, Request, status
 
+from careloop.api.auth import Boundary, Caller
 from careloop.api.faults import BookingResponseLoss
 from careloop.api.runs import RunAlreadyInFlight, RunRecord, RunRegistry
 from careloop.api.wake import ReconcileWaker, RecoveryOutcome
@@ -43,6 +44,16 @@ logger = logging.getLogger(__name__)
 #: Named here rather than spelled inline so the message below, the schema declaration in
 #: :func:`careloop.api.app.declare_required_headers` and the tests all read one spelling.
 CAREGIVER_HEADER: Final[str] = "X-Caregiver"
+
+#: What a caller is told about a workspace they may not have.
+#:
+#: One sentence for "never minted", "forgotten", and — in production — "minted by somebody else".
+#: Identical on purpose: telling a caller that a workspace exists but is not theirs is an oracle,
+#: which is the reasoning a case they do not own is answered ``404`` rather than ``403``.
+WORLD_IS_GONE: Final[str] = (
+    "that world is gone — it was never minted here, or it has been idle long enough to be "
+    "forgotten. POST /api/sessions for a new one and start again."
+)
 
 #: The states a reconciliation opportunity means anything for.
 #:
@@ -459,6 +470,8 @@ class ApiDeps:
 
 def deps(
     request: Request,
+    bound: Boundary,
+    who: Caller,
     x_careloop_session: Annotated[str | None, Header()] = None,
 ) -> ApiDeps:
     """The dependencies this request's routes receive.
@@ -494,15 +507,24 @@ def deps(
         )
 
     try:
-        return held.world(session_id)
+        world = held.world(session_id)
     except UnknownSession:
-        raise HTTPException(
-            status_code=status.HTTP_410_GONE,
-            detail=(
-                "that world is gone — it was never minted here, or it has been idle long enough "
-                "to be forgotten. POST /api/sessions for a new one and start again."
-            ),
-        ) from None
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail=WORLD_IS_GONE) from None
+
+    # **Possession of a workspace id is not enough in production.** A session id is an isolation
+    # namespace, never a credential — that was true when nothing was authenticated and it is what
+    # made a leaked one so expensive. Here it stays a namespace and the *principal* is what
+    # authorises: the workspace's owner was recorded from a verified principal when it was minted,
+    # and it has to be the same one now.
+    #
+    # `410` rather than `403`, and identical to the answer above, for the reason a case the caller
+    # does not own is a `404`: telling somebody that a workspace exists but is not theirs is an
+    # oracle. In demo mode nothing is checked, because a synthetic world is isolated rather than
+    # authorised and its worlds are minted with no owner at all.
+    if bound.is_production and held.owner_of(session_id) != who.caregiver_id:
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail=WORLD_IS_GONE)
+
+    return world
 
 
 Deps = Annotated[ApiDeps, Depends(deps)]
@@ -522,9 +544,6 @@ def caregiver(x_caregiver: Annotated[str | None, Header()] = None) -> str:
             ),
         )
     return x_caregiver.strip()
-
-
-Caregiver = Annotated[str, Depends(caregiver)]
 
 
 def sections_from(
@@ -552,8 +571,8 @@ def sections_from(
 
 __all__ = [
     "CAREGIVER_HEADER",
+    "WORLD_IS_GONE",
     "ApiDeps",
-    "Caregiver",
     "ContextFactory",
     "Deps",
     "GraphRunner",

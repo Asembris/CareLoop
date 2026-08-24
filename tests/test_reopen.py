@@ -25,6 +25,7 @@ from helpers import FIXED_NOW
 import careloop
 from careloop.events.inbound import CLAIM_REJECTION_EVENT, REFERRAL_EVENT
 from careloop.graph.runner import CaseNotReopenable, open_case, reopen_case
+from careloop.graph.trusted import DEMO_CAREGIVER
 from careloop.state import CaseState, InMemoryCaseStore, TimelineKind
 from careloop.state.machine import REOPEN_FROM, REOPEN_TO, transition
 from careloop.state.store import CaseNotFound
@@ -160,7 +161,9 @@ class TestTheReopenItself:
     @staticmethod
     def _finished_case() -> InMemoryCaseStore:
         store = InMemoryCaseStore()
-        case = open_case(store, REFERRAL_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+        case = open_case(
+            store, REFERRAL_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW
+        )
         base = case.version
         for target in (
             CaseState.GATHERING_EVIDENCE,
@@ -244,7 +247,9 @@ class TestTheReopenItself:
     def test_a_case_that_is_not_done_is_refused(self, state: CaseState) -> None:
         """An event does not interrupt work in flight, and FAILED stays terminal."""
         store = InMemoryCaseStore()
-        case = open_case(store, REFERRAL_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+        case = open_case(
+            store, REFERRAL_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW
+        )
         base = case.version
         route = {
             CaseState.NEW: (),

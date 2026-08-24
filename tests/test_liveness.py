@@ -45,6 +45,7 @@ from careloop.graph.context import (
 )
 from careloop.graph.nodes import MAX_REFUSALS_PER_FINGERPRINT
 from careloop.graph.runner import context_for, open_case, run_case
+from careloop.graph.trusted import DEMO_CAREGIVER
 from careloop.llm.mock import mock_model
 from careloop.policy.verdicts import ReasonCode
 from careloop.provenance.trust import TrustLevel
@@ -113,7 +114,7 @@ def drive(store, *proposals: PlannerIntent, bound: int = MAX_NODE_EXECUTIONS):
 
 def fresh_store() -> InMemoryCaseStore:
     store = InMemoryCaseStore()
-    open_case(store, POISONED_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+    open_case(store, POISONED_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW)
     return store
 
 

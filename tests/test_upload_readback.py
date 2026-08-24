@@ -37,6 +37,7 @@ from careloop.agents.triage import TriageAgent
 from careloop.events.inbound import CLAIM_REJECTION_EVENT_ID, EVENTS
 from careloop.graph.providers import object_store_provider
 from careloop.graph.runner import context_for, open_case, run_case
+from careloop.graph.trusted import DEMO_CAREGIVER
 from careloop.graph.verify import (
     INDEPENDENTLY_OBSERVABLE,
     ObservationOutcome,
@@ -123,7 +124,7 @@ def store_service() -> Iterator[tuple[ObjectStore, ObjectStoreClient]]:
 def file_the_receipt(client: ObjectStoreClient | None = None, *, max_node_executions: int = 24):
     """Open the claim-rejection case and run it to rest, filing through ``client`` if given."""
     store = InMemoryCaseStore()
-    open_case(store, EVENT, case_id=CASE_ID, now=FIXED_NOW)
+    open_case(store, EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW)
     context = context_for(
         store,
         EVENT,

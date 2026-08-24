@@ -16,6 +16,7 @@ this is the channel it arrives through.
 
 from __future__ import annotations
 
+from careloop.api.access import Access, Actor, CaseAccess, case_access, decision_actor
 from careloop.api.app import (
     API_PREFIX,
     create_app,
@@ -124,13 +125,16 @@ __all__ = [
     "TIMELINE_PAYLOAD_FIELDS",
     "WITHHELD",
     "WORKING",
+    "Access",
     "ActionView",
+    "Actor",
     "ApiDeps",
     "ApprovalView",
     "AuthBoundary",
     "AuthMode",
     "AuthModeMismatch",
     "Caller",
+    "CaseAccess",
     "CaseCard",
     "CaseDetail",
     "CaseSections",
@@ -158,6 +162,7 @@ __all__ = [
     "approval_view",
     "boundary",
     "caregiver",
+    "case_access",
     "case_card",
     "case_detail",
     "case_sections",
@@ -167,6 +172,7 @@ __all__ = [
     "check_sections_partition_every_state",
     "create_app",
     "decide",
+    "decision_actor",
     "decision_view",
     "default_context_factory",
     "demo_auth",

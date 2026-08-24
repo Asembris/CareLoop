@@ -46,6 +46,7 @@ from careloop.agents.schemas import PlannerIntent, TriageCategory, TriageResult,
 from careloop.agents.triage import TriageAgent
 from careloop.events.inbound import EVENTS
 from careloop.graph.runner import context_for, open_case, run_case
+from careloop.graph.trusted import DEMO_CAREGIVER
 from careloop.llm.mock import mock_model
 from careloop.state import CaseState, InMemoryCaseStore
 from scripts.observability import (
@@ -377,7 +378,7 @@ def referral_run(case_id: str = "obs-referral"):
     """One deterministic referral run on the mock model. No clinic, no network, no clock."""
     store = InMemoryCaseStore()
     inbound = EVENTS["evt-0001-referral"]
-    open_case(store, inbound, case_id=case_id, now=FIXED_NOW)
+    open_case(store, inbound, caregiver=DEMO_CAREGIVER, case_id=case_id, now=FIXED_NOW)
     context = context_for(
         store,
         inbound,
@@ -393,7 +394,7 @@ def poisoned_run(case_id: str = "obs-poisoned"):
     """The same run with every forbidden category planted in model-facing text."""
     store = InMemoryCaseStore()
     inbound = EVENTS["evt-0002-continuity-notice"]
-    open_case(store, inbound, case_id=case_id, now=FIXED_NOW)
+    open_case(store, inbound, caregiver=DEMO_CAREGIVER, case_id=case_id, now=FIXED_NOW)
     intent = _booking_intent()
     poisoned = intent.model_copy(
         update={

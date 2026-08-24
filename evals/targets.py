@@ -36,6 +36,7 @@ from careloop.events.inbound import InboundEvent
 from careloop.graph.context import RunContext
 from careloop.graph.extract import record_document, validate_and_promote
 from careloop.graph.runner import approve, context_for, open_case, run_case
+from careloop.graph.trusted import DEMO_CAREGIVER
 from careloop.policy.engine import PolicyEngine
 from careloop.policy.gate import PolicyGate
 from careloop.policy.gated import GatedToolSet
@@ -172,7 +173,7 @@ def _case_ready_to_plan(
     to be measured without.
     """
     at = _now()
-    case = open_case(store, event, case_id=case_id, now=at)
+    case = open_case(store, event, caregiver=DEMO_CAREGIVER, case_id=case_id, now=at)
     base = case.version
 
     case = transition(
@@ -321,7 +322,7 @@ async def run_gated_pipeline(
     executor = MockExternalExecutor()
     error = ""
 
-    open_case(store, event, case_id=case_id, now=_now())
+    open_case(store, event, caregiver=DEMO_CAREGIVER, case_id=case_id, now=_now())
     context = context_for(
         store,
         event,

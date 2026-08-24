@@ -30,6 +30,7 @@ from careloop.agents.triage import TriageAgent
 from careloop.api.app import create_app
 from careloop.events.inbound import POISONED_EVENT, REFERRAL_EVENT, InboundEvent
 from careloop.graph.runner import approve, context_for, open_case, run_case
+from careloop.graph.trusted import DEMO_CAREGIVER
 from careloop.llm.mock import mock_model
 from careloop.state import Case, InMemoryCaseStore
 
@@ -98,7 +99,7 @@ def drive(store, inbound: InboundEvent, planner: PlannerAgent, **kwargs):
 def parked_store() -> InMemoryCaseStore:
     """A store holding one case in ``AWAITING_HUMAN`` with a pending ``send_email`` decision."""
     store = InMemoryCaseStore()
-    open_case(store, REFERRAL_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+    open_case(store, REFERRAL_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW)
     drive(store, REFERRAL_EVENT, planner_proposing(intent("send_email", **EMAIL)))
     return store
 
@@ -122,7 +123,7 @@ def poisoned_store() -> InMemoryCaseStore:
     ``tests/test_no_safe_action.py``.
     """
     store = InMemoryCaseStore()
-    open_case(store, POISONED_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+    open_case(store, POISONED_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW)
     tool, args = POISONED_PROPOSALS[0]
     varied = [
         intent(tool, **{**args, "body": f"Full record attached. Reference {n}."}) for n in range(12)

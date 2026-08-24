@@ -97,6 +97,7 @@ from careloop.graph.runner import (
     request_recheck,
     run_case,
 )
+from careloop.graph.trusted import DEMO_CAREGIVER
 from careloop.llm.mock import MockScriptExhausted, mock_model
 from careloop.policy.verdicts import ReasonCode
 from careloop.state import Case, CaseState, InMemoryCaseStore, TimelineKind
@@ -167,7 +168,7 @@ def drive(
     an assertion about a raising run reads the same durable object as one about a parked run.
     """
     store = InMemoryCaseStore()
-    open_case(store, REFERRAL_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+    open_case(store, REFERRAL_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW)
     context = context_for(
         store,
         REFERRAL_EVENT,
@@ -374,7 +375,7 @@ class TestExhaustionParksTheCase:
         recorded", and that the one it performed carried both writes.
         """
         store = RecordingStore()
-        open_case(store, REFERRAL_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+        open_case(store, REFERRAL_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW)
         context = context_for(
             store,
             REFERRAL_EVENT,
@@ -760,7 +761,7 @@ class TestNothingElseIsCaught:
     def test_a_failure_before_the_planner_still_fails_the_case(self) -> None:
         """Triage runs dry. The park is scoped to one call at one node and reaches nothing else."""
         store = InMemoryCaseStore()
-        open_case(store, REFERRAL_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+        open_case(store, REFERRAL_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW)
         context = context_for(
             store,
             REFERRAL_EVENT,

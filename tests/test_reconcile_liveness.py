@@ -54,7 +54,7 @@ from careloop.events.simulator import EventSimulator
 from careloop.graph.providers import ExternalProvider
 from careloop.graph.recovery import RECOVERY_CLASS, RecoveryClass, may_replay
 from careloop.graph.runner import context_for
-from careloop.graph.trusted import configured
+from careloop.graph.trusted import DEMO_CAREGIVER, configured
 from careloop.graph.verify import ObservationOutcome
 from careloop.state import CaseState, InMemoryCaseStore, TimelineKind
 from careloop.state.machine import transition
@@ -919,7 +919,9 @@ class TestEveryWaitingCaseCanBeCarriedForward:
         from careloop.graph.runner import open_case
 
         store = InMemoryCaseStore()
-        opened = open_case(store, SAGA_EVENT, case_id="case-fresh", now=FIXED_NOW)
+        opened = open_case(
+            store, SAGA_EVENT, caregiver=DEMO_CAREGIVER, case_id="case-fresh", now=FIXED_NOW
+        )
 
         assert latest_delivery(opened) is not None
         assert latest_delivery(opened).event_id == SAGA_EVENT.event_id

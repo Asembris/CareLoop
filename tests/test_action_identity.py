@@ -50,6 +50,7 @@ from careloop.agents.triage import TriageAgent
 from careloop.events.inbound import CLAIM_REJECTION_EVENT, REFERRAL_EVENT
 from careloop.graph.context import unsettled_preparation
 from careloop.graph.runner import context_for, open_case, reopen_case, run_case
+from careloop.graph.trusted import DEMO_CAREGIVER
 from careloop.llm.mock import mock_model
 from careloop.state import CaseState, InMemoryCaseStore, TimelineKind
 from careloop.state.machine import append_event
@@ -247,7 +248,7 @@ class TestAReopenedCaseDoesNotBookTheAppointmentTwice:
 
     def _reopened(self, clinic: CountingClinic, second: dict[str, str]):
         store = InMemoryCaseStore()
-        open_case(store, REFERRAL_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+        open_case(store, REFERRAL_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW)
         first, _context = _run(store, REFERRAL_EVENT, clinic, BOOKING)
         assert first.case.state is CaseState.DONE
 
@@ -329,7 +330,7 @@ class TestAReopenedCaseDoesNotBookTheAppointmentTwice:
         clinic = CountingClinic(base_url)
 
         store = InMemoryCaseStore()
-        open_case(store, REFERRAL_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+        open_case(store, REFERRAL_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW)
         first, _ = _run(store, REFERRAL_EVENT, clinic, BOOKING)
         assert first.case.state is CaseState.DONE
 
@@ -348,7 +349,7 @@ class TestRecoveryKeepsTheIdentityItWasHanded:
     def _prepared(self, clinic: CountingClinic):
         """A case durably ``EXECUTING`` with an unsettled preparation and no recorded action."""
         store = InMemoryCaseStore()
-        open_case(store, REFERRAL_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+        open_case(store, REFERRAL_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW)
         result, _context = _run(store, REFERRAL_EVENT, clinic, BOOKING)
         assert result.case.state is CaseState.DONE
         return store

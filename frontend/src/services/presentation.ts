@@ -21,6 +21,8 @@
 
 import type {
   BlockedAction,
+  Boundaries,
+  CapabilityStanding,
   CaseSection,
   DecisionFact,
   DecisionKind,
@@ -29,7 +31,7 @@ import type {
   RecoveryProof,
   RunStage
 } from "@/types/domain";
-import type { CaseState, FactView, RunState } from "./backend";
+import type { BoundariesView, CaseState, FactView, RunState } from "./backend";
 
 /* ------------------------------------------------------------------ *
  * Sections
@@ -1010,4 +1012,233 @@ const TITLES: Record<string, string> = {
 
 export function titleFor(caseId: string, summary: string): string {
   return TITLES[caseId] ?? (summary || caseId);
+}
+
+/* ------------------------------------------------------------------ *
+ * My Boundaries
+ * ------------------------------------------------------------------ */
+
+/* Copy over values the backend derived, and nothing else.
+ *
+ * Every standing, requirement, availability and refusal below is a *lookup* keyed on a closed
+ * backend enum. Nothing here reads `rules.yaml`, resolves a trust level, compares an argument or
+ * decides whether something is reachable — `careloop/policy/boundaries.py` does all of that and
+ * `tests/test_boundaries.py` proves it against the real policy engine. A function here that
+ * computed a standing would be the second source of truth this feature was built to delete, and it
+ * would be *invisible*, because it would look right on the shipped configuration.
+ *
+ * The one rule the copy itself must keep: **"currently", not "never".** `UNAVAILABLE` is a fact
+ * about this caregiver's configuration, not about the product, and a sentence implying a permanent
+ * limitation would claim more than the backend derived. */
+
+/** What each standing means for the caregiver reading it. */
+const STANDING_SUMMARY: Record<string, string> = {
+  AUTONOMOUS: "CareLoop does this on its own, once everything below is true.",
+  REQUIRES_HUMAN:
+    "CareLoop never does this by itself. It shows you the exact action and waits; approving covers " +
+    "that one action and nothing else.",
+  UNAVAILABLE: "CareLoop cannot do this under your current boundaries."
+};
+
+/** The short banner word for each standing. Never the raw enum. */
+const STANDING_LABEL: Record<string, string> = {
+  AUTONOMOUS: "ON ITS OWN",
+  REQUIRES_HUMAN: "ASKS YOU FIRST",
+  UNAVAILABLE: "CURRENTLY UNAVAILABLE"
+};
+
+export function standingLabel(standing: string): string {
+  return STANDING_LABEL[standing] ?? "UNKNOWN";
+}
+
+export function standingSummary(standing: string): string {
+  return STANDING_SUMMARY[standing] ?? "CareLoop cannot describe this action right now.";
+}
+
+/** A trust key as a caregiver reads it, for the sentence explaining an unmet requirement. */
+const TRUSTED_THING: Record<string, string> = {
+  role: "a trusted role",
+  caregiver_email: "a trusted address",
+  provider_id: "a trusted provider",
+  portal_id: "a trusted portal",
+  patient_id: "a trusted patient record",
+  document_id: "a trusted document",
+  slot_start: "a trusted appointment time"
+};
+
+function trustedThing(key: string): string {
+  return TRUSTED_THING[key] ?? `a trusted ${key.replace(/_/g, " ")}`;
+}
+
+/** A readable list: "a", "a and b", "a, b and c". */
+function listed(items: string[]): string {
+  if (items.length <= 1) return items[0] ?? "";
+  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
+/** Why a capability is out of reach, scoped to the current configuration.
+ *
+ *  **The scope is the whole point.** `NO_TRUSTED_SOURCE` says nothing this caregiver holds
+ *  configures the fact an argument needs; a different configuration answers differently, and the
+ *  backend derives it per caller. Copy reading "CareLoop can never do this" would state a product
+ *  limitation the backend did not derive — and would be wrong the day somebody configures one. */
+export function unavailableReason(because: string | null, unmetKeys: string[]): string {
+  if (because === "NO_TRUSTED_SOURCE") {
+    const missing = listed(unmetKeys.map(trustedThing)) || "a trusted value it needs";
+    return (
+      `Your current configuration establishes no ${missing}. Nothing else can supply it — not a ` +
+      `document, not an approval — so CareLoop refuses this action rather than acting on a value ` +
+      `it cannot trace.`
+    );
+  }
+  if (because === "NO_ROUTE_TO_A_DECISION") {
+    return (
+      "Authorising this would need your approval, and nothing in the active policy ever asks for " +
+      "one. With no way to obtain it, every attempt is refused."
+    );
+  }
+  if (because === "NO_AUTHORISING_RULE") {
+    return "No rule in the active policy permits this, so it is refused by default.";
+  }
+  return "CareLoop cannot currently authorise this action.";
+}
+
+/** The row label for one argument. Semantic, so the card reads as a sentence rather than a form. */
+const CONDITION_LABELS: Record<string, Record<string, string>> = {
+  book_appointment: {
+    provider_id: "Only with",
+    patient_id: "Only for",
+    slot_start: "Only at",
+    reason: "Reason"
+  },
+  send_email: { to: "Only to", subject: "Subject", body: "Message" },
+  upload_document: { portal_id: "Only to", document_id: "Only the" },
+  grant_portal_access: { grantee: "Only to", role: "Only with", portal_id: "Only on" }
+};
+
+const CLASS_LABELS: Record<string, string> = {
+  DESTINATION: "Only to",
+  AUTHORITY: "Only with",
+  VALUE: "Only when"
+};
+
+export function conditionLabel(toolName: string, argName: string, argClass: string): string {
+  return (
+    CONDITION_LABELS[toolName]?.[argName] ??
+    CLASS_LABELS[argClass] ??
+    argName.replace(/_/g, " ")
+  );
+}
+
+/** What must be true of one argument, in plain language.
+ *
+ *  Keyed on the backend's own answers — the argument class, the trust it requires, and whether
+ *  CareLoop composes the value itself. An argument the rules require nothing of says so; inventing
+ *  a requirement for it would assert a guard that does not exist, which is exactly the defect
+ *  `required_trust: null` was made able to express. */
+export function conditionRequirement(
+  argClass: string,
+  requiredTrust: string | null,
+  authored: boolean,
+  standing: string
+): string {
+  if (authored) return "written by CareLoop, not by the model — this exact wording, every time";
+  if (requiredTrust === "TRUSTED") {
+    return argClass === "AUTHORITY"
+      ? "powers that came from your configuration — never any a document claimed"
+      : "a destination from your configuration — never one a document named";
+  }
+  if (requiredTrust === "CONTROLLED") {
+    return "a value your own documents established and CareLoop checked before using it";
+  }
+  if (requiredTrust === "UNTRUSTED") return "no particular provenance";
+  return standing === "REQUIRES_HUMAN"
+    ? "free text — you read the exact wording before you approve it"
+    : "nothing in the active policy constrains this field";
+}
+
+/** What confirms the effect afterwards. Two materially different claims, kept apart. */
+export function afterwardsCopy(independentlyObserved: boolean): string {
+  return independentlyObserved
+    ? "Afterwards CareLoop reads the other system's own record and compares it, field by field, " +
+        "against what it was authorised to do. The case cannot finish unless they agree."
+    : "Afterwards CareLoop checks what it did against what was authorised. This effect is " +
+        "simulated, so nothing outside CareLoop confirms it — and the case says so.";
+}
+
+/** What happens when a provider's answer never arrives.
+ *
+ *  **The replayable sentence is written carefully and must stay that way.** Reconciliation really
+ *  does issue another request; what it cannot do is create a second appointment, because the
+ *  identity was frozen before the first one left. Copy denying the second request would be false
+ *  about the one part of this system whose value is that it does not lie about what happened.
+ *  `tests/test_recovery_copy.py` sweeps this file for exactly that family of sentence. */
+export function recoveryCopy(recoveryClass: string): string {
+  return recoveryClass === "IDEMPOTENT_REPLAYABLE"
+    ? "If the answer is lost, CareLoop asks again under the action identity it froze beforehand, " +
+        "so the provider hands back the record it already made. No second appointment is created."
+    : "If the answer is lost, CareLoop stops and hands the case to you. It will not try this " +
+        "effect a second time on its own.";
+}
+
+/** The standing refusals, in the caregiver's words. Emitted only when the backend derived them. */
+const REFUSAL_COPY: Record<string, string> = {
+  UNTRUSTED_DESTINATION:
+    "Send anything to an address or system that appears only inside a document.",
+  UNEARNED_VALUE_TRUST: "Act on a detail a document asserted that nothing has checked.",
+  DOCUMENT_AUTHORITY: "Treat an instruction found in a document as permission to act.",
+  SECOND_RECORDED_EFFECT: "Record a second effect for an action it has already carried out."
+};
+
+export function refusalCopy(principle: string): string {
+  return REFUSAL_COPY[principle] ?? "";
+}
+
+/** The backend's boundary statement, dressed for a caregiver.
+ *
+ *  A pure mapping: every capability, in the order the backend sent them, with copy applied and
+ *  **no field recomputed**. A capability the build has never heard the standing of still renders —
+ *  it keeps its backend standing string and gets the default summary — because a boundary a browser
+ *  cannot describe is still a boundary and dropping it would silently shorten the list.
+ *
+ *  A refusal principle this build has no copy for is dropped instead, and that asymmetry is
+ *  deliberate: a capability has a tool name and conditions worth showing without its summary, while
+ *  a refusal *is* its sentence and an empty one would render as a bullet with nothing beside it. */
+export function boundariesFor(view: BoundariesView): Boundaries {
+  return {
+    capabilities: view.capabilities.map((capability) => ({
+      toolName: capability.tool_name,
+      title: toolPhrase(capability.tool_name),
+      standing: capability.standing as CapabilityStanding,
+      summary: standingSummary(capability.standing),
+      ...(capability.standing === "UNAVAILABLE"
+        ? {
+            unavailableReason: unavailableReason(
+              capability.unavailable_because,
+              capability.unmet_trust_keys
+            )
+          }
+        : {}),
+      conditions: capability.arguments.map((argument) => ({
+        name: argument.name,
+        label: conditionLabel(capability.tool_name, argument.name, argument.arg_class),
+        requirement: conditionRequirement(
+          argument.arg_class,
+          argument.required_trust,
+          argument.authored_value !== null,
+          capability.standing
+        ),
+        ...(argument.configured_value ?? argument.authored_value
+          ? { value: (argument.configured_value ?? argument.authored_value) as string }
+          : {}),
+        ...(argument.required_trust ? { trustLabel: trustWord(argument.required_trust) } : {}),
+        argClass: argument.arg_class,
+        requiredTrust: argument.required_trust,
+        trustKey: argument.trust_key
+      })),
+      afterwards: afterwardsCopy(capability.independently_observed),
+      ifTheAnswerIsLost: recoveryCopy(capability.recovery_class)
+    })),
+    refusals: view.refusals.map(refusalCopy).filter(Boolean)
+  };
 }

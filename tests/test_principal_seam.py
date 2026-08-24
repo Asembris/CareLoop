@@ -26,6 +26,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import careloop
@@ -304,6 +305,62 @@ class TestProductionRefusesRatherThanSynthesises:
     def test_the_token_itself_is_taken_verbatim(self) -> None:
         """Not normalised. Trimming inside a token is how a different credential gets accepted."""
         assert _bearer_token("Bearer a.b-c_d") == "a.b-c_d"
+
+
+class TestAProductionRouteRefusesASyntheticPrincipal:
+    """The second enforcement point, and it is independent of the first.
+
+    :class:`~careloop.api.auth.AuthBoundary` already refuses at construction to hold a verifier
+    that establishes the wrong kind of principal, so this cannot fire today. That is exactly why it
+    exists -- the policy layer's arrangement applied to identity: a hook and a decorator, either of
+    which alone would do, so a future edit has to defeat both.
+
+    Without it, a fallback added inside the dependency would be caught only by whatever the
+    directory happened to hold, which is a different property and one a test could not name.
+    """
+
+    def test_the_dependency_refuses_a_principal_of_the_wrong_kind(self) -> None:
+        from careloop.api.auth import principal
+
+        class Smuggling:
+            """A boundary that has been talked into answering with a synthetic identity."""
+
+            mode = AuthMode.PRODUCTION
+            is_production = True
+
+            def principal(self, credential: str | None) -> Principal:
+                return Principal("anyone", AuthMethod.SYNTHETIC_DEMO)
+
+        with pytest.raises(HTTPException) as raised:
+            principal(Smuggling(), "Bearer anything")  # type: ignore[arg-type]
+
+        assert raised.value.status_code == 401
+
+    def test_it_accepts_a_principal_of_the_right_kind(self) -> None:
+        """Vacuity: the refusal above is about the method, not a guard refusing everything."""
+        from careloop.api.auth import principal
+
+        bound = production_auth(
+            verifier=StubOidc({"good": CAREGIVER_A}), directory=production_directory()
+        )
+
+        assert principal(bound, "Bearer good").caregiver_id == CAREGIVER_A
+
+    def test_a_demo_boundary_refuses_a_verified_principal_too(self) -> None:
+        """Symmetric, so the guard is a check on agreement rather than a check on one member."""
+        from careloop.api.auth import principal
+
+        class Smuggling:
+            mode = AuthMode.DEMO
+            is_production = False
+
+            def principal(self, credential: str | None) -> Principal:
+                return Principal("anyone", AuthMethod.VERIFIED_OIDC)
+
+        with pytest.raises(HTTPException) as raised:
+            principal(Smuggling(), None)  # type: ignore[arg-type]
+
+        assert raised.value.status_code == 401
 
 
 class TestTheProductionSeamReachesTheApp:

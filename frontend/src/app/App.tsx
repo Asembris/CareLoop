@@ -5,6 +5,7 @@ import { CareLoopProvider } from "@/hooks/useCareLoop";
 import { UiProvider } from "@/hooks/useUi";
 import AppHeader from "@/components/navigation/AppHeader";
 import ConnectionBanner from "@/components/navigation/ConnectionBanner";
+import IdentityStrip from "@/components/navigation/IdentityStrip";
 import UnderTheHoodDrawer from "@/components/under-the-hood/UnderTheHoodDrawer";
 import EvidenceLens from "@/components/cases/EvidenceLens";
 import HomePage from "@/pages/HomePage";
@@ -45,6 +46,7 @@ export default function App() {
             }}
           >
             <AppHeader />
+            <IdentityStrip />
             <ConnectionBanner />
             <Routes>
               <Route path="/" element={<HomePage />} />

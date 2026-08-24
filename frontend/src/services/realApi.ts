@@ -16,9 +16,11 @@
  * observes GATHERING_EVIDENCE → PLANNING → EXECUTING → VERIFYING. The run carries only the node
  * trace, and it lives in an in-process registry that a backend restart empties.
  *
- * **Approve and reject carry `X-Caregiver`.** It is an audit identity, not authentication:
- * nothing is verified and anyone reaching the port can claim any name, which is exactly why a
- * missing one is 400 and never 401. It is not surfaced as a login and the 400 is not "upgraded".
+ * **Approve and reject carry `X-Caregiver` in demo mode only.** There it is an audit identity and
+ * not authentication: nothing is verified and anyone reaching the port can claim any name, which is
+ * exactly why a missing one is 400 and never 401. In production the header is not sent at all and
+ * the backend *refuses* it — the actor comes from the verified principal, and a request carrying
+ * two spellings of caregiver identity must not resolve to whichever one a handler preferred.
  *
  * **It reads the timeline through named readers.** The functions below mirror
  * `careloop.graph.context`'s `latest_delivery` / `proposal_for` in intent: one place that knows
@@ -89,14 +91,28 @@ import {
   type PacedState,
   type PolicyLine
 } from "./presentation";
+import { bearerToken, isProduction } from "./auth";
 
 /** Empty by default: every request is a relative `/api` path, which the vite dev proxy forwards
  *  and a production deployment serves same-origin. Nothing in the app knows where CareLoop lives,
  *  so backend CORS is never involved. */
 const BASE_URL: string = import.meta.env.VITE_API_BASE_URL ?? "";
 
-/** The audit identity every decision is recorded against. See the header: not authentication. */
+/** The audit identity a **demo** decision is recorded against.
+ *
+ *  A name this page types, verified by nothing, in a synthetic world holding no real records — and
+ *  the API says so, which is why a missing one is a 400 and never a 401.
+ *
+ *  **Production does not send it.** There the actor is derived from the verified principal, and the
+ *  backend *refuses* the header rather than ignoring it: two spellings of caregiver identity in one
+ *  request is one for the next reader to disambiguate, and the answer must never depend on which
+ *  one a handler happened to prefer. See `careloop.api.access.decision_actor`. */
 export const CAREGIVER = "Maya";
+
+/** The headers a human decision carries, which differ by mode and by nothing else. */
+function decisionHeaders(): Record<string, string> {
+  return isProduction() ? {} : { "X-Caregiver": CAREGIVER };
+}
 
 /* ------------------------------------------------------------------ *
  * The session — one world per visitor
@@ -261,12 +277,17 @@ export async function request<T>(
   remint = true
 ): Promise<HttpResult<T>> {
   const world = await ensureSession();
+  const bearer = bearerToken();
   try {
     const response = await fetch(`${BASE_URL}${path}`, {
       ...init,
       headers: {
         Accept: "application/json",
         ...(world ? { [SESSION_HEADER]: world } : {}),
+        // Held in memory only — see `services/auth.ts`. Absent in demo mode, where nothing is
+        // verified, and absent in production until a token has been obtained: an unauthenticated
+        // request is answered 401 rather than being quietly downgraded to a synthetic identity.
+        ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
         ...(init.headers ?? {})
       }
     });
@@ -1070,7 +1091,7 @@ export class RealCareLoopApi implements CareLoopApi {
 
     const result = await request<RunView>(path, {
       method: "POST",
-      headers: { "X-Caregiver": CAREGIVER }
+      headers: decisionHeaders()
     });
 
     if (result.data) this.adopt(result.data);
@@ -1095,7 +1116,7 @@ export class RealCareLoopApi implements CareLoopApi {
   async recheckCase(caseId: string): Promise<ApprovalResult> {
     const result = await request<RunView>(
       `/api/cases/${encodeURIComponent(caseId)}/recheck`,
-      { method: "POST", headers: { "X-Caregiver": CAREGIVER } }
+      { method: "POST", headers: decisionHeaders() }
     );
 
     if (result.data) this.adopt(result.data);

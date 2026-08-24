@@ -5,6 +5,20 @@
 Nothing to install, nothing to sign into. Synthetic data throughout — no real patient, carer,
 clinician or clinic exists anywhere in this system.
 
+**This URL runs CareLoop in demo mode, and the page says so.** The caregiver is invented, nothing
+authenticates anybody, and the world holds fixture documents and no real records. That is a
+deliberate mode rather than an absence: CareLoop also has a production mode where the caregiver
+comes from a cryptographically verified OIDC token and access is checked against server-side
+caregiver→patient grants, and the two cannot silently substitute for each other — a failed
+production verification is a `401` and can never resolve to the synthetic identity you are using
+here. See **Production identity** in `README.md`, and `tests/test_oidc_verifier.py`,
+`tests/test_route_ownership.py` and `tests/test_patient_grants.py` for the proofs.
+
+The `?session=` id in the clinic links below is an *isolation namespace*, not a credential — it is
+what stops two judges competing for one appointment slot. In production the same header names a
+workspace whose owner must match the verified principal, and possession of the id alone gets a
+`410`.
+
 ---
 
 ## The sixty seconds

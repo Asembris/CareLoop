@@ -185,10 +185,63 @@ One page of caption, including what each zone means and why there are exactly tw
   `MAX_REFUSALS_PER_FINGERPRINT` and the repeat-refusal rule in `careloop/graph/nodes.py`.
 - **No DeepTeam pass/fail table is published**, because judging never completed — the paid layer's
   contribution is the corpus, and that is all it is claimed to have contributed.
-- **`X-Caregiver` is an audit identity, not authentication.** Nothing is verified; a missing header
-  is `400`, never `401`, because `401` would claim a check that is not happening.
+- **Two identity modes, chosen at construction, with no path between them.** In **demo** mode --
+  which is what the public URL serves -- `X-Caregiver` is an audit identity and not authentication:
+  nothing is verified, a missing header is `400` and never `401`, and the world is synthetic. In
+  **production** mode the caregiver is derived from a cryptographically verified OIDC access token,
+  `X-Caregiver` is *refused* rather than ignored, and a failed verification is a `401` that can
+  never resolve to a demo identity. See "Production identity" below.
 - **Synthetic data throughout.** One invented patient, one invented clinic, no PHI, and nothing
   here is clinical — CareLoop schedules and files, and never advises.
+
+## Production identity
+
+Two modes, chosen by `CARELOOP_AUTH_MODE` at construction and mutually exclusive there. There is no
+fallback between them: an `AuthBoundary` holds exactly one verifier, and a production app that has
+nobody to verify with cannot be built.
+
+```
+DEMO                                PRODUCTION
+synthetic caregiver                 OIDC access token, verified in FastAPI
+X-Caregiver names the actor         X-Caregiver refused; the actor is the verified caregiver
+X-CareLoop-Session is the world     the workspace's owner must match the principal
+no PHI, fixture documents           caregiver -> patient grants, checked server-side
+```
+
+**The chain, and where each link is decided.**
+
+```
+Authorization: Bearer <token>
+  -> signature against JWKS, exact issuer, exact audience, token_use, exp/nbf/iat, RS256 only
+  -> the IdP subject, resolved once against CareLoop's own directory and then dropped
+  -> caregiver_id
+  -> caregiver -> patient grant, asked before any new authority and never cached
+  -> workspace ownership, then case ownership
+  -> the deterministic policy engine, unchanged
+  -> external effect
+```
+
+**Authentication is not provenance, and the separation is machine-checked.** A verified principal
+says *who may ask*; a `Fact` says *why an argument may be sent somewhere*. Invariant 3 still gives
+`TRUSTED` exactly one producer, `trusted_facts`, and a token claim can never become one -- an
+identity provider carrying an email is the most plausible second producer anybody would build, and
+`tests/test_identity_boundary.py` refuses it by AST sweep rather than by review. `rules.yaml` names
+no principal, no caregiver and no grant, and the policy condition vocabulary did not grow one.
+
+**Revocation splits on what has already been issued.** A caller who lost their grant cannot deliver
+an event, approve a proposal, ask for a re-check or start a scenario -- zero dispatches, zero
+`ActionRecord`s, asserted on the provider rather than on a status code. But **provider
+reconciliation continues**: an effect that may already have committed is not un-issued by a
+revocation, and refusing to look would leave a real appointment permanently unknowable. The recovery
+path holds no directory and no principal, which is what makes that structural.
+
+**The token stops at the API boundary.** Nothing below it sees a credential, a claim, an issuer or a
+subject; the domain sees an opaque `caregiver_id` and nothing else. The nine frozen effect telemetry
+attributes are unchanged and carry no identity, and provider payloads carry none either.
+
+**In the browser**: hosted-UI login, authorization code with PKCE, and the access token held **in
+memory only** -- not `localStorage`, not `sessionStorage`, not IndexedDB. One coherent model, so
+there is no cookie-CSRF machinery bolted on beside it.
 
 ## Honest limits
 

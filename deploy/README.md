@@ -46,10 +46,23 @@ different clinics.
 
 The id travels in `X-CareLoop-Session`, and Demo World reads the same value out of
 `X-Demo-Session` or `?session=`. A **header rather than a cookie** because header forwarding
-through this distribution is measured — `X-Caregiver` reaches the origin — and cookie forwarding
-is not, so a cookie would be an assumption that fails in production rather than in a test. It is
-an isolation namespace and **not authentication**: nothing is verified, exactly as nothing about
-`X-Caregiver` is.
+through this distribution is measured — `X-Caregiver` reaches the origin, and so does
+`Authorization` under the `Managed-AllViewer` origin request policy — and cookie forwarding is not,
+so a cookie would be an assumption that fails in production rather than in a test.
+
+**In demo mode the id is an isolation namespace and not authentication**: nothing is verified,
+exactly as nothing about `X-Caregiver` is. Possession is enough, which is why `?session=` in a URL
+is acceptable there and nowhere else.
+
+**In production mode possession is not enough.** The workspace records the verified caregiver who
+minted it, and every later request must present the same principal; a request naming somebody
+else's workspace is answered `410`, identically to one naming a workspace that never existed.
+Minting requires an authenticated principal, so the anonymous capacity exhaustion the demo permits
+is unreachable there.
+
+Session ids no longer appear whole in log lines — see `careloop.api.sessions.named`, which logs the
+first eight characters. A WARNING carrying a whole one used to hand anybody who could read the logs
+everything that world could do.
 
 **What this costs, stated plainly.** A per-visitor world lives in memory and does not survive a
 restart of the API process; `CARELOOP_DB` is unused while the flag is on. A visitor whose world
@@ -281,3 +294,23 @@ The second one matters more than it looks. The dashboard polls `GET /api/cases` 
 proceed, so a cached response reads exactly like a hung backend — see
 `tests/test_api_static.py::TestNoCacheOnTheApi`, and check it **through the distribution** rather
 than against the origin, because that is the only place a CDN misconfiguration can be seen.
+
+
+## Identity configuration
+
+Three variables in `careloop.env`, none of them a secret, and a fourth that is optional:
+
+| Variable | Meaning |
+| --- | --- |
+| `CARELOOP_AUTH_MODE` | `demo` (or unset) or `production`. Anything else **refuses to start**. |
+| `CARELOOP_OIDC_ISSUER` | The issuer exactly as it appears in a token's `iss`. JWKS is derived from it. |
+| `CARELOOP_OIDC_AUDIENCE` | The app client id, matched against `client_id` on an access token. |
+| `CARELOOP_OIDC_LOGIN_DOMAIN` | The hosted-UI origin, for the browser login. Optional. |
+
+With `CARELOOP_AUTH_MODE=production`, a missing issuer or audience stops the process at startup
+rather than degrading it — the treatment an unguarded destination already gets from the policy
+loader. There is **no client secret variable**: the browser client is a public PKCE client, and a
+secret stored in a page anybody can read is not a secret.
+
+The committed file ships `CARELOOP_AUTH_MODE=demo`, so a redeploy of this file never switches
+production identity on by accident.

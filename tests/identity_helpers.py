@@ -50,6 +50,17 @@ DESTINATIONS_B = (
     ("portal_id", "PORTAL-SOUTHBANK-RECORDS"),
 )
 
+#: An outbound email Alma's own configured address may receive.
+#:
+#: Spelled from :data:`DESTINATIONS_A` rather than repeated, because after per-caregiver trusted
+#: configuration an email to anybody else is correctly *denied* -- which is the point of that patch
+#: and would otherwise look like a broken fixture.
+EMAIL_TO_A = {
+    "to": dict(DESTINATIONS_A)["caregiver_email"],
+    "subject": "Cardiology referral for Enid Marlowe",
+    "body": "The referral has arrived and an appointment is being arranged.",
+}
+
 TOKEN_A = "token-alma"
 TOKEN_B = "token-bo"
 

@@ -147,6 +147,22 @@ DECISION_ERRORS: Final[dict[int | str, dict[str, Any]]] = CAREGIVER_ERRORS | {
 }
 
 
+#: What a caller-driven route answers when a grant no longer covers the work being asked for.
+#:
+#: Documented on the three routes that can issue or observe an effect. Deliberately **not** on the
+#: read routes: reading a case you own is not acting for its patient, and a caregiver whose access
+#: was withdrawn should still be able to see what was done in their name.
+GRANT_ERRORS: Final[dict[int, dict[str, str]]] = {
+    status.HTTP_403_FORBIDDEN: {
+        "description": (
+            "You own this case, and you are not currently authorised to act for its patient. A "
+            "403 rather than a 404 because ownership was already established, so the case's "
+            "existence is not a secret and being told is more use than guessing."
+        )
+    }
+}
+
+
 def declare_required_headers(spec: dict[str, Any], required: frozenset[str]) -> dict[str, Any]:
     """Mark the headers the API really requires as ``required`` in ``spec``, in place.
 
@@ -546,6 +562,7 @@ def create_app(
         response_model=RunView,
         status_code=status.HTTP_202_ACCEPTED,
         responses=SESSION_ERRORS
+        | GRANT_ERRORS
         | {
             status.HTTP_404_NOT_FOUND: {
                 "description": "The simulator holds no event under that id."
@@ -572,6 +589,7 @@ def create_app(
         a test uses instead of polling; the run is not cancelled if the wait expires.
         """
         access.may_open(body.case_id)
+        access.may_open_a_case()
         return await deliver(
             access.deps, body.case_id, body.event_id, caregiver=access.caregiver, wait=wait
         )
@@ -580,7 +598,7 @@ def create_app(
         f"{API_PREFIX}/cases/{{case_id}}/decisions/{{approval_id}}/approve",
         response_model=RunView,
         status_code=status.HTTP_202_ACCEPTED,
-        responses=DECISION_ERRORS,
+        responses=DECISION_ERRORS | GRANT_ERRORS,
     )
     async def approve_decision(
         case_id: str, approval_id: str, access: Access, who: Actor, wait: float = 0.0
@@ -599,7 +617,7 @@ def create_app(
         f"{API_PREFIX}/cases/{{case_id}}/decisions/{{approval_id}}/reject",
         response_model=RunView,
         status_code=status.HTTP_202_ACCEPTED,
-        responses=DECISION_ERRORS,
+        responses=DECISION_ERRORS | GRANT_ERRORS,
     )
     async def reject_decision(
         case_id: str, approval_id: str, access: Access, who: Actor, wait: float = 0.0
@@ -617,6 +635,7 @@ def create_app(
         response_model=RunView,
         status_code=status.HTTP_202_ACCEPTED,
         responses=CAREGIVER_ERRORS
+        | GRANT_ERRORS
         | {
             status.HTTP_404_NOT_FOUND: {
                 "description": (
@@ -657,6 +676,12 @@ def create_app(
         """
         deps = access.deps
         case = access.case(case_id)
+        # A re-check issues no new effect -- it performs one independent read of an action
+        # already carried out. It is gated anyway, because reading a patient's external
+        # record is acting for that patient, and a caregiver whose access was withdrawn
+        # should stop doing that too. This is **not** the recovery path: reconciliation is
+        # driven by the startup sweep and the wake, neither of which can reach a directory.
+        access.may_act_on(case)
         if (running := deps.runs.in_flight_for(case_id)) is not None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -854,6 +879,7 @@ def mount_demo(app: FastAPI) -> None:
                 detail=f"no demo scenario {key!r}; known: {', '.join(sorted(DEMO_SCENARIOS))}",
             )
 
+        access.may_open_a_case()
         deps = access.deps
         async with deps.scenarios:
             await reset_world(deps)
@@ -1050,6 +1076,10 @@ async def decide(
     """
     deps = access.deps
     case = access.case(case_id)
+    # Before anything is recorded, and before a run is scheduled. Approving releases one
+    # exact call into the executor, so this is a caller asking for a **new** external
+    # effect and it is the moment the grant has to still hold.
+    access.may_act_on(case)
     if (running := deps.runs.in_flight_for(case_id)) is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

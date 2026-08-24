@@ -27,16 +27,27 @@ an owner.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Annotated
+from typing import Annotated, Final
 
 from fastapi import Depends, Header, HTTPException, status
 
 from careloop.api.auth import Acting, AuthBoundary, Boundary, Caller
 from careloop.api.deps import CAREGIVER_HEADER, ApiDeps, Deps, caregiver, sections_from
-from careloop.identity.directory import Caregiver
+from careloop.graph.context import established_patients
+from careloop.identity.directory import Caregiver, CaregiverDirectory
 from careloop.identity.principal import Principal
 from careloop.state.case import Case, CaseState
 from careloop.state.store import CaseNotFound, CaseStore
+
+#: What a caller is told when a grant no longer covers the work they are asking for.
+#:
+#: One sentence for "you hold no grants at all" and for "you may not act for this case's patient",
+#: because both mean the same thing to the person reading it and telling them apart would let a
+#: caller map the directory by probing.
+NOT_AUTHORISED_FOR_THIS_PATIENT: Final[str] = (
+    "you are not currently authorised to act for this patient; ask whoever administers CareLoop "
+    "to review your access"
+)
 
 
 def _no_such_case(case_id: str) -> HTTPException:
@@ -106,6 +117,67 @@ class CaseAccess:
         if self.enforced and not self.owns(existing):
             raise _no_such_case(case_id)
 
+    def may_open_a_case(self) -> None:
+        """Refuse a caller who may act for nobody at all.
+
+        The check available *at the moment a case is opened*, which is before any document has been
+        read: there is no patient yet, so there is nothing patient-specific to ask. What can be
+        asked is whether this caregiver is still active and still holds a grant for somebody, and a
+        caregiver who holds none has no business opening work.
+
+        The patient-specific question is :meth:`may_act_on`, asked once the case knows who it is
+        about.
+
+        Raises:
+            HTTPException: 403 if this caller may act for nobody.
+        """
+        if not self.enforced:
+            return
+        if not self.directory.may_act_for_anybody(self.principal.caregiver_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail=NOT_AUTHORISED_FOR_THIS_PATIENT
+            )
+
+    def may_act_on(self, case: Case) -> None:
+        """Refuse a caller who no longer holds a grant for this case's patient.
+
+        Asked immediately before anything a caller drives that could reach a **new** external
+        effect, and asked against the directory rather than against anything cached: a cached
+        answer is a revocation that has not happened yet.
+
+        ``403`` rather than ``404``. The caller owns this case -- ownership was checked one step
+        earlier -- so its existence is not a secret, and a caregiver whose access was withdrawn is
+        better told than left guessing.
+
+        **This is not on the recovery path and must never be.** Reconciling an action that may
+        already have committed is establishing what a provider did, not issuing new authority: an
+        effect that is already out there does not become un-issued because a grant was withdrawn,
+        and refusing to look would leave a real appointment unknowable. ``ApiDeps`` holds no
+        directory at all, which is what makes that structural rather than remembered.
+
+        Raises:
+            HTTPException: 403 if any patient this case has established is one this caller may not
+                currently act for.
+        """
+        if not self.enforced:
+            return
+        patients = established_patients(case)
+        if not patients:
+            # Nothing has been established yet, so there is nobody to be authorised for. An effect
+            # still cannot name a patient this case has not established -- that is
+            # `deny-booking-for-unverified-patient`, one layer down and unchanged.
+            return
+        if not all(
+            self.directory.may_act_for(self.principal.caregiver_id, patient) for patient in patients
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail=NOT_AUTHORISED_FOR_THIS_PATIENT
+            )
+
+    @property
+    def directory(self) -> CaregiverDirectory:
+        return self.boundary.directory
+
     def sections(self, sections: dict[str, frozenset[CaseState]]) -> dict[str, list[Case]]:
         """The dashboard, holding only this caller's cases.
 
@@ -173,4 +245,11 @@ def case_access(
 Access = Annotated[CaseAccess, Depends(case_access)]
 
 
-__all__ = ["Access", "Actor", "CaseAccess", "case_access", "decision_actor"]
+__all__ = [
+    "NOT_AUTHORISED_FOR_THIS_PATIENT",
+    "Access",
+    "Actor",
+    "CaseAccess",
+    "case_access",
+    "decision_actor",
+]

@@ -29,6 +29,7 @@ from api_helpers import EMAIL, factory_proposing, intent
 from fastapi.testclient import TestClient
 from identity_helpers import (
     CAREGIVER_A,
+    EMAIL_TO_A,
     TOKEN_A,
     bearer,
     production_boundary,
@@ -44,9 +45,14 @@ EVENT = {"case_id": CASE_ID, "event_id": "evt-0001-referral"}
 
 def parked(store, *, production: bool) -> tuple[TestClient, str]:
     """A case parked on a pending ``send_email`` decision, in the mode asked for."""
+    # The recipient differs by mode, and that *is* patch 5: a demo case carries the demo
+    # caregiver's trusted address and a production case carries Alma's, so an email to the other
+    # one is correctly denied rather than being a broken fixture.
     app = create_app(
         store,
-        context_factory=factory_proposing(intent("send_email", **EMAIL)),
+        context_factory=factory_proposing(
+            intent("send_email", **(EMAIL_TO_A if production else EMAIL))
+        ),
         auth=production_boundary() if production else None,
     )
     client = TestClient(app)

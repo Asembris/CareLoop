@@ -308,6 +308,18 @@ WITHHELD: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
                 )
             }
         ),
+        "Case": MappingProxyType(
+            {
+                "caregiver_id": (
+                    "Whose case this is. It says nothing a caller does not already know: in "
+                    "production a caller can only reach a case they own, so the answer is always "
+                    "themselves, and in demo mode it is the one synthetic caregiver. Withheld "
+                    "rather than projected because an owner id on a response is a field a client "
+                    "could start sending back, and caller-supplied identity is exactly what has no "
+                    "authority here."
+                )
+            }
+        ),
         "Fact": MappingProxyType(
             {
                 "extracted_at": (

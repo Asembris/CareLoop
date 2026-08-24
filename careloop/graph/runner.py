@@ -45,6 +45,7 @@ from careloop.graph.builder import (
 )
 from careloop.graph.context import RunContext, recheck_target
 from careloop.graph.trusted import trusted_facts
+from careloop.identity.directory import Caregiver
 from careloop.state.case import ApprovalStatus, Case, CaseState, TimelineKind
 from careloop.state.machine import append_event, transition
 from careloop.state.store import CaseStore, VersionConflict
@@ -151,17 +152,29 @@ def open_case(
     inbound: InboundEvent,
     *,
     case_id: str,
+    caregiver: Caregiver,
     now: datetime | None = None,
 ) -> Case:
-    """Open a new case for ``inbound`` and seed it with trusted configuration.
+    """Open a new case for ``inbound``, owned by ``caregiver``, seeded with their trusted config.
 
     Seeding happens here, before any document is read, so the code path that mints ``TRUSTED``
     facts and the code path that touches attacker-controlled text are never the same function.
+
+    ``caregiver`` is **required**, and a required argument rather than a defaulted one on purpose:
+    a case whose owner was decided by a default is a case whose owner nobody chose, and this is the
+    one moment ownership is settled. It comes from CareLoop's own
+    :class:`~careloop.identity.directory.CaregiverDirectory` -- never from a token claim, which is
+    what keeps an identity provider from becoming a second producer of ``TRUSTED``.
+
+    Ownership is frozen here and never rewritten. Whether this caregiver may act for the patient
+    the documents turn out to name is a separate question asked by the caller, because at this
+    moment no document has been read and there is no patient to ask about yet.
     """
     at = now or _utcnow()
     case = Case(
         case_id=case_id,
         event_id=inbound.event_id,
+        caregiver_id=caregiver.caregiver_id,
         state=CaseState.NEW,
         facts=trusted_facts(now=at),
         created_at=at,
@@ -207,7 +220,10 @@ def reopen_case(
     What survives is everything: the case id, every fact with its provenance, every approval, every
     recorded action, and the whole timeline. What changes is the state and one ``CASE_REOPENED``
     entry naming the event that did it. ``Case.event_id`` is **not** rewritten — it records which
-    event opened the case, and a reopen is not an opening.
+    event opened the case, and a reopen is not an opening. ``Case.caregiver_id`` is not rewritten
+    either, for exactly the same reason: it records who the case was opened for, and a follow-up
+    event arriving is not a change of hands. This function takes no caregiver argument at all, so
+    there is nowhere for one to be supplied and quietly override the owner.
 
     The follow-up's own documents are read by the next run, because
     :func:`context_for` scopes ``document_ids`` to the event it is given. Documents the case

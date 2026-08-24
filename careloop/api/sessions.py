@@ -204,11 +204,21 @@ class SessionWorlds:
         self._touched: dict[str, float] = {}
         #: Worlds this registry has let go whose clinic it has not managed to end yet.
         self._orphaned: OrderedDict[str, ApiDeps] = OrderedDict()
+        #: Which caregiver each session belongs to, where one does. Never populated from anything
+        #: a request carried -- see :meth:`mint`.
+        self._owners: dict[str, str] = {}
         # Re-entrant: `_mint` holds it and calls `_forget_idle`, which calls `busy`.
         self._lock = threading.RLock()
 
-    def mint(self) -> str:
-        """Create a world and return the id it answers to.
+    def mint(self, owner: str | None = None) -> str:
+        """Create a world for ``owner`` and return the id it answers to.
+
+        ``owner`` is a ``caregiver_id`` this registry records against the session and hands back
+        from :meth:`owner_of`. It is **not** read from anything the caller sent: a production route
+        passes the caregiver its verified principal resolved to, so a workspace is owned by whoever
+        was authenticated when it was minted and by nobody a request could name. ``None`` is the
+        demo's unowned world, which needs no owner because a synthetic world is isolated rather
+        than authorised.
 
         **Not** :func:`serialised`, and deliberately — the same reasoning :meth:`drain` carries.
         The registry mutation is :meth:`_mint`, which holds the lock; ending the clinics of the
@@ -219,12 +229,12 @@ class SessionWorlds:
         Raises:
             SessionsAtCapacity: if every world held is still busy.
         """
-        session_id = self._mint()
+        session_id = self._mint(owner)
         self._end_forgotten()
         return session_id
 
     @serialised
-    def _mint(self) -> str:
+    def _mint(self, owner: str | None) -> str:
         """Expire what has gone quiet, then create a world. The guarded half of :meth:`mint`."""
         self._forget_idle()
         if len(self._worlds) >= self._limit:
@@ -236,6 +246,8 @@ class SessionWorlds:
         session_id = secrets.token_urlsafe(16)
         self._worlds[session_id] = self._build(session_id)
         self._touched[session_id] = self._now()
+        if owner is not None:
+            self._owners[session_id] = owner
         return session_id
 
     @serialised
@@ -254,6 +266,16 @@ class SessionWorlds:
         self._worlds.move_to_end(session_id)
         self._touched[session_id] = self._now()
         return found
+
+    @serialised
+    def owner_of(self, session_id: str) -> str | None:
+        """Which caregiver this workspace belongs to, or ``None`` if nobody.
+
+        A separate question from :meth:`world`, deliberately: resolving a workspace and deciding
+        whether this caller may use it are two decisions, and folding them together would make the
+        second one something a future caller could skip by calling the first.
+        """
+        return self._owners.get(session_id)
 
     @serialised
     def sessions(self) -> tuple[str, ...]:
@@ -380,6 +402,7 @@ class SessionWorlds:
             world.wakes.stop()
             forgotten = self._worlds.pop(session_id)
             self._touched.pop(session_id, None)
+            self._owners.pop(session_id, None)
             self._orphan(session_id, forgotten)
 
     @serialised

@@ -394,11 +394,11 @@ describe("a deep link from a settled case", () => {
     // jsdom has no layout and therefore no `scrollIntoView` at all. Supplying one and recording the
     // call is the assertion: the defect was that it never happened. Restored afterwards, because a
     // prototype left patched is a fixture leaking into every test that runs after it.
-    const scrolled: string[] = [];
+    const scrolled: { id: string; options?: ScrollIntoViewOptions }[] = [];
     const absent = !("scrollIntoView" in Element.prototype);
     const original = Element.prototype.scrollIntoView;
-    Element.prototype.scrollIntoView = function (this: Element) {
-      scrolled.push(this.id);
+    Element.prototype.scrollIntoView = function (this: Element, options?: ScrollIntoViewOptions) {
+      scrolled.push({ id: this.id, options });
     } as typeof Element.prototype.scrollIntoView;
 
     try {
@@ -406,7 +406,14 @@ describe("a deep link from a settled case", () => {
       show("/trust#grant_portal_access");
 
       await waitFor(() => card("grant_portal_access"));
-      await waitFor(() => expect(scrolled).toContain("grant_portal_access"));
+      await waitFor(() => expect(scrolled.map((s) => s.id)).toContain("grant_portal_access"));
+
+      // Never smooth. Measured on the deployed demo: a smooth scroll is a **silent no-op** in an
+      // embedded browser where the default behaviour moves the page 2049px, so asking for one is
+      // asking a judge-facing affordance to fail without saying so.
+      for (const call of scrolled) {
+        expect(call.options?.behavior).not.toBe("smooth");
+      }
     } finally {
       if (absent) delete (Element.prototype as Partial<Element>).scrollIntoView;
       else Element.prototype.scrollIntoView = original;

@@ -25,7 +25,7 @@ test.describe("the stack", () => {
     // refusing to guess, and the right answer is to say which one rather than to take the first.
     await expect(page.getByRole("button", { name: "CareLoop — home" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Home", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Trust", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "My Boundaries", exact: true })).toBeVisible();
   });
 
   test("marks every API response uncacheable", async ({ request }) => {

@@ -75,7 +75,7 @@ test.describe("the under-the-hood drawer", () => {
     // pushed history would send Back to wherever they were before they opened it.
     await expect(page).toHaveURL(/\/trust$/);
     await expect(
-      page.getByRole("heading", { name: "The model never authorizes its own actions." })
+      page.getByRole("heading", { name: "What CareLoop may do, and what it will not." })
     ).toBeVisible();
   });
 });

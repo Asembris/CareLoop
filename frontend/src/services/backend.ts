@@ -66,13 +66,20 @@ export type TimelineKind =
   | "VERIFICATION_PASSED"
   | "VERIFICATION_FAILED";
 
-/** The nine members of `careloop.policy.verdicts.ReasonCode`.
+/** The eleven members of `careloop.policy.verdicts.ReasonCode`.
  *
  *  Note `AUTHORITY_NOT_TRUSTED`, which the mock adapter invented as `AUTHORITY_ESCALATION`. The
  *  two the backend keeps apart are `INSUFFICIENT_FACT_TRUST` (remediable — validate and repropose)
  *  and `AUTHORITY_NOT_TRUSTED` (irremediable — no validator can raise an AUTHORITY argument).
  *
- *  The last three are the reasons a *case* stopped rather than reasons a call was refused, so no
+ *  `EXTERNAL_OUTCOME_NOT_ESTABLISHED` and `PATIENT_AUTHORITY_DENIED` were absent from this union
+ *  and from `REFUSAL_PHRASES` until My Boundaries went looking. The second was the one that
+ *  mattered: it reaches a caregiver through a `MANUAL_HANDOFF_REQUIRED` entry, and with no copy of
+ *  its own it fell through to "Every action CareLoop could take here was refused by its own policy"
+ *  — which is false. Nothing was proposed and policy refused nothing; the patient boundary refused
+ *  the *case*, before any intent was written.
+ *
+ *  The last five are the reasons a *case* stopped rather than reasons a call was refused, so no
  *  rule carries them and the policy engine never emits one. `DecisionView.reason_code` is typed
  *  `ReasonCode | string` precisely so a build that has not been updated still renders — but a code
  *  missing from this union is a code nothing in `services/` was made to say anything truthful
@@ -86,7 +93,9 @@ export type ReasonCode =
   | "NO_RULE_MATCH"
   | "NO_SAFE_ACTION_AVAILABLE"
   | "EXTERNAL_STATE_NOT_CONFIRMED"
-  | "NO_VALID_PROPOSAL_PRODUCED";
+  | "NO_VALID_PROPOSAL_PRODUCED"
+  | "EXTERNAL_OUTCOME_NOT_ESTABLISHED"
+  | "PATIENT_AUTHORITY_DENIED";
 
 /** `careloop.api.runs.RunState`. `SETTLED` means the graph stopped — read the case for what it
  *  stopped *at*: parked for a decision, done, or failed. */

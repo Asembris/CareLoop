@@ -54,6 +54,9 @@ from careloop.api.models import (
     RESPONSE_MODELS,
     ActionView,
     ApprovalView,
+    BoundariesView,
+    BoundaryArgumentView,
+    CapabilityView,
     CaseCard,
     CaseDetail,
     CaseSections,
@@ -65,6 +68,7 @@ from careloop.api.models import (
 )
 from careloop.api.runs import RunRecord
 from careloop.graph.context import manual_handoff, proposal_for, recheck_target
+from careloop.policy.boundaries import ArgumentBoundary, Boundaries, Capability
 from careloop.policy.verdicts import ReasonCode, reason_text
 from careloop.provenance.facts import Fact, Provenance
 from careloop.state.case import ActionRecord, Approval, Case, CaseState, TimelineEvent
@@ -415,6 +419,13 @@ SOURCES: Final[Mapping[type[ResponseModel], Mapping[str, str]]] = MappingProxyTy
         ),
         CaseSections: MappingProxyType({}),
         RunView: MappingProxyType({}),
+        # Nothing sourced, everything derived, for the reason RunView is: a boundary is not a
+        # projection of a Case at all. It answers what the *configuration* permits, which no stored
+        # case holds — so there is no stored field for any of these to name, and DERIVED says where
+        # each one really comes from.
+        BoundaryArgumentView: MappingProxyType({}),
+        CapabilityView: MappingProxyType({}),
+        BoundariesView: MappingProxyType({}),
     }
 )
 
@@ -500,6 +511,55 @@ DERIVED: Final[Mapping[type[ResponseModel], Mapping[str, str]]] = MappingProxyTy
                 "state": "RunRecord.state, from the in-process run registry",
                 "executed_nodes": "RunRecord.executed_nodes, from the in-process run registry",
                 "error": "RunRecord.error, the raised type's name and never its message",
+            }
+        ),
+        # The boundary statement. Not a projection of the store, and every field says which of the
+        # three authoritative sources it reads — the loaded ruleset the gate decides by, the tool
+        # registry, or the caller's own caregiver record. See careloop/policy/boundaries.py for the
+        # derivations themselves and tests/test_boundaries.py for the proof that none overstates.
+        BoundaryArgumentView: MappingProxyType(
+            {
+                "name": "ArgSpec.name, via boundaries.ArgumentBoundary",
+                "arg_class": "ArgSpec.arg_class — the registry owns argument classes",
+                "required_trust": (
+                    "boundaries.required_trust(ruleset, tool, arg) — the stronger of the "
+                    "unconditional DENY floor and the weakest ALLOW requirement, so it is the "
+                    "level every authorising path demands. None when some path demands none"
+                ),
+                "trust_key": "ArgSpec.trust_key",
+                "configured_value": (
+                    "the caller's own Caregiver.destinations entry for trust_key, from CareLoop's "
+                    "directory and never from a token claim"
+                ),
+                "authored_value": "AUTHORED_VALUES[tool, arg] when ArgSpec.author is SYSTEM",
+                "identifies": "ArgSpec.identifies",
+            }
+        ),
+        CapabilityView: MappingProxyType(
+            {
+                "tool_name": "ToolSpec.name, for a tool with external_effect",
+                "standing": (
+                    "boundaries.CapabilityStanding — read from the rules in the engine's own match "
+                    "order: REQUIRE_HUMAN is considered before ALLOW, and an ALLOW needing an "
+                    "approval authorises nothing unless some rule asks for one"
+                ),
+                "unavailable_because": "boundaries.Unavailability, or None when it is available",
+                "unmet_trust_keys": (
+                    "fact keys an argument needs at TRUSTED that Caregiver.destinations does not "
+                    "configure; TRUSTED comes only from graph.trusted.trusted_facts"
+                ),
+                "independently_observed": "graph.verify.INDEPENDENTLY_OBSERVABLE membership",
+                "recovery_class": "graph.recovery.RECOVERY_CLASS[tool]",
+                "arguments": "one BoundaryArgumentView per ToolSpec.args entry, in declared order",
+            }
+        ),
+        BoundariesView: MappingProxyType(
+            {
+                "capabilities": "one CapabilityView per REGISTRY.external_effect_tools, sorted",
+                "refusals": (
+                    "boundaries.RefusalPrinciple members the configuration implies, derived from "
+                    "argument classes, PROMOTABLE_ARG_CLASSES and the required trust above"
+                ),
             }
         ),
     }
@@ -610,7 +670,12 @@ def check_every_response_field_has_a_source(
     model_table = SOURCE_MODELS if models is None else models
 
     problems: list[str] = []
-    if sources is None and (unlisted := sorted(set(RESPONSE_MODELS) - set(source_table))):
+    # Sorted by name rather than by the class object: response models are not orderable, so the
+    # unsorted form raised ``TypeError`` instead of naming the offender — an error path that could
+    # only ever run when the check was about to report something, and therefore had never run.
+    if sources is None and (
+        unlisted := sorted(set(RESPONSE_MODELS) - set(source_table), key=lambda m: m.__name__)
+    ):
         # Otherwise a response model could escape the check entirely by having no entry, which is
         # the same hole in the other direction: no declared origin at all rather than one missing.
         problems.append(
@@ -837,6 +902,49 @@ def run_view(record: RunRecord) -> RunView:
     )
 
 
+def boundary_argument_view(argument: ArgumentBoundary) -> BoundaryArgumentView:
+    """One argument of one capability."""
+    return BoundaryArgumentView(
+        name=argument.name,
+        arg_class=str(argument.arg_class),
+        required_trust=None if argument.required_trust is None else str(argument.required_trust),
+        trust_key=argument.trust_key,
+        configured_value=argument.configured_value,
+        authored_value=argument.authored_value,
+        identifies=argument.identifies,
+    )
+
+
+def capability_view(capability: Capability) -> CapabilityView:
+    """One external effect, as the caller's configuration permits it."""
+    return CapabilityView(
+        tool_name=capability.tool_name,
+        standing=str(capability.standing),
+        unavailable_because=(
+            None if capability.unavailable_because is None else str(capability.unavailable_because)
+        ),
+        unmet_trust_keys=list(capability.unmet_trust_keys),
+        independently_observed=capability.independently_observed,
+        recovery_class=str(capability.recovery_class),
+        arguments=[boundary_argument_view(argument) for argument in capability.arguments],
+    )
+
+
+def boundaries_view(statement: Boundaries) -> BoundariesView:
+    """The whole standing boundary, as *My Boundaries* renders it.
+
+    A projection like every other one here: it maps a derived shape onto a response shape and
+    decides nothing. What it must *not* grow is a claim of its own — everything this returns is
+    already in :mod:`careloop.policy.boundaries`, whose answers are cross-checked against the real
+    :class:`~careloop.policy.engine.PolicyEngine`, and a value invented at this layer would be
+    outside that proof.
+    """
+    return BoundariesView(
+        capabilities=[capability_view(capability) for capability in statement.capabilities],
+        refusals=[str(refusal) for refusal in statement.refusals],
+    )
+
+
 def payload_keys_in(case: Case) -> set[str]:
     """Every timeline payload key ``case`` carries.
 
@@ -863,6 +971,9 @@ __all__: list[str] = [
     "UndecidedField",
     "action_view",
     "approval_view",
+    "boundaries_view",
+    "boundary_argument_view",
+    "capability_view",
     "case_card",
     "case_detail",
     "case_sections",

@@ -112,12 +112,30 @@ performed is the effect authorised** — the idempotency key re-derived from the
 equals the key the action was recorded under, and every field the typed result echoes back equals
 the argument policy allowed.
 
-For `book_appointment` it means more, and the diagram draws that as a separate arrow on purpose.
-Verification performs its **own `GET`** against Demo World and compares what the clinic holds now
-against what policy authorised — never the booking's own response, which would be re-reading
-CareLoop's receipt. Move the appointment behind CareLoop's back and every closed-loop check still
-passes while verification fails; `tests/test_verify_readback.py::TestTheIndependenceProof` is that
-sentence as a test.
+For the **two effects with a real provider** it means more, and the diagram draws that as a separate
+arrow on purpose. Verification performs its **own read** and compares what the external system holds
+now against what policy authorised — never the effect's own response, which would be re-reading
+CareLoop's receipt. Move the record behind CareLoop's back and every closed-loop check still passes
+while verification fails; `tests/test_verify_readback.py::TestTheIndependenceProof` is that sentence
+as a test for the clinic and `tests/test_upload_readback.py::TestTheIndependenceProof` for the object
+store.
+
+| effect | provider | the independent read | evaluated in AWS |
+| --- | --- | --- | --- |
+| `book_appointment` | Demo World clinic, over HTTP | `GET /clinic/appointments/{confirmation_id}` | yes |
+| `upload_document` | Amazon S3, create-once | `GetObject`, digest computed here from the bytes | no — `NOT_APPLICABLE` |
+| `send_email` | none, simulated | — | — |
+| `grant_portal_access` | none, simulated | — | — |
+
+**The two providers offer CareLoop nothing in common, and that is the interesting part.** The clinic
+keys writes by an idempotency header and answers a duplicate with the original record; S3 has no
+notion of an idempotency key at all, refuses a duplicate `PutObject(IfNoneMatch="*")` with `412`, and
+hands back nothing — so the adapter fetches what is there and compares it against the bytes CareLoop
+was about to write. The measured contract is in [`objectstore-contract.md`](objectstore-contract.md).
+The saga above them consumes only whether a frozen identity may be re-issued and whether an
+independent observer is bound; `tests/test_third_provider_seam.py` carries a third, synthetic
+provider with a contract neither of them has through the same recovery lifecycle, and
+`tests/test_provider_seams.py` is the structural proof that no provider mechanics reach the engine.
 
 That read compares **every declared booking argument** — the provider, the patient, the slot and
 the reason — which closes the patient contract at both ends: the exact identifier must be
@@ -144,10 +162,15 @@ one argument* in `CLAUDE.md`.
 
 **What it does not prove.** It checks the effect performed against the effect authorised. It does
 not prove the outside world did the right thing, that the appointment suits the patient, or that
-the clinic will honour it. The other three effects are simulated, and for those verification closes
-the loop between decision and execution rather than between execution and the world. `read_back` on
-a `VERIFICATION_PASSED` entry is `true` only when an external system was actually read, so the
-weaker claim can never be read as the stronger one.
+the clinic will honour it. The other two effects — `send_email` and `grant_portal_access` — are
+simulated, and for those verification closes the loop between decision and execution rather than
+between execution and the world. `read_back` on a `VERIFICATION_PASSED` entry is `true` only when an
+external system was actually read, so the weaker claim can never be read as the stronger one.
+
+**Nor does it widen what AWS evaluates.** `CareLoopSettlementIntegrity` is booking-scoped,
+deliberately: a trace claiming an `upload_document` effect returns `NOT_APPLICABLE`, and
+`tests/test_evaluator_upload_scope.py` states that as a named exclusion rather than as an equality
+that happened to hold while there was one real provider.
 
 ## Deployed
 

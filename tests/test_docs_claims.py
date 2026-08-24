@@ -174,3 +174,123 @@ class TestTheHeroCannotDriftEither:
             "guard a claim nobody is being shown. Point them at whatever replaced it, or remove "
             "them with the hero."
         )
+
+
+# -- how many effects are real ---------------------------------------------------------------
+
+
+#: Where the architecture states how many effects reach a real provider, in prose a reader sees.
+#:
+#: ``docs/session-log.md`` is deliberately absent, for ``tests/test_upload_vocabulary.py``'s reason:
+#: it is a record of what was decided at the time, and editing history so a guard passes falsifies
+#: the one document whose value is that it was not edited afterwards.
+EFFECT_COUNT_DOCUMENTS: Final[tuple[Path, ...]] = (
+    REPO_ROOT / "CLAUDE.md",
+    REPO_ROOT / "docs" / "architecture.md",
+)
+
+#: A sentence saying how many effects are simulated. Number words, because that is how the prose
+#: reads — "the other two effects are simulated" — and a digit here would match nothing.
+SIMULATED_CLAIM: Final[re.Pattern[str]] = re.compile(
+    r"\b(one|two|three|four)\b[^.`]{0,40}?\beffects?\b[^.]{0,80}?\b(?:are|stay|remain)\b"
+    r"[^.]{0,20}?\bsimulated\b",
+    re.IGNORECASE,
+)
+
+#: A sentence saying how many tools are real.
+REAL_CLAIM: Final[re.Pattern[str]] = re.compile(
+    r"\b(one|two|three|four)\b\s+tools?\s+(?:is|are)\s+real", re.IGNORECASE
+)
+
+NUMBER_WORDS: Final[dict[str, int]] = {"one": 1, "two": 2, "three": 3, "four": 4}
+
+
+def simulated_effect_count() -> int:
+    """How many effect tools have no real provider, derived from the declarations.
+
+    ``REGISTRY.external_effect_tools`` minus
+    :data:`careloop.graph.verify.INDEPENDENTLY_OBSERVABLE`. Derived rather than written down,
+    because a number in prose is exactly the thing that goes stale — this one did, and said three
+    for as long as it took somebody to read it beside the code.
+    """
+    from careloop.graph.verify import INDEPENDENTLY_OBSERVABLE
+    from careloop.tools.registry import REGISTRY
+
+    return len(REGISTRY.external_effect_tools - INDEPENDENTLY_OBSERVABLE)
+
+
+def real_effect_count() -> int:
+    """How many effect tools reach a real, independently observable provider."""
+    from careloop.graph.verify import INDEPENDENTLY_OBSERVABLE
+
+    return len(INDEPENDENTLY_OBSERVABLE)
+
+
+def _claims(pattern: re.Pattern[str], document: Path) -> list[int]:
+    return [
+        NUMBER_WORDS[found.group(1).lower()]
+        for found in pattern.finditer(document.read_text(encoding="utf-8"))
+    ]
+
+
+class TestTheDocumentedEffectCountsAreDerivedFromTheDeclarations:
+    """The architecture pages must not go on saying one tool is real after a second one lands.
+
+    **This is the stale claim that motivated the guard.** ``docs/architecture.md`` said *"the other
+    three effects are simulated"* and never mentioned the object store at all, and ``CLAUDE.md``
+    opened the read-back section with *"one tool is real"* — both true before ``upload_document``
+    gained a provider, both false afterwards, and neither attached to anything that could notice.
+
+    Checked against ``REGISTRY.external_effect_tools`` and ``INDEPENDENTLY_OBSERVABLE`` rather than
+    against a constant, so a third real provider turns these red instead of leaving the pages
+    quietly wrong.
+    """
+
+    @pytest.mark.parametrize("document", EFFECT_COUNT_DOCUMENTS, ids=lambda path: path.name)
+    def test_the_simulated_count_matches_the_declarations(self, document: Path) -> None:
+        stated = _claims(SIMULATED_CLAIM, document)
+
+        assert stated, (
+            f"{document.name} no longer says how many effects are simulated. If the sentence was "
+            "removed deliberately, remove it from EFFECT_COUNT_DOCUMENTS in the same commit; do "
+            "not leave an assertion that passes because there is nothing left to check."
+        )
+        assert set(stated) == {simulated_effect_count()}
+
+    @pytest.mark.parametrize("document", EFFECT_COUNT_DOCUMENTS, ids=lambda path: path.name)
+    def test_no_document_still_claims_a_single_real_provider(self, document: Path) -> None:
+        assert set(_claims(REAL_CLAIM, document)) <= {real_effect_count()}
+
+    def test_the_two_counts_partition_the_effect_tools(self) -> None:
+        """Anti-vacuity for the derivation itself, not for the prose."""
+        from careloop.tools.registry import REGISTRY
+
+        assert real_effect_count() + simulated_effect_count() == len(REGISTRY.external_effect_tools)
+        assert real_effect_count() == 2
+        assert simulated_effect_count() == 2
+
+    def test_the_patterns_read_the_sentences_they_are_aimed_at(self) -> None:
+        """Vacuity from the other end: the wrong prose must match, and be read correctly."""
+        assert _claims(SIMULATED_CLAIM, REPO_ROOT / "CLAUDE.md")
+
+        was_wrong = "the other three effects stay simulated, because one action"
+        assert [
+            NUMBER_WORDS[found.group(1).lower()] for found in SIMULATED_CLAIM.finditer(was_wrong)
+        ] == [3]
+        assert [
+            NUMBER_WORDS[found.group(1).lower()]
+            for found in REAL_CLAIM.finditer("**One tool is real, and the read-back**")
+        ] == [1]
+
+    def test_the_evaluator_claim_is_not_widened_by_any_of_this(self) -> None:
+        """``CareLoopSettlementIntegrity`` stays booking-scoped, whatever the docs now say.
+
+        Two real providers is an architecture claim; what AWS evaluates is a separate, narrower one,
+        and the second must not drift on the strength of the first.
+        """
+        from evaluators.contract import OBSERVABLE_EFFECT_TYPES
+
+        assert frozenset({"book_appointment"}) == OBSERVABLE_EFFECT_TYPES
+        assert "NOT_APPLICABLE" in (REPO_ROOT / "docs" / "architecture.md").read_text(
+            encoding="utf-8"
+        )

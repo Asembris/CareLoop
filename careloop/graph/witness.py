@@ -81,7 +81,16 @@ class EffectDispatch(StrEnum):
     """
 
     PERFORMED = "PERFORMED"
-    """``ExecuteNode`` dispatched the call and it returned. A clinic write is in this trace."""
+    """A node dispatched the call and it returned. A provider write is in this trace.
+
+    Claimed by ``ExecuteNode`` on a first attempt and by ``ReconcileNode`` on a replay, on the line
+    after the call in both — a replay is a real request, whatever the provider does with it.
+
+    **A provider write, not a clinic write**, and the wording was narrower than the claim from the
+    day a second real integration existed: an ``upload_document`` dispatch is an S3 ``PutObject``
+    and belongs to this member exactly as a booking does. Nothing here names either, and nothing
+    may: what a reader can check against the transport beside it is that *a* write happened.
+    """
 
     SUPPRESSED = "SUPPRESSED"
     """The case already held the effect, so the duplicate branch returned before the executor.
@@ -91,10 +100,17 @@ class EffectDispatch(StrEnum):
     """
 
     NOT_IN_THIS_TRACE = "NOT_IN_THIS_TRACE"
-    """A caregiver's re-check, which runs dispatch then verify and never reaches the execute node.
+    """This run reached verification without anything in it having accounted for the effect.
 
     The write belongs to an earlier trace. Same transport expectation as :attr:`SUPPRESSED` and a
     different fact about why.
+
+    **Two shapes arrive here and they are one fact**: a caregiver's re-check, which runs dispatch
+    then verify and never reaches the execute node, and a verification resumed after a process died
+    between the ``VERIFYING`` commit and the read. The condition was written as the first alone —
+    read off a durable state — and a resumed verification then emitted no effect claim at all, five
+    attributes instead of nine, which the frozen evaluator correctly judged ``FAIL``. It is a
+    run-scoped flag now, because *"did the write happen in this trace"* is a run-scoped question.
     """
 
 

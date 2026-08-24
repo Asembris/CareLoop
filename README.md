@@ -161,9 +161,14 @@ One page of caption, including what each zone means and why there are exactly tw
   fire it: both agents drive the model provider directly and neither holds a tool. The event type,
   the registry and the `cancel_tool` contract are genuine SDK machinery; what is CareLoop's is the
   *firing*. "Strands blocks the attack" would be an overstatement.
-- **Verification checks the effect performed against the effect authorised** — and, for
-  `book_appointment` only, against a separate `GET` to the external clinic. It does not prove the
-  outside world did the right thing. The other three effects are simulated.
+- **Verification checks the effect performed against the effect authorised** — and, for the two
+  effects with a real provider, against a separate read of that provider: a `GET` to the external
+  clinic for `book_appointment`, and a fresh `GetObject` whose bytes are digested here for
+  `upload_document`. It does not prove the outside world did the right thing. The other two effects,
+  `send_email` and `grant_portal_access`, are simulated.
+- **`CareLoopSettlementIntegrity` is booking-scoped.** Two real providers is a claim about the
+  architecture; what the deployed AWS evaluator covers is narrower, and a trace claiming an
+  `upload_document` effect returns `NOT_APPLICABLE`.
 - **The mixed injection scenario is deliberately not deterministic.** The poisoned document arrives
   beside legitimate work, and a planner that ignores the bait and books the appointment is the
   system working. Measured on the deployed demo, **2026-08-19, five runs**: three carried a visible

@@ -6,10 +6,11 @@ wrappers that build an argument mapping, derive an idempotency key, and hand bot
 Concentrating the effect in one object is what makes "did this action happen?" a question with a
 single, checkable answer — the ledger — rather than a question about four call sites.
 
-**One of those handlers is now real, and the class keeps its name anyway.** ``handlers`` has been a
+**Two of those handlers are real now, and the class keeps its name anyway.** ``handlers`` has been a
 constructor argument since this module was written, and
-:func:`careloop.tools.clinic.clinic_executor` uses it to route ``book_appointment`` to a genuine
-external service while the other three stay simulated. What this class contributes — the ledger,
+:func:`careloop.graph.providers.merged_handlers` uses it to overlay a real handler for every action
+type a bound provider claims — a booking against the clinic, a filing against the object store —
+leaving every action type no provider claims simulated. What this class contributes — the ledger,
 replay suppression, the key-collision guard — is the same either way, and it is named for the
 handlers it *defaults* to. Renaming it across every call site to describe a mapping the caller
 chooses would move a lot of code to say less.
@@ -221,9 +222,9 @@ class MockExternalExecutor:
     record it produces is a frozen model, so nothing it hands out can be edited behind its back.
 
     Simulates the effect only as far as its handlers do. With :data:`DEFAULT_HANDLERS` nothing
-    leaves the process; with the mapping :func:`careloop.tools.clinic.clinic_executor` builds, a
-    booking is a real HTTP call to a real service. The ledger means the same thing in both cases,
-    which is what lets one replay assertion cover both.
+    leaves the process; with the mapping :func:`careloop.graph.providers.merged_handlers` builds, a
+    provider-claimed action really reaches its external system. The ledger means the same thing in
+    both cases, which is what lets one replay assertion cover both.
     """
 
     def __init__(self, handlers: Mapping[str, Handler] | None = None) -> None:

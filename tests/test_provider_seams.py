@@ -21,6 +21,9 @@ and, more convincingly, by every booking suite continuing to pass untouched.
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 import pytest
 from clinic_helpers import clinic_server
 from helpers import FIXED_NOW
@@ -47,6 +50,8 @@ from careloop.tools.provider import ProviderRefused, ProviderUnavailable
 from careloop.tools.results import EmailSent
 
 CASE_ID = "case-0001"
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 class ForeignUnavailable(ProviderUnavailable):
@@ -227,14 +232,277 @@ class TestARunIsBoundToProviders:
 
 
 class TestNoLifecycleModuleSpellsAProviderAction:
-    """The literal that used to sit in ``RunContext``, swept for."""
+    """The saga engine may not learn how any provider works, and CI proves it rather than review.
 
-    def test_the_context_module_no_longer_names_a_tool_to_build_an_observer(self) -> None:
-        from pathlib import Path
+    **What the engine is allowed to know**, and this is the whole of it: a prepared action identity,
+    a provider result, "nobody answered", "the provider declined", whether a replay is safe, whether
+    an independent observer is bound, and what a read established. Everything below that — a status
+    code, a confirmation id, an object key, a bucket, a precondition — belongs to an adapter.
 
-        import careloop.graph.context as context_module
+    **The rules are AST-shaped on purpose.** This repository explains its architecture by *naming*
+    the things it forbids, at length, in docstrings; a raw-text sweep over these modules would flag
+    the explanation of the rule as a violation of it, and would be deleted within a week. So
+    docstrings are excluded structurally, and what is checked is the code.
 
-        source = Path(context_module.__file__).read_text(encoding="utf-8")
+    **A declaration table is not a branch, and the distinction is the load-bearing one.**
+    :data:`~careloop.graph.recovery.RECOVERY_CLASS` and
+    :data:`~careloop.tools.executor.DEFAULT_HANDLERS` must name every effect tool — that is what
+    makes them coverage-checkable against the registry. What must never appear is the same string
+    anywhere a decision is made. So a tool name is permitted as a constant inside a *module-level
+    assignment to an upper-case name* and nowhere else, which is exactly the difference between::
 
-        assert '"book_appointment"' not in source
-        assert "'book_appointment'" not in source
+        RECOVERY_CLASS = {"upload_document": RecoveryClass.IDEMPOTENT_REPLAYABLE, ...}   # fine
+        if prepared.tool_name == "upload_document": ...                                  # not
+
+    **Three roles, three rule sets**, because the modules do genuinely different jobs:
+
+    ``SAGA_MODULES``
+        The recovery and lifecycle engine. Strictest: no provider token in code, in an identifier,
+        or in an import.
+
+    ``careloop/tools/executor.py``
+        The dispatch seam, which *owns* the simulated default handlers a provider overlays. Its
+        ``_book_appointment`` and friends are adapters, so the identifier rule would be wrong there;
+        the string and import rules still apply, and its tool names are dict keys.
+
+    ``careloop/graph/context.py``
+        The one tolerated legacy exception, below, pinned to an exact allowance.
+    """
+
+    #: The generic recovery and lifecycle engine.
+    SAGA_MODULES = (
+        "careloop/graph/nodes.py",
+        "careloop/graph/runner.py",
+        "careloop/graph/recovery.py",
+        "careloop/graph/builder.py",
+        "careloop/graph/conditions.py",
+        "careloop/graph/witness.py",
+    )
+
+    #: The dispatch seam. String and import rules only — see the class docstring.
+    EXECUTOR_MODULE = "careloop/tools/executor.py"
+
+    #: What a provider knows and the saga must not. Matched case-insensitively as substrings, so
+    #: ``ClinicRefused``, ``OBJECT_STORE_ACTION`` and ``PreconditionFailed`` are all reached.
+    PROVIDER_TOKENS = (
+        "book_appointment",
+        "upload_document",
+        "send_email",
+        "grant_portal_access",
+        "clinic",
+        "objectstore",
+        "object_store",
+        "bucket",
+        "nosuchkey",
+        "preconditionfailed",
+        "ifnonematch",
+        "confirmation_id",
+        "object_key",
+        "appointment",
+    )
+
+    #: Modules whose import into the engine would be provider mechanics arriving wholesale.
+    PROVIDER_MODULES = ("clinic", "objectstore", "boto3", "httpx", "demoworld")
+
+    @staticmethod
+    def _tree(module: str) -> ast.Module:
+        return ast.parse((REPO_ROOT / module).read_text(encoding="utf-8"))
+
+    @classmethod
+    def _explanatory_strings(cls, tree: ast.Module) -> set[int]:
+        """Every string the module uses to *describe* itself rather than to compute with.
+
+        Docstrings and attribute docstrings — a bare string expression in a module, class or
+        function body — plus every constant inside a module-level assignment to an upper-case name,
+        which is this repository's spelling of a declaration table.
+        """
+        explanatory: set[int] = set()
+        for node in ast.walk(tree):
+            body = getattr(node, "body", None)
+            if isinstance(body, list):
+                for statement in body:
+                    if isinstance(statement, ast.Expr) and isinstance(
+                        statement.value, ast.Constant
+                    ):
+                        explanatory.add(id(statement.value))
+        for node in tree.body:
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+            else:
+                continue
+            if not all(isinstance(t, ast.Name) and t.id.isupper() for t in targets):
+                continue
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Constant):
+                    explanatory.add(id(sub))
+        return explanatory
+
+    @classmethod
+    def _leaked_strings(cls, module: str) -> list[tuple[int, str]]:
+        tree = cls._tree(module)
+        explanatory = cls._explanatory_strings(tree)
+        leaks: list[tuple[int, str]] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Constant) or id(node) in explanatory:
+                continue
+            if isinstance(node.value, str):
+                lowered = node.value.lower()
+                if any(token in lowered for token in cls.PROVIDER_TOKENS):
+                    leaks.append((node.lineno, node.value[:60]))
+            elif isinstance(node.value, int) and 400 <= node.value <= 599:
+                # A provider's status code, arriving where only "answered" or "did not" belongs.
+                leaks.append((node.lineno, str(node.value)))
+        return leaks
+
+    @classmethod
+    def _leaked_identifiers(cls, module: str) -> list[tuple[int, str]]:
+        leaks: list[tuple[int, str]] = []
+        for node in ast.walk(cls._tree(module)):
+            if isinstance(node, ast.Attribute):
+                name = node.attr
+            elif isinstance(node, ast.Name):
+                name = node.id
+            else:
+                continue
+            if any(token in name.lower() for token in cls.PROVIDER_TOKENS):
+                leaks.append((node.lineno, name))
+        return leaks
+
+    @classmethod
+    def _provider_imports(cls, module: str) -> list[str]:
+        imported: list[str] = []
+        for node in ast.walk(cls._tree(module)):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                imported.append(node.module)
+            elif isinstance(node, ast.Import):
+                imported.extend(alias.name for alias in node.names)
+        return [
+            name for name in imported if any(provider in name for provider in cls.PROVIDER_MODULES)
+        ]
+
+    @pytest.mark.parametrize("module", SAGA_MODULES)
+    def test_the_saga_computes_with_no_provider_string(self, module: str) -> None:
+        assert self._leaked_strings(module) == []
+
+    @pytest.mark.parametrize("module", SAGA_MODULES)
+    def test_the_saga_names_no_provider_identifier(self, module: str) -> None:
+        assert self._leaked_identifiers(module) == []
+
+    @pytest.mark.parametrize("module", SAGA_MODULES)
+    def test_the_saga_imports_no_provider(self, module: str) -> None:
+        assert self._provider_imports(module) == []
+
+    def test_the_dispatch_seam_computes_with_no_provider_string_either(self) -> None:
+        """Its tool names are keys of ``DEFAULT_HANDLERS``; none is a branch."""
+        assert self._leaked_strings(self.EXECUTOR_MODULE) == []
+        assert self._provider_imports(self.EXECUTOR_MODULE) == []
+
+    def test_the_sweep_would_notice_a_branch(self) -> None:
+        """Vacuity, and it is the whole point of the class.
+
+        The two mutants the audit named, checked against the real rule rather than against a
+        source file — a test that had to edit ``nodes.py`` to prove itself would be a test nobody
+        could run twice.
+        """
+        for tool in ("upload_document", "book_appointment"):
+            branch = ast.parse(f'if prepared.tool_name == "{tool}":\n    pass\n')
+            leaked = [
+                node.value
+                for node in ast.walk(branch)
+                if isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and any(token in node.value.lower() for token in self.PROVIDER_TOKENS)
+                and id(node) not in self._explanatory_strings(branch)
+            ]
+
+            assert leaked == [tool]
+
+    def test_the_sweep_would_notice_a_status_code(self) -> None:
+        """``412`` and ``409`` are adapter vocabulary. The saga speaks refused-or-unavailable."""
+        raw = ast.parse("if response.status_code == 412:\n    pass\n")
+        leaked = [
+            node.value
+            for node in ast.walk(raw)
+            if isinstance(node, ast.Constant) and isinstance(node.value, int) and node.value >= 400
+        ]
+
+        assert leaked == [412]
+
+    def test_a_declaration_table_is_not_a_leak(self) -> None:
+        """The other half of vacuity: the rule must not forbid what the architecture requires."""
+        table = ast.parse('RECOVERY_CLASS = {"book_appointment": 1, "upload_document": 2}\n')
+        explanatory = self._explanatory_strings(table)
+        leaked = [
+            node.value
+            for node in ast.walk(table)
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and id(node) not in explanatory
+        ]
+
+        assert leaked == []
+
+
+class TestTheOneToleratedProviderCoupling:
+    """``RunContext.clinic`` is legacy, inert, and pinned so it cannot spread.
+
+    **Why it is still here.** ``RunContext`` carries a ``clinic: ClinicClient | None`` field that
+    predates :class:`~careloop.graph.providers.ExternalProvider`. ``__post_init__`` converts it with
+    :func:`~careloop.graph.providers.clinic_provider` on the way in and **nothing below that line
+    reads it** — every handler, every observer and every recovery decision comes from ``bound``,
+    which is assembled the same way for the clinic and for any other provider. Removing the field
+    would touch sixty-odd call sites across production and tests for no behavioural change, which
+    is a refactor for tidiness rather than for correctness.
+
+    **What is not tolerated is a second one.** The allowance below is an *exact* set of names, so
+    adding an ``objects: ObjectStoreClient | None`` field beside it — the obvious way to wire the
+    next provider, and the way this one was wired — fails here. That is the whole value of writing
+    the exception down: the composition root
+    (:func:`careloop.api.deps.world_context_factory`) already passes the object store as an
+    ordinary provider, and this keeps that the only way.
+    """
+
+    MODULE = "careloop/graph/context.py"
+
+    #: Every provider-shaped name the run context may still spell. Exact, not a prefix rule.
+    ALLOWED_NAMES = frozenset({"clinic", "ClinicClient", "clinic_provider"})
+
+    #: The one provider module it may import.
+    ALLOWED_IMPORT = "careloop.tools.clinic"
+
+    def test_the_only_provider_names_left_are_the_clinic_field_and_its_conversion(self) -> None:
+        leaked = {
+            name
+            for _line, name in TestNoLifecycleModuleSpellsAProviderAction._leaked_identifiers(
+                self.MODULE
+            )
+        }
+
+        assert leaked == self.ALLOWED_NAMES
+
+    def test_it_imports_exactly_one_provider_module(self) -> None:
+        assert TestNoLifecycleModuleSpellsAProviderAction._provider_imports(self.MODULE) == [
+            self.ALLOWED_IMPORT
+        ]
+
+    def test_it_still_spells_no_action_type(self) -> None:
+        """The literal that used to build the read-backs. The reason this class exists."""
+        assert TestNoLifecycleModuleSpellsAProviderAction._leaked_strings(self.MODULE) == []
+
+    def test_the_field_decides_nothing_the_provider_path_does_not(self) -> None:
+        """Behavioural half: a clinic-bound run and a provider-bound run assemble identically."""
+        with clinic_server() as (base_url, _world):
+            client = ClinicClient(base_url)
+            store = InMemoryCaseStore()
+            open_case(store, REFERRAL_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+            by_field = context_for(store, REFERRAL_EVENT, case_id=CASE_ID, clinic=client)
+            by_provider = context_for(
+                store, REFERRAL_EVENT, case_id=CASE_ID, providers=(clinic_provider(client),)
+            )
+
+            assert set(by_field.readbacks) == set(by_provider.readbacks)
+            assert by_field.executor is not None
+            assert by_provider.executor is not None
+            assert by_field.executor.action_types == by_provider.executor.action_types

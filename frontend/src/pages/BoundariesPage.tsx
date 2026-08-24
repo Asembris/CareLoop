@@ -93,13 +93,29 @@ export default function BoundariesPage() {
    * destination without the travel, which is the bargain the `clLocate` rule makes too. */
   useEffect(() => {
     if (reading !== "read" || !targeted) return;
-    const card = document.getElementById(targeted);
-    if (!card) return;
-    const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-    // Optional call, and not defensiveness for its own sake: this is decoration, and decoration
-    // that can throw takes the whole page down with it. An environment without `scrollIntoView`
-    // still gets the card, the highlight and every word on it -- it just does not travel.
-    card.scrollIntoView?.({ block: "center", behavior: still ? "auto" : "smooth" });
+
+    /* Two frames, for the reason `useApplicationReady` waits two: a scroll issued in the same tick
+       as the render is racing the browser's own navigation-time scroll restoration, and loses.
+       Measured on the deployed demo — the highlight played on the right card and the page stayed at
+       `scrollY: 0`, with a manual `scrollIntoView` from the console moving it 421px, which is what
+       told the two apart. Cancelled on unmount so a reader who navigates away mid-wait is not
+       yanked by a page they have left. */
+    let frame = 0;
+    const armed = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => {
+        const card = document.getElementById(targeted);
+        if (!card) return;
+        const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+        // Optional call, and not defensiveness for its own sake: this is decoration, and decoration
+        // that can throw takes the whole page down with it. An environment without
+        // `scrollIntoView` still gets the card, the highlight and every word on it.
+        card.scrollIntoView?.({ block: "center", behavior: still ? "auto" : "smooth" });
+      });
+    });
+    return () => {
+      cancelAnimationFrame(armed);
+      cancelAnimationFrame(frame);
+    };
   }, [reading, targeted]);
 
   const grouped = (standing: CapabilityStanding): Capability[] =>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { useScrollReveal } from "@/hooks/useScrollReveal";
 import { api } from "@/services/api";
 import { boundariesFor } from "@/services/presentation";
@@ -62,6 +63,14 @@ export default function BoundariesPage() {
   const [reading, setReading] = useState<Reading>("loading");
   const [boundaries, setBoundaries] = useState<Boundaries | null>(null);
 
+  /* Which capability a `/trust#<tool>` link asked for.
+   *
+   * Read here rather than left to the browser's own `:target`, because the fragment is resolved at
+   * navigation time and these cards do not exist yet -- they arrive with the boundary response.
+   * Measured on the deployed demo before this: the URL was right, the card was in the DOM with the
+   * matching id, `:target` was null, nothing scrolled and no highlight played. */
+  const targeted = useLocation().hash.replace(/^#/, "");
+
   useEffect(() => {
     let live = true;
     void api.getBoundaries().then((view) => {
@@ -73,6 +82,25 @@ export default function BoundariesPage() {
       live = false;
     };
   }, []);
+
+  /* Bring the asked-for card into view once it exists.
+   *
+   * Keyed on `reading` as well as on the fragment, so it runs when the cards are really rendered
+   * rather than on a page that is still a skeleton. `block: "center"` rather than the default,
+   * because the header is sticky and the default puts the card's top edge underneath it.
+   *
+   * Motion is asked for, never assumed: a reader who has said they do not want it gets the same
+   * destination without the travel, which is the bargain the `clLocate` rule makes too. */
+  useEffect(() => {
+    if (reading !== "read" || !targeted) return;
+    const card = document.getElementById(targeted);
+    if (!card) return;
+    const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    // Optional call, and not defensiveness for its own sake: this is decoration, and decoration
+    // that can throw takes the whole page down with it. An environment without `scrollIntoView`
+    // still gets the card, the highlight and every word on it -- it just does not travel.
+    card.scrollIntoView?.({ block: "center", behavior: still ? "auto" : "smooth" });
+  }, [reading, targeted]);
 
   const grouped = (standing: CapabilityStanding): Capability[] =>
     (boundaries?.capabilities ?? []).filter((capability) => capability.standing === standing);
@@ -149,7 +177,11 @@ export default function BoundariesPage() {
                     </p>
                   </div>
                   {capabilities.map((capability) => (
-                    <CapabilityCard key={capability.toolName} capability={capability} />
+                    <CapabilityCard
+                      key={capability.toolName}
+                      capability={capability}
+                      locate={capability.toolName === targeted}
+                    />
                   ))}
                 </section>
               );

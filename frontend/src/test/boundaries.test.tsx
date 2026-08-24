@@ -120,9 +120,9 @@ function serve(body: BoundariesView | null, status = 200): void {
   );
 }
 
-function show(): void {
+function show(at = "/trust"): void {
   render(
-    <MemoryRouter initialEntries={["/trust"]}>
+    <MemoryRouter initialEntries={[at]}>
       <App />
     </MemoryRouter>
   );
@@ -360,6 +360,87 @@ describe("the technical detail is behind a real disclosure", () => {
     // `reason` genuinely has no trust requirement. An empty cell would read as missing data; the
     // backend derived "none", so the page says "none".
     expect(within(booking).getByText("no trust required")).toBeInTheDocument();
+  });
+});
+
+describe("a deep link from a settled case", () => {
+  /* `OutcomePanel`'s ALLOWED BY row links to `/trust#<tool>`. The card it names has that exact id,
+   * so the obvious implementation is the browser's own `:target` — and it does not work here.
+   *
+   * Measured on the deployed demo: following the link left `:target` null while the card sat in the
+   * DOM with the matching id, so nothing scrolled and no highlight played. The fragment is resolved
+   * at navigation time and the capabilities do not exist then; they arrive with the boundary
+   * response a moment later. These tests pin the mechanism that does work. */
+
+  it("marks the capability the fragment names, once it exists", async () => {
+    serve(STATEMENT);
+    show("/trust#book_appointment");
+
+    const booking = await waitFor(() => card("book_appointment"));
+    await waitFor(() => expect(booking).toHaveAttribute("data-locate", "true"));
+  });
+
+  it("marks only that one", async () => {
+    serve(STATEMENT);
+    show("/trust#send_email");
+
+    await waitFor(() => card("send_email"));
+    expect(card("send_email")).toHaveAttribute("data-locate", "true");
+    expect(card("book_appointment")).not.toHaveAttribute("data-locate");
+    expect(card("grant_portal_access")).not.toHaveAttribute("data-locate");
+  });
+
+  it("brings it into view rather than leaving it wherever it fell", async () => {
+    // jsdom has no layout and therefore no `scrollIntoView` at all. Supplying one and recording the
+    // call is the assertion: the defect was that it never happened. Restored afterwards, because a
+    // prototype left patched is a fixture leaking into every test that runs after it.
+    const scrolled: string[] = [];
+    const absent = !("scrollIntoView" in Element.prototype);
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this.id);
+    } as typeof Element.prototype.scrollIntoView;
+
+    try {
+      serve(STATEMENT);
+      show("/trust#grant_portal_access");
+
+      await waitFor(() => card("grant_portal_access"));
+      await waitFor(() => expect(scrolled).toContain("grant_portal_access"));
+    } finally {
+      if (absent) delete (Element.prototype as Partial<Element>).scrollIntoView;
+      else Element.prototype.scrollIntoView = original;
+    }
+  });
+
+  it("still renders the whole page where nothing can scroll", async () => {
+    // The environment the two tests above run in: jsdom supplies no `scrollIntoView`. A decorative
+    // scroll that threw would take the page down with it, so the card, the mark and the words all
+    // have to survive its absence.
+    expect("scrollIntoView" in Element.prototype).toBe(false);
+
+    serve(STATEMENT);
+    show("/trust#book_appointment");
+
+    const booking = await waitFor(() => card("book_appointment"));
+    expect(booking).toHaveAttribute("data-locate", "true");
+    expect(within(booking).getByText("PROV-NORTHGATE-CARDIOLOGY")).toBeInTheDocument();
+  });
+
+  it("marks nothing when the page is opened without a fragment", async () => {
+    serve(STATEMENT);
+    show("/trust");
+
+    await waitFor(() => card("book_appointment"));
+    expect(document.querySelectorAll("[data-locate]")).toHaveLength(0);
+  });
+
+  it("marks nothing when the fragment names no capability", async () => {
+    serve(STATEMENT);
+    show("/trust#something_that_is_not_a_tool");
+
+    await waitFor(() => card("book_appointment"));
+    expect(document.querySelectorAll("[data-locate]")).toHaveLength(0);
   });
 });
 

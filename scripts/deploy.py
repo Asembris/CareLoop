@@ -589,51 +589,68 @@ def deploy(
     print(f"   sha256 {artifact.sha256}")
     print(f"   {artifact.size / 1024:.0f} KB in {len(artifact.members)} member(s)")
 
-    session = boto3.session.Session(region_name=region)
-    s3, ssm, sts = session.client("s3"), session.client("ssm"), session.client("sts")
-
-    bucket = artifact_bucket or ARTIFACT_BUCKET_TEMPLATE.format(
-        account=sts.get_caller_identity()["Account"], region=region
-    )
-    key = artifact_key(artifact)
-    report.bucket, report.key = bucket, key
-
-    print(f"== checking s3://{bucket}")
-    assert_bucket_is_private(s3, bucket)
-
-    print(f"== checking {instance_id} is managed by SSM")
-    assert_instance_is_managed(ssm, instance_id)
-
-    print(f"== uploading s3://{bucket}/{key}")
-    s3.put_object(
-        Bucket=bucket,
-        Key=key,
-        Body=artifact.path.read_bytes(),
-        ServerSideEncryption="AES256",
-        ContentType="application/gzip",
-    )
-
-    plan = steps(
-        bucket=bucket,
-        key=key,
-        sha256=artifact.sha256,
-        region=region,
-        upload_bucket=upload_bucket,
-        force_state_reset=force_state_reset,
-    )
-
+    # **The local tarball is removed however this ends**, which the inner ``finally`` below did not
+    # cover. Everything between packing and the release can refuse -- an artefact bucket that does
+    # not exist, one whose exposure cannot be established, an unmanaged instance, a denied
+    # ``PutObject`` -- and every one of those used to leave a HEAD-named archive sitting in
+    # ``.deploy/``. Measured on the first real SSM deploy, 2026-08-24: the bucket did not exist,
+    # the deploy refused before reaching AWS state exactly as designed, and 2.9 MB stayed behind.
+    #
+    # ``dry_run`` has always unlinked its own artefact, so this was an asymmetry rather than a
+    # policy: a refused deploy left more on disk than a rehearsal did. The scratch file is
+    # gitignored and each run overwrites it, so nothing was ever *wrong* -- what it costs is a stale
+    # archive named after a commit, which is exactly the kind of object somebody later mistakes for
+    # a current one.
+    #
+    # The S3 object stays in the inner ``finally`` and must: it exists only after ``put_object``,
+    # and asking for its deletion before it was written would report a failure that never happened.
     try:
-        release_over_ssm(ssm, instance_id, plan, report, tag=artifact.commit[:8])
-    finally:
-        remove_staged_artifact(s3, bucket, key, report)
-        artifact.path.unlink(missing_ok=True)
+        session = boto3.session.Session(region_name=region)
+        s3, ssm, sts = session.client("s3"), session.client("ssm"), session.client("sts")
 
-    if skip_verify:
-        report.verified = "skipped"
-        report.notes.append("the deploy is unverified through the distribution")
-    else:
-        print("== verifying through the distribution")
-        report.verified = verify_through_the_cdn(demo_url, report)
+        bucket = artifact_bucket or ARTIFACT_BUCKET_TEMPLATE.format(
+            account=sts.get_caller_identity()["Account"], region=region
+        )
+        key = artifact_key(artifact)
+        report.bucket, report.key = bucket, key
+
+        print(f"== checking s3://{bucket}")
+        assert_bucket_is_private(s3, bucket)
+
+        print(f"== checking {instance_id} is managed by SSM")
+        assert_instance_is_managed(ssm, instance_id)
+
+        print(f"== uploading s3://{bucket}/{key}")
+        s3.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=artifact.path.read_bytes(),
+            ServerSideEncryption="AES256",
+            ContentType="application/gzip",
+        )
+
+        plan = steps(
+            bucket=bucket,
+            key=key,
+            sha256=artifact.sha256,
+            region=region,
+            upload_bucket=upload_bucket,
+            force_state_reset=force_state_reset,
+        )
+
+        try:
+            release_over_ssm(ssm, instance_id, plan, report, tag=artifact.commit[:8])
+        finally:
+            remove_staged_artifact(s3, bucket, key, report)
+
+        if skip_verify:
+            report.verified = "skipped"
+            report.notes.append("the deploy is unverified through the distribution")
+        else:
+            print("== verifying through the distribution")
+            report.verified = verify_through_the_cdn(demo_url, report)
+    finally:
+        artifact.path.unlink(missing_ok=True)
 
     return report
 

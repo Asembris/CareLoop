@@ -33,6 +33,7 @@ from careloop.agents.schemas import TriageResult
 from careloop.api.runs import RunRegistry, RunState
 from careloop.events.inbound import REFERRAL_EVENT
 from careloop.graph.runner import open_case, run_case
+from careloop.graph.trusted import DEMO_CAREGIVER
 from careloop.llm.mock import MockScriptExhausted, MockScriptTypeMismatch
 from careloop.state import CaseState, InMemoryCaseStore
 from careloop.tools.registry import REGISTRY
@@ -96,7 +97,9 @@ class TestAnExhaustedScriptNamesItself:
         — rather than a bare ``FAILED`` that could mean either thing.
         """
         store = InMemoryCaseStore()
-        open_case(store, REFERRAL_EVENT, case_id="case-dry", now=FIXED_NOW)
+        open_case(
+            store, REFERRAL_EVENT, caregiver=DEMO_CAREGIVER, case_id="case-dry", now=FIXED_NOW
+        )
 
         # Deliberately under-scripted: no answers at all, so the first triage call runs it dry.
         context = harness.context_for(

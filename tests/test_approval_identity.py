@@ -49,6 +49,7 @@ from careloop.graph.runner import (
     open_case,
     reject,
 )
+from careloop.graph.trusted import DEMO_CAREGIVER
 from careloop.state import Case, CaseState, InMemoryCaseStore, TimelineKind
 from careloop.state.case import Approval, ApprovalStatus
 from careloop.tools.idempotency import args_digest
@@ -67,7 +68,7 @@ def reproposal_store() -> InMemoryCaseStore:
     itself would be agreeing with itself about their shape.
     """
     store = InMemoryCaseStore()
-    open_case(store, REFERRAL_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+    open_case(store, REFERRAL_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW)
     drive(store, REFERRAL_EVENT, planner_proposing(SEND_EMAIL))
 
     first = store.get(CASE_ID).pending_approval()

@@ -15,6 +15,7 @@ from helpers import BOOKING_REASON, FIXED_NOW
 
 from careloop.events.inbound import InboundEvent
 from careloop.graph.runner import open_case
+from careloop.graph.trusted import DEMO_CAREGIVER
 from careloop.provenance import Fact, Provenance, TrustLevel
 from careloop.state import Case, CaseState, InMemoryCaseStore, TimelineKind
 from careloop.state.machine import append_event, transition
@@ -96,7 +97,7 @@ def ready_to_execute(
     because that entry is what every recovery path reads the authorised arguments back out of.
     """
     payload_args = dict(args if args is not None else BOOKING_ARGS)
-    case = open_case(store, SAGA_EVENT, case_id=case_id, now=FIXED_NOW)
+    case = open_case(store, SAGA_EVENT, caregiver=DEMO_CAREGIVER, case_id=case_id, now=FIXED_NOW)
     base = case.version
     if facts:
         case = case.model_copy(update={"facts": (*case.facts, *facts)})

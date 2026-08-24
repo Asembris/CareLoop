@@ -16,6 +16,7 @@ from helpers import FIXED_NOW
 
 from careloop.api.app import create_app
 from careloop.api.projections import COMPLETED, NEEDS_YOU, WORKING
+from careloop.graph.trusted import DEMO_CAREGIVER
 from careloop.state import CaseState, InMemoryCaseStore, SqliteCaseStore
 from careloop.state.machine import transition
 
@@ -226,7 +227,7 @@ def _add(store: InMemoryCaseStore, case_id: str, state: CaseState, *, now=FIXED_
     from careloop.events.inbound import REFERRAL_EVENT
     from careloop.graph.runner import open_case
 
-    case = open_case(store, REFERRAL_EVENT, case_id=case_id, now=now)
+    case = open_case(store, REFERRAL_EVENT, caregiver=DEMO_CAREGIVER, case_id=case_id, now=now)
     base = case.version
     for step in _route_to(state):
         case = transition(case, step, reason="test", actor="test", now=now)

@@ -44,6 +44,7 @@ from careloop.graph.runner import (
     reject,
     run_case,
 )
+from careloop.graph.trusted import DEMO_CAREGIVER
 from careloop.llm.mock import MockScriptExhausted, mock_model
 from careloop.policy.verdicts import ReasonCode
 from careloop.state import ApprovalStatus, Case, CaseState, InMemoryCaseStore, TimelineKind
@@ -80,7 +81,7 @@ def drive(*proposals: PlannerIntent, **bounds):
     run it dry.
     """
     store = InMemoryCaseStore()
-    open_case(store, POISONED_ONLY_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+    open_case(store, POISONED_ONLY_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW)
     context = context_for(
         store,
         POISONED_ONLY_EVENT,

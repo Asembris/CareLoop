@@ -32,6 +32,7 @@ from careloop.api.projections import case_detail
 from careloop.events.inbound import REFERRAL_EVENT
 from careloop.graph.context import ConflictingExecutors, RunContext, prior_denials
 from careloop.graph.runner import context_for, open_case, run_case
+from careloop.graph.trusted import DEMO_CAREGIVER
 from careloop.graph.verify import ReadBackFailed, verify_action
 from careloop.llm.mock import mock_model
 from careloop.state import Case, CaseState, InMemoryCaseStore, TimelineKind
@@ -107,7 +108,7 @@ def book_a_referral(
 ):
     """Open a referral case and run it to rest, booking through ``clinic`` if one is given."""
     store = InMemoryCaseStore()
-    open_case(store, REFERRAL_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+    open_case(store, REFERRAL_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW)
     context = context_for(
         store,
         REFERRAL_EVENT,

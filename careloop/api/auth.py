@@ -29,19 +29,22 @@ here; ``tests/test_identity_boundary.py`` is the sweep that keeps them from reap
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Annotated, Final
 
 from fastapi import Depends, Header, HTTPException, Request, status
 
-from careloop.identity.directory import CaregiverDirectory
+from careloop.identity.directory import Caregiver, CaregiverDirectory, UnknownCaregiver
 from careloop.identity.principal import (
     AuthenticationFailed,
     AuthMethod,
     Principal,
     PrincipalVerifier,
 )
+
+logger = logging.getLogger(__name__)
 
 #: The header a production caller presents a bearer token in.
 #:
@@ -233,16 +236,42 @@ def principal(
 Caller = Annotated[Principal, Depends(principal)]
 
 
+def acting_caregiver(bound: Boundary, who: Caller) -> Caregiver:
+    """The caregiver record this request acts as. **Resolved server-side, never sent.**
+
+    The one place an authenticated subject becomes a domain identity with destinations and grants
+    attached. A caller supplies a token; CareLoop supplies everything the token turns into.
+
+    A principal naming a caregiver the directory does not hold is an authentication failure and not
+    a 404: a token that verifies but resolves to nobody has established no principal, and telling
+    the caller which of the two happened would let them enumerate the directory.
+    """
+    try:
+        return bound.directory.caregiver(who.caregiver_id)
+    except UnknownCaregiver:
+        logger.warning("a verified principal named a caregiver this directory does not hold")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=AUTHENTICATION_FAILED_DETAIL,
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from None
+
+
+Acting = Annotated[Caregiver, Depends(acting_caregiver)]
+
+
 __all__ = [
     "AUTHENTICATION_FAILED_DETAIL",
     "AUTHORIZATION_HEADER",
     "BEARER_SCHEME",
     "REQUIRED_METHOD",
+    "Acting",
     "AuthBoundary",
     "AuthMode",
     "AuthModeMismatch",
     "Boundary",
     "Caller",
+    "acting_caregiver",
     "boundary",
     "demo_auth",
     "principal",

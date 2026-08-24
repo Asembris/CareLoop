@@ -17,18 +17,16 @@ from typing import Any, Final
 
 from fastapi import FastAPI, HTTPException, Request, Response, status
 
-from careloop.api.auth import AuthBoundary, demo_auth
+from careloop.api.access import Access, Actor, CaseAccess
+from careloop.api.auth import AuthBoundary, Boundary, Caller, demo_auth
 from careloop.api.demo import DEMO_SCENARIOS, DemoScenario
 from careloop.api.deps import (
     CAREGIVER_HEADER,
     ApiDeps,
-    Caregiver,
     ContextFactory,
-    Deps,
     GraphRunner,
     clinic_context_factory,
     default_context_factory,
-    sections_from,
 )
 from careloop.api.faults import BookingResponseLoss
 from careloop.api.models import CaseDetail, CaseSections, DeliverEventRequest, RunView
@@ -51,6 +49,7 @@ from careloop.graph.runner import (
     reopen_case,
     request_recheck,
 )
+from careloop.identity.directory import Caregiver
 from careloop.state.case import Case
 from careloop.state.machine import IllegalTransition
 from careloop.state.store import CaseNotFound, CaseStore
@@ -192,6 +191,65 @@ def declare_required_headers(spec: dict[str, Any], required: frozenset[str]) -> 
                     parameter["schema"] = (kept or {"type": "string"}) | {
                         key: value for key, value in schema.items() if key == "title"
                     }
+    return spec
+
+
+#: The OpenAPI name for the bearer scheme, and the only place it is spelled.
+BEARER_SCHEME_NAME: Final[str] = "careloopBearer"
+
+
+def declare_bearer_security(spec: dict[str, Any], *, production: bool) -> dict[str, Any]:
+    """Describe the ``Authorization`` header as what it is: a security scheme, not a parameter.
+
+    FastAPI emits it as an ordinary optional header parameter, because that is how the dependency
+    reads it -- and the dependency reads it that way on purpose, so that a missing credential is
+    CareLoop's deliberate ``401`` rather than FastAPI's ``422``. The same split
+    :func:`declare_required_headers` reconciles for ``X-Caregiver``, one layer over.
+
+    Left as a parameter it would also be *generated*: a schema-driven client would invent
+    ``Authorization`` values for every operation, which is both wrong about the API and, measured,
+    enough to make property-based generation filter almost everything out.
+
+    **Demo mode declares no security at all**, which is truthful rather than tidy: nothing is
+    verified there and a document claiming a bearer requirement would describe an app that does not
+    exist. That is the same reason the demo's audit identity is a ``400`` and not a ``401``.
+
+    Args:
+        spec: a generated OpenAPI document. Mutated and returned.
+        production: whether this app actually verifies a credential.
+    """
+    for operations in spec.get("paths", {}).values():
+        for operation in operations.values():
+            if not isinstance(operation, dict):
+                continue
+            kept = [
+                parameter
+                for parameter in operation.get("parameters", [])
+                if not (
+                    parameter.get("in") == "header"
+                    and parameter.get("name", "").lower() == "authorization"
+                )
+            ]
+            if kept:
+                operation["parameters"] = kept
+            else:
+                operation.pop("parameters", None)
+
+    if not production:
+        return spec
+
+    components = spec.setdefault("components", {})
+    components.setdefault("securitySchemes", {})[BEARER_SCHEME_NAME] = {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": (
+            "An OIDC access token. Verified in CareLoop against the configured issuer's JWKS: "
+            "signature, issuer, audience, token use and lifetime. A failure is 401 and never a "
+            "demo identity."
+        ),
+    }
+    spec["security"] = [{BEARER_SCHEME_NAME: []}]
     return spec
 
 
@@ -423,7 +481,7 @@ def create_app(
             },
         },
     )
-    def open_session() -> dict[str, str]:
+    def open_session(bound_auth: Boundary, who: Caller) -> dict[str, str]:
         """Be given a world of your own. The first thing a browser does, and the only thing it does.
 
         Not a response model, for the reason ``/api/health`` is not: it projects no stored case, so
@@ -434,8 +492,15 @@ def create_app(
         all, which is exactly right for local development and for the offline suite — and it is the
         same treatment the demo control surface gets, for the same reason.
 
-        The id is an isolation namespace and not authentication: nothing is verified and anyone
-        holding one may use it. See :mod:`careloop.api.sessions`.
+        **The id is an isolation namespace and never authentication**, which is as true now as it
+        was before anything was verified — what changed is that possession of one is no longer
+        sufficient. In production the workspace records the verified caregiver who minted it and
+        every later request must present the same principal; the id says *which* world, and the
+        token says *whose*. In demo mode there is nothing to check and the id is the whole story,
+        which is what keeps the judge flow immediate. See :mod:`careloop.api.sessions`.
+
+        Minting requires an authenticated principal in production, so the anonymous capacity
+        exhaustion an unauthenticated mint allows is not reachable there.
         """
         if not isinstance(bound, SessionWorlds):
             raise HTTPException(
@@ -443,7 +508,13 @@ def create_app(
                 detail="this CareLoop serves one world to everybody; no session is needed",
             )
         try:
-            return {"session": bound.mint()}
+            # **The owner comes from the principal and from nowhere else.** In production that is a
+            # verified caregiver, so a workspace belongs to whoever was authenticated when it was
+            # minted and to nobody a later request could name. In demo mode it is left unowned,
+            # because a synthetic world is isolated rather than authorised and giving it an owner
+            # would put a check in front of the judge flow that decides nothing.
+            owner = who.caregiver_id if bound_auth.is_production else None
+            return {"session": bound.mint(owner)}
         except SessionsAtCapacity as full:
             # 503 rather than 429: nothing about this caller is being rate limited, and the answer
             # is "come back in a minute" rather than "you asked too often".
@@ -452,9 +523,9 @@ def create_app(
             ) from None
 
     @app.get(f"{API_PREFIX}/cases", response_model=CaseSections, responses=SESSION_ERRORS)
-    def list_cases(deps: Deps) -> CaseSections:
-        """The dashboard: every case, in the section its state puts it in."""
-        return case_sections(sections_from(deps.store, dict(SECTIONS)))
+    def list_cases(access: Access) -> CaseSections:
+        """The dashboard: every case this caller owns, in the section its state puts it in."""
+        return case_sections(access.sections(dict(SECTIONS)))
 
     @app.get(
         f"{API_PREFIX}/cases/{{case_id}}",
@@ -462,9 +533,13 @@ def create_app(
         responses=SESSION_ERRORS
         | {status.HTTP_404_NOT_FOUND: {"description": "The store holds no case under that id."}},
     )
-    def get_case(case_id: str, deps: Deps) -> CaseDetail:
-        """One case in full: state, evidence with provenance, decisions, effects, audit trail."""
-        return case_detail(load_case(deps.store, case_id))
+    def get_case(case_id: str, access: Access) -> CaseDetail:
+        """One case in full: state, evidence with provenance, decisions, effects, audit trail.
+
+        A case this caller does not own answers exactly as a case that does not exist does.
+        See :mod:`careloop.api.access`.
+        """
+        return case_detail(access.case(case_id))
 
     @app.post(
         f"{API_PREFIX}/events",
@@ -483,7 +558,9 @@ def create_app(
             },
         },
     )
-    async def deliver_event(body: DeliverEventRequest, deps: Deps, wait: float = 0.0) -> RunView:
+    async def deliver_event(
+        body: DeliverEventRequest, access: Access, wait: float = 0.0
+    ) -> RunView:
         """ "An email just arrived." Deliver an inbound event and start a run.
 
         Opens the case if it does not exist and reopens it if it does. Which of those applies is
@@ -494,7 +571,10 @@ def create_app(
         Returns 202 with a run id. ``?wait=<seconds>`` blocks until the run settles, which is what
         a test uses instead of polling; the run is not cancelled if the wait expires.
         """
-        return await deliver(deps, body.case_id, body.event_id, wait=wait)
+        access.may_open(body.case_id)
+        return await deliver(
+            access.deps, body.case_id, body.event_id, caregiver=access.caregiver, wait=wait
+        )
 
     @app.post(
         f"{API_PREFIX}/cases/{{case_id}}/decisions/{{approval_id}}/approve",
@@ -503,7 +583,7 @@ def create_app(
         responses=DECISION_ERRORS,
     )
     async def approve_decision(
-        case_id: str, approval_id: str, deps: Deps, who: Caregiver, wait: float = 0.0
+        case_id: str, approval_id: str, access: Access, who: Actor, wait: float = 0.0
     ) -> RunView:
         """One click in "Needs You". ``AWAITING_HUMAN`` → ``READY_TO_EXECUTE``, then run.
 
@@ -513,7 +593,7 @@ def create_app(
         boundary both check again, and an approval covering different arguments would not release
         this one.
         """
-        return await decide(approve, case_id, approval_id, deps, who, wait)
+        return await decide(approve, case_id, approval_id, access, who, wait)
 
     @app.post(
         f"{API_PREFIX}/cases/{{case_id}}/decisions/{{approval_id}}/reject",
@@ -522,7 +602,7 @@ def create_app(
         responses=DECISION_ERRORS,
     )
     async def reject_decision(
-        case_id: str, approval_id: str, deps: Deps, who: Caregiver, wait: float = 0.0
+        case_id: str, approval_id: str, access: Access, who: Actor, wait: float = 0.0
     ) -> RunView:
         """The other button. ``AWAITING_HUMAN`` → ``PLANNING``, then run.
 
@@ -530,7 +610,7 @@ def create_app(
         every other. Running afterwards is what makes that true rather than nominal — without it
         the case would sit in ``PLANNING`` with nothing driving it.
         """
-        return await decide(reject, case_id, approval_id, deps, who, wait)
+        return await decide(reject, case_id, approval_id, access, who, wait)
 
     @app.post(
         f"{API_PREFIX}/cases/{{case_id}}/recheck",
@@ -556,7 +636,7 @@ def create_app(
             },
         },
     )
-    async def recheck_case(case_id: str, deps: Deps, who: Caregiver, wait: float = 0.0) -> RunView:
+    async def recheck_case(case_id: str, access: Access, who: Actor, wait: float = 0.0) -> RunView:
         """ "I checked the clinic." Ask CareLoop to observe an existing effect again.
 
         ``AWAITING_HUMAN`` → ``VERIFYING``, then run. The case parked because an effect could not be
@@ -575,7 +655,8 @@ def create_app(
         :func:`decide` does: recording the request and then failing to schedule would leave a case
         released into ``VERIFYING`` with a caller told it was refused.
         """
-        case = load_case(deps.store, case_id)
+        deps = access.deps
+        case = access.case(case_id)
         if (running := deps.runs.in_flight_for(case_id)) is not None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -609,7 +690,7 @@ def create_app(
             }
         },
     )
-    async def get_run(run_id: str, deps: Deps, wait: float = 0.0) -> RunView:
+    async def get_run(run_id: str, access: Access, wait: float = 0.0) -> RunView:
         """One run: whether it settled, and which graph nodes it went through.
 
         The under-the-hood panel's node trace. Held in memory for this process only — see
@@ -618,9 +699,19 @@ def create_app(
         ``?wait=<seconds>`` is the same opt-in the verbs take, so a caller that gave up waiting the
         first time can pick the run back up rather than poll for it.
         """
+        deps = access.deps
         try:
-            deps.runs.get(run_id)
+            record = deps.runs.get(run_id)
         except UnknownRun:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"no run {run_id!r}"
+            ) from None
+        # A run names its case, so reading one is reading something about that case. The
+        # ownership question goes through the same predicate every other read uses, and a
+        # run belonging to a case this caller does not own answers as an unknown id does.
+        try:
+            access.case(record.case_id)
+        except HTTPException:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail=f"no run {run_id!r}"
             ) from None
@@ -646,17 +737,22 @@ def create_app(
         return response
 
     # Which headers this app really requires, which is not the same question for both of them.
-    # X-Caregiver is required of every app. X-CareLoop-Session is required only when there is a
-    # world per visitor: on a single-world app it is genuinely optional, and declaring it required
-    # there would have the schema claim something false — a generated request omitting it would be
-    # answered 200 and a missing-required-header check would fail the API for being right.
+    # X-Caregiver is required of a **demo** app and refused by a production one, so it is declared
+    # required only where it really is. X-CareLoop-Session is required only when there is a world
+    # per visitor: on a single-world app it is genuinely optional, and declaring it required there
+    # would have the schema claim something false.
+    demo_identity = not app.state.careloop_auth.is_production
     required_headers = frozenset(
-        {CAREGIVER_HEADER} | ({SESSION_HEADER} if isinstance(bound, SessionWorlds) else set())
+        ({CAREGIVER_HEADER} if demo_identity else set())
+        | ({SESSION_HEADER} if isinstance(bound, SessionWorlds) else set())
     )
 
     def openapi() -> dict[str, Any]:
         if app.openapi_schema is None:
-            app.openapi_schema = declare_required_headers(FastAPI.openapi(app), required_headers)
+            described = declare_required_headers(FastAPI.openapi(app), required_headers)
+            app.openapi_schema = declare_bearer_security(
+                described, production=app.state.careloop_auth.is_production
+            )
         return app.openapi_schema
 
     app.openapi = openapi
@@ -706,7 +802,7 @@ def mount_demo(app: FastAPI) -> None:
             }
         },
     )
-    async def reset(deps: Deps) -> dict[str, object]:
+    async def reset(access: Access) -> dict[str, object]:
         """Clear this world's cases, and put its clinic back to the seeded world.
 
         Not a response model, for the reason ``/api/health`` is not: it projects no stored case, so
@@ -716,7 +812,7 @@ def mount_demo(app: FastAPI) -> None:
         resolved to, so on an isolated app this cannot empty anybody else's cases — not because it
         checks, but because there is no other store in reach.
         """
-        return await reset_world(deps)
+        return await reset_world(access.deps)
 
     @app.post(
         f"{API_PREFIX}/demo/scenarios/{{key}}",
@@ -738,7 +834,7 @@ def mount_demo(app: FastAPI) -> None:
             },
         },
     )
-    async def run_scenario(key: str, deps: Deps, wait: float = 0.0) -> RunView:
+    async def run_scenario(key: str, access: Access, wait: float = 0.0) -> RunView:
         """Put this world back and trigger one scenario, through the ordinary delivery path.
 
         **One request, and that is a repair rather than a convenience.** The frontend used to reset
@@ -758,11 +854,18 @@ def mount_demo(app: FastAPI) -> None:
                 detail=f"no demo scenario {key!r}; known: {', '.join(sorted(DEMO_SCENARIOS))}",
             )
 
+        deps = access.deps
         async with deps.scenarios:
             await reset_world(deps)
             if scenario.loses_the_booking_response:
                 arm_the_lost_booking_response(deps, scenario)
-            return await deliver(deps, scenario.case_id, scenario.event_id, wait=wait)
+            return await deliver(
+                deps,
+                scenario.case_id,
+                scenario.event_id,
+                caregiver=access.caregiver,
+                wait=wait,
+            )
 
 
 def arm_the_lost_booking_response(deps: ApiDeps, scenario: DemoScenario) -> None:
@@ -935,7 +1038,7 @@ async def decide(
     record: Callable[..., Case],
     case_id: str,
     approval_id: str,
-    deps: ApiDeps,
+    access: CaseAccess,
     who: str,
     wait: float,
 ) -> RunView:
@@ -945,7 +1048,8 @@ async def decide(
     then failing to schedule would leave a decision made, a case released, and a caller told the
     request was refused — three things that disagree.
     """
-    case = load_case(deps.store, case_id)
+    deps = access.deps
+    case = access.case(case_id)
     if (running := deps.runs.in_flight_for(case_id)) is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -974,7 +1078,9 @@ async def decide(
     return await schedule(deps, case_id, inbound, wait=wait)
 
 
-async def deliver(deps: ApiDeps, case_id: str, event_id: str, *, wait: float) -> RunView:
+async def deliver(
+    deps: ApiDeps, case_id: str, event_id: str, *, caregiver: Caregiver, wait: float
+) -> RunView:
     """Deliver an inbound event to a case and start a run. The one delivery path.
 
     Extracted from the ``POST /api/events`` handler so the demo control surface can press exactly
@@ -987,7 +1093,7 @@ async def deliver(deps: ApiDeps, case_id: str, event_id: str, *, wait: float) ->
     try:
         deps.store.get(case_id)
     except CaseNotFound:
-        open_case(deps.store, inbound, case_id=case_id)
+        open_case(deps.store, inbound, case_id=case_id, caregiver=caregiver)
     else:
         try:
             reopen_case(deps.store, inbound, case_id=case_id)

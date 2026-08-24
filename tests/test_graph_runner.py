@@ -41,7 +41,7 @@ from careloop.graph.runner import (
     reject,
     run_case,
 )
-from careloop.graph.trusted import TRUSTED_CONFIG
+from careloop.graph.trusted import DEMO_CAREGIVER, TRUSTED_CONFIG
 from careloop.llm.mock import mock_model
 from careloop.policy.verdicts import ReasonCode
 from careloop.provenance import TrustLevel
@@ -80,7 +80,7 @@ def triage_agent() -> TriageAgent:
 
 def parked_case(store: InMemoryCaseStore, case_id: str = "case-0001"):
     """Run a case up to the point a caregiver decision is outstanding."""
-    open_case(store, REFERRAL_EVENT, case_id=case_id, now=FIXED_NOW)
+    open_case(store, REFERRAL_EVENT, caregiver=DEMO_CAREGIVER, case_id=case_id, now=FIXED_NOW)
     context = context_for(
         store,
         REFERRAL_EVENT,
@@ -98,7 +98,9 @@ class TestOpeningACase:
     def test_a_new_case_starts_seeded_with_trusted_configuration(self) -> None:
         store = InMemoryCaseStore()
 
-        case = open_case(store, REFERRAL_EVENT, case_id="case-0001", now=FIXED_NOW)
+        case = open_case(
+            store, REFERRAL_EVENT, caregiver=DEMO_CAREGIVER, case_id="case-0001", now=FIXED_NOW
+        )
 
         assert case.state is CaseState.NEW
         assert {fact.key for fact in case.facts} == {key for key, _ in TRUSTED_CONFIG}
@@ -108,7 +110,9 @@ class TestOpeningACase:
         """The code path that mints TRUSTED and the one that reads attacker text are separate."""
         store = InMemoryCaseStore()
 
-        case = open_case(store, POISONED_EVENT, case_id="case-0001", now=FIXED_NOW)
+        case = open_case(
+            store, POISONED_EVENT, caregiver=DEMO_CAREGIVER, case_id="case-0001", now=FIXED_NOW
+        )
 
         assert all(fact.provenance.source_doc == "trusted-config" for fact in case.facts)
         assert not any(fact.key.startswith("excerpt:") for fact in case.facts)
@@ -116,7 +120,9 @@ class TestOpeningACase:
     def test_the_case_records_where_it_came_from(self) -> None:
         store = InMemoryCaseStore()
 
-        case = open_case(store, POISONED_EVENT, case_id="case-0001", now=FIXED_NOW)
+        case = open_case(
+            store, POISONED_EVENT, caregiver=DEMO_CAREGIVER, case_id="case-0001", now=FIXED_NOW
+        )
 
         opened = case.timeline[0]
         assert opened.kind is TimelineKind.CASE_CREATED
@@ -126,7 +132,9 @@ class TestOpeningACase:
     def test_the_case_is_persisted(self) -> None:
         store = InMemoryCaseStore()
 
-        open_case(store, REFERRAL_EVENT, case_id="case-0001", now=FIXED_NOW)
+        open_case(
+            store, REFERRAL_EVENT, caregiver=DEMO_CAREGIVER, case_id="case-0001", now=FIXED_NOW
+        )
 
         assert store.get("case-0001").event_id == REFERRAL_EVENT.event_id
 
@@ -312,7 +320,9 @@ class TestTheRunnerReactsToTheSdkRatherThanCounting:
 
     def test_a_bounded_run_reports_that_it_hit_the_bound(self) -> None:
         store = InMemoryCaseStore()
-        open_case(store, POISONED_EVENT, case_id="case-0001", now=FIXED_NOW)
+        open_case(
+            store, POISONED_EVENT, caregiver=DEMO_CAREGIVER, case_id="case-0001", now=FIXED_NOW
+        )
         attacker = "records-intake@claims-continuity-partners.example"
         context = context_for(
             store,

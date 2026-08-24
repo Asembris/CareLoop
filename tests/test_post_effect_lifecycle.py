@@ -81,6 +81,7 @@ from careloop.graph.runner import (
     reject,
     run_case,
 )
+from careloop.graph.trusted import DEMO_CAREGIVER
 from careloop.llm.mock import mock_model
 from careloop.policy.verdicts import ReasonCode
 from careloop.state import Case, CaseState, InMemoryCaseStore, TimelineKind
@@ -155,7 +156,7 @@ def run_against(
 ) -> tuple[RunResult, object]:
     """Open a referral case and run it to rest against ``clinic``."""
     store = InMemoryCaseStore()
-    open_case(store, REFERRAL_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+    open_case(store, REFERRAL_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW)
     context = context_for(
         store,
         REFERRAL_EVENT,
@@ -696,7 +697,9 @@ class TestTheHandoffIdentityIsNotTheLatestRecord:
         from careloop.tools.results import AppointmentBooked, EmailSent
 
         store = InMemoryCaseStore()
-        case = open_case(store, REFERRAL_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+        case = open_case(
+            store, REFERRAL_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW
+        )
         base = case.version
 
         booking_key = idempotency_key(CASE_ID, "book_appointment", BOOKING)

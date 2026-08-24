@@ -193,9 +193,9 @@ class TestAScenarioRunsTheNormalPath:
         seen: list[tuple[str, str]] = []
         real = app_module.deliver
 
-        async def spy(deps, case_id, event_id, *, wait):
+        async def spy(deps, case_id, event_id, *, caregiver, wait):
             seen.append((case_id, event_id))
-            return await real(deps, case_id, event_id, wait=wait)
+            return await real(deps, case_id, event_id, caregiver=caregiver, wait=wait)
 
         monkeypatch.setattr(app_module, "deliver", spy)
 
@@ -337,9 +337,9 @@ class TestAScenarioResetsAndStartsInOneRequest:
             seen.append("reset")
             return real_reset(deps)
 
-        async def spy_deliver(deps, case_id, event_id, *, wait):
+        async def spy_deliver(deps, case_id, event_id, *, caregiver, wait):
             seen.append("deliver")
-            return await real_deliver(deps, case_id, event_id, wait=wait)
+            return await real_deliver(deps, case_id, event_id, caregiver=caregiver, wait=wait)
 
         monkeypatch.setattr(app_module, "reset_world", spy_reset)
         monkeypatch.setattr(app_module, "deliver", spy_deliver)

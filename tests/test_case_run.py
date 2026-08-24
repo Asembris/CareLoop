@@ -39,6 +39,7 @@ from careloop.agents.schemas import (
 from careloop.agents.triage import TriageAgent
 from careloop.events.inbound import POISONED_EVENT, REFERRAL_EVENT
 from careloop.graph.runner import approve, context_for, open_case, run_case
+from careloop.graph.trusted import DEMO_CAREGIVER
 from careloop.llm.mock import mock_model
 from careloop.policy.verdicts import ReasonCode
 from careloop.provenance import Fact, Provenance, TrustLevel
@@ -141,7 +142,7 @@ class TestT1HappyPath:
     @staticmethod
     def _park() -> tuple[InMemoryCaseStore, object, object]:
         store = InMemoryCaseStore()
-        open_case(store, REFERRAL_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+        open_case(store, REFERRAL_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW)
         result, context = run(
             store, REFERRAL_EVENT, planner_proposing(intent("send_email", **EMAIL))
         )
@@ -252,7 +253,7 @@ class TestT1HappyPath:
     def test_the_autonomous_path_needs_no_human_at_all(self) -> None:
         """A booking against trusted config on a validated slot runs start to finish in one go."""
         store = InMemoryCaseStore()
-        open_case(store, REFERRAL_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+        open_case(store, REFERRAL_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW)
 
         result, context = run(
             store, REFERRAL_EVENT, planner_proposing(intent("book_appointment", **BOOKING))
@@ -274,7 +275,7 @@ class TestT2Injection:
     @staticmethod
     def _run_poisoned(*, register_hook: bool = True):
         store = InMemoryCaseStore()
-        open_case(store, POISONED_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+        open_case(store, POISONED_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW)
         # The planner takes the bait on every attempt and never proposes anything legitimate, so
         # "external invocation count 0" is a statement about the whole run.
         proposals = [intent(tool, **args) for tool, args in POISONED_PROPOSALS] * 6
@@ -428,7 +429,9 @@ class TestT2TheGuardIsReal:
         from careloop.state.machine import append_event, transition
 
         store = InMemoryCaseStore()
-        case = open_case(store, POISONED_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+        case = open_case(
+            store, POISONED_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW
+        )
         base = case.version
         case = append_event(
             case,
@@ -570,7 +573,7 @@ class TestT3Idempotency:
     @staticmethod
     def _completed() -> tuple[InMemoryCaseStore, object, object]:
         store = InMemoryCaseStore()
-        open_case(store, REFERRAL_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+        open_case(store, REFERRAL_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW)
         result, context = run(
             store, REFERRAL_EVENT, planner_proposing(intent("book_appointment", **BOOKING))
         )
@@ -722,7 +725,7 @@ class TestT4LoopBound:
     @staticmethod
     def _never_converges(bound: int = 10):
         store = InMemoryCaseStore()
-        open_case(store, POISONED_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+        open_case(store, POISONED_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW)
         forever = [
             intent("send_email", to=ATTACKER, subject="s", body=f"body {n}") for n in range(200)
         ]
@@ -822,7 +825,9 @@ class TestVerificationCanFail:
         from careloop.tools.results import AppointmentBooked
 
         store = InMemoryCaseStore()
-        case = open_case(store, REFERRAL_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+        case = open_case(
+            store, REFERRAL_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW
+        )
         base = case.version
 
         key = idempotency_key(CASE_ID, "book_appointment", BOOKING)
@@ -967,7 +972,9 @@ class TestTheExecuteNodeChecksTheApprovalItself:
 
         tool_name, args = proposal
         store = InMemoryCaseStore()
-        case = open_case(store, REFERRAL_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+        case = open_case(
+            store, REFERRAL_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW
+        )
         base = case.version
         if evidence:
             referral = default_document_store().get("doc-0001-referral")

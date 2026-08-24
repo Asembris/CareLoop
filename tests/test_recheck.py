@@ -64,6 +64,7 @@ from careloop.graph.context import (
     recheck_target,
 )
 from careloop.graph.runner import CaseNotRecheckable, context_for, request_recheck, run_case
+from careloop.graph.trusted import DEMO_CAREGIVER
 from careloop.graph.verify import INDEPENDENTLY_OBSERVABLE, ObservationOutcome
 from careloop.policy.verdicts import ReasonCode
 from careloop.state import Case, CaseState, InMemoryCaseStore, TimelineKind
@@ -513,7 +514,9 @@ class TestTheGuardIsScopedToReChecks:
         from careloop.graph.runner import open_case
 
         store = InMemoryCaseStore()
-        opened = open_case(store, REFERRAL_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+        opened = open_case(
+            store, REFERRAL_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW
+        )
 
         assert entered_verifying_from(opened) is None
 
@@ -833,7 +836,13 @@ class TestWhatIsNotReCheckable:
         from careloop.graph.runner import open_case
         from careloop.state.machine import append_event, transition
 
-        case = open_case(InMemoryCaseStore(), REFERRAL_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+        case = open_case(
+            InMemoryCaseStore(),
+            REFERRAL_EVENT,
+            caregiver=DEMO_CAREGIVER,
+            case_id=CASE_ID,
+            now=FIXED_NOW,
+        )
         email = {"to": CARER, "subject": "an update", "body": "the referral has arrived"}
         key = idempotency_key(CASE_ID, "send_email", email)
         case = case.model_copy(
@@ -987,7 +996,9 @@ class TestObserverCapability:
             store = InMemoryCaseStore()
             from careloop.graph.runner import open_case
 
-            open_case(store, REFERRAL_EVENT, case_id=CASE_ID, now=FIXED_NOW)
+            open_case(
+                store, REFERRAL_EVENT, caregiver=DEMO_CAREGIVER, case_id=CASE_ID, now=FIXED_NOW
+            )
             bound = context_for(
                 store, REFERRAL_EVENT, case_id=CASE_ID, clinic=ClinicClient(base_url)
             )

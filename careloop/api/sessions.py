@@ -149,6 +149,23 @@ def end_demo_world(session_id: str, world: ApiDeps) -> None:
     world.clinic.end_session()
 
 
+def named(session_id: str) -> str:
+    """A session id as it may appear in a log line: the first eight characters and no more.
+
+    **A session id was a credential and this file put whole ones in log lines.** Possession alone
+    granted a world, so a WARNING carrying one handed anybody who could read the logs everything
+    that world could do -- including a real clinic booking. Production has since made the id an
+    isolation *namespace* whose owner is checked against a verified principal, which removes the
+    authority; the demo has not, and there a whole id is still worth having.
+
+    Eight characters of a 128-bit token is enough to correlate two lines about the same visitor and
+    nowhere near enough to use one. Not a hash, because the point is that an operator reading two
+    lines can see they are about the same world, and a hash they would have to compute to compare
+    is a hash nobody compares.
+    """
+    return f"{session_id[:8]}..." if len(session_id) > 8 else session_id
+
+
 def serialised[M: Callable[..., object]](method: M) -> M:
     """Run ``method`` holding the registry's lock.
 
@@ -392,8 +409,8 @@ class SessionWorlds:
                 # and it will be idle again on some later sweep.
                 world.wakes.reopen()
                 LOGGER.debug(
-                    "not evicting %r: a run was registered while the wake gate was closing",
-                    session_id,
+                    "not evicting %s: a run was registered while the wake gate was closing",
+                    named(session_id),
                 )
                 continue
 
@@ -418,8 +435,8 @@ class SessionWorlds:
         while len(self._orphaned) > self._limit:
             dropped, _ = self._orphaned.popitem(last=False)
             LOGGER.warning(
-                "giving up on ending the Demo World session for %r: %d ends are already queued",
-                dropped,
+                "giving up on ending the Demo World session for %s: %d ends are already queued",
+                named(dropped),
                 self._limit,
             )
 
@@ -459,8 +476,8 @@ class SessionWorlds:
             self._end_world(session_id, world)
         except ClinicUnavailable as unreachable:
             LOGGER.warning(
-                "could not reach Demo World to end the session for %r (%s); it will be retried",
-                session_id,
+                "could not reach Demo World to end the session for %s (%s); it will be retried",
+                named(session_id),
                 unreachable,
             )
             if requeue:
@@ -468,8 +485,8 @@ class SessionWorlds:
             return False
         except Exception:
             LOGGER.exception(
-                "Demo World refused to end the session for %r; it is being left as it is",
-                session_id,
+                "Demo World refused to end the session for %s; it is being left as it is",
+                named(session_id),
             )
         return True
 
@@ -586,4 +603,5 @@ __all__ = [
     "WorldEnder",
     "demo_session_worlds",
     "end_demo_world",
+    "named",
 ]

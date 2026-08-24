@@ -117,6 +117,25 @@ def verify(base: str) -> None:
         headers.get("cache-control") == "no-store",
         headers.get("cache-control", "<none>"),
     )
+    status, raw, _ = call(base, "/api/auth")
+    published = decoded(raw) if status == 200 else {}
+    check("GET /api/auth is 200", status == 200, f"got {status}")
+    # **Asserted rather than assumed, and it is the shipped state that is being asserted.** This
+    # distribution serves the judge-facing demo, so it must report DEMO: a deployment that had
+    # quietly acquired production identity would refuse every judge, and one that claimed DEMO
+    # while verifying tokens would be lying about what a visitor is using. When a real user pool
+    # exists this gate flips to PRODUCTION and gains the 401-without-a-token check below it.
+    check(
+        "this deployment reports the demo identity mode",
+        published.get("mode") == "DEMO",
+        f"got {published.get('mode', '<none>')!r}",
+    )
+    check(
+        "a demo deployment publishes no login endpoint",
+        "authorization_endpoint" not in published,
+        "a demo mode that offered a login would be claiming to authenticate somebody",
+    )
+
     status, _, _ = call(base, "/api/cases")
     check("a request naming no world is 400", status == 400, f"got {status}")
     status, _, _ = call(base, "/api/cases", session="not-a-world-this-process-minted")

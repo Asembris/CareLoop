@@ -21,6 +21,8 @@ inconvenient stopping would be:
 the same reason: an effectful tool with no declared recovery class is a tool whose crash behaviour
 is decided by whichever branch happens to run, and a class declared for a tool the registry does not
 have is dead code pretending to be a policy. Neither should survive to a test run.
+:func:`check_replayable_types_are_observable` sits beside it and refuses the one combination of the
+two declarations nobody can have meant — replayable, with nothing able to observe the replay.
 
 **It lives here rather than in a node**, because "may this action be re-attempted" is a domain fact
 about an integration, and a tool name in lifecycle code is exactly what
@@ -47,6 +49,14 @@ from careloop.tools.registry import REGISTRY
 
 class UnclassifiedActionType(Exception):
     """Raised at import when an external-effect tool has no declared recovery class."""
+
+
+class UnobservableReplay(Exception):
+    """Raised at import when a replayable action type has no independent observer to be had.
+
+    Not a safety failure — :func:`may_replay` already refuses such a type at runtime — but a
+    declaration that can never fire, which is a declaration nothing can test.
+    """
 
 
 class RecoveryClass(StrEnum):
@@ -138,7 +148,61 @@ def check_recovery_classes_cover_the_registry() -> None:
         )
 
 
+def check_replayable_types_are_observable(
+    classes: Mapping[str, RecoveryClass] | None = None,
+    observable: Collection[str] | None = None,
+) -> None:
+    """Fail at import if an action type is declared replayable that nothing can observe.
+
+    **A coherence check, not a collapse of the two ideas.** Replay safety is a fact about a
+    provider's *write* contract — re-issuing the frozen identity cannot create a second effect —
+    and observability is a fact about whether anything other than CareLoop's own receipt can say
+    what the world holds. They are separate questions, they are declared in separate places
+    (:data:`RECOVERY_CLASS` here, :data:`careloop.graph.verify.INDEPENDENTLY_OBSERVABLE` there),
+    and this does not merge them. It says only that one of the four combinations is not a thing
+    anybody can have meant.
+
+    :func:`may_replay` already requires both, so a type declared ``IDEMPOTENT_REPLAYABLE`` while
+    absent from the observable set can never be replayed however a run is wired. Today that is
+    inert — the case parks, which is the safe direction — and the reason to refuse it anyway is
+    what happens *next*: a declaration that never fires is a declaration nobody can test, and the
+    first person who notices "this never replays" is one edit away from removing the observer
+    clause from :func:`may_replay` rather than adding the observer. That edit is a real second
+    external effect, and it would look like a fix.
+
+    **What this does not check, and could not.** It says nothing about whether a declaration is
+    *true* — that a provider really does guarantee no second effect is a measurement, and the
+    measurements live in ``tests/test_demoworld.py`` and ``docs/objectstore-contract.md``. It says
+    only that the two declarations this repository already keeps are consistent with each other.
+
+    The converse is deliberately allowed. An observable type may be ``NOT_REPLAYABLE`` — a provider
+    that can be read but whose write must never be repeated is an ordinary integration, and it
+    parks on ambiguity while still being independently verified.
+
+    Both arguments default to the shipped declarations and exist so the invariant can be driven
+    against synthetic mappings, which is what makes it a property rather than a restatement of
+    today's four tools.
+
+    Raises:
+        UnobservableReplay: if a replayable type is not independently observable.
+    """
+    from careloop.graph.verify import INDEPENDENTLY_OBSERVABLE
+
+    declared = RECOVERY_CLASS if classes is None else classes
+    observed = INDEPENDENTLY_OBSERVABLE if observable is None else frozenset(observable)
+    replayable = frozenset(
+        name for name, klass in declared.items() if klass is RecoveryClass.IDEMPOTENT_REPLAYABLE
+    )
+    if unobservable := sorted(replayable - frozenset(observed)):
+        raise UnobservableReplay(
+            f"action type(s) {unobservable} are declared IDEMPOTENT_REPLAYABLE but are not "
+            f"independently observable; a replay nothing can read back may never be issued, so "
+            f"the declaration can never fire"
+        )
+
+
 check_recovery_classes_cover_the_registry()
+check_replayable_types_are_observable()
 
 
 def may_replay(action_type: str, *, observers: Collection[str]) -> bool:
@@ -251,7 +315,9 @@ __all__ = [
     "DispatchUnavailable",
     "RecoveryClass",
     "UnclassifiedActionType",
+    "UnobservableReplay",
     "check_recovery_classes_cover_the_registry",
+    "check_replayable_types_are_observable",
     "dispatch_prepared",
     "may_replay",
 ]

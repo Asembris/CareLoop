@@ -24,11 +24,23 @@ export function eventToneColor(tone: EventTone): string {
   }
 }
 
+/** The time-of-day line above the dashboard. Warm, and about nobody.
+ *
+ *  It used to name a caregiver — "Good morning, Maya." — which was the last invented identity on
+ *  the product, and the most prominent: the first line of the first screen, above an
+ *  `IdentityStrip` whose entire job is to say the demo caregiver is synthetic. In production it
+ *  would have greeted every real caregiver by somebody else's name.
+ *
+ *  It is **not** replaced by a real name, and that is deliberate rather than a shortcut. A greeting
+ *  fed from an identity would need one on every render — before `GET /api/auth` has answered, in
+ *  demo mode where there is no verified principal to draw from, and on a production page whose
+ *  token has expired — and every one of those needs a placeholder, which is how an invented name
+ *  gets reintroduced. A greeting that addresses nobody cannot be wrong about anybody. */
 export function greeting(now: Date = new Date()): string {
   const h = now.getHours();
-  if (h < 12) return "Good morning, Maya.";
-  if (h < 18) return "Good afternoon, Maya.";
-  return "Good evening, Maya.";
+  if (h < 12) return "Good morning.";
+  if (h < 18) return "Good afternoon.";
+  return "Good evening.";
 }
 
 /** Before the first read has answered, the page may not claim anything about the world. */

@@ -13,6 +13,6 @@ describe("the test runner", () => {
 
   it("resolves the @ alias the app's own imports use", async () => {
     const { greeting } = await import("@/lib/tone");
-    expect(greeting(new Date(2026, 7, 13, 9))).toBe("Good morning, Maya.");
+    expect(greeting(new Date(2026, 7, 13, 9))).toBe("Good morning.");
   });
 });

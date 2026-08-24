@@ -306,6 +306,7 @@ Three variables in `careloop.env`, none of them a secret, and a fourth that is o
 | `CARELOOP_OIDC_ISSUER` | The issuer exactly as it appears in a token's `iss`. JWKS is derived from it. |
 | `CARELOOP_OIDC_AUDIENCE` | The app client id, matched against `client_id` on an access token. |
 | `CARELOOP_OIDC_LOGIN_DOMAIN` | The hosted-UI origin, for the browser login. Optional. |
+| `CARELOOP_CAREGIVERS_FILE` | JSON: caregivers, their destinations, their grants, their subject mappings. |
 
 With `CARELOOP_AUTH_MODE=production`, a missing issuer or audience stops the process at startup
 rather than degrading it — the treatment an unguarded destination already gets from the policy

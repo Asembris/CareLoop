@@ -128,11 +128,10 @@ def main() -> None:
     # an environment variable that must name the mode explicitly, and that refuses anything it does
     # not recognise, is the smallest thing that cannot be got wrong quietly.
     #
-    # `directory=None` is deliberate and is why production refuses to start here today: a real
-    # deployment supplies a real caregiver directory, and this entry point is the judge-facing demo
-    # server. Starting production without one would be an app that authenticates callers and then
-    # has nowhere to resolve them.
-    auth = auth_from_environment(directory=None)
+    # The directory comes from CARELOOP_CAREGIVERS_FILE, and production refuses to start without
+    # one: an app that authenticates callers and then has nowhere to resolve them would answer every
+    # request 401 for a reason nothing on the surface explains. Demo mode needs none and reads none.
+    auth = auth_from_environment()
     print(f"identity      {auth.mode}")
 
     if arguments.isolate_sessions:

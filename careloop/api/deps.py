@@ -136,6 +136,7 @@ def provider_context_factory(
     objects: ObjectStoreClient | None = None,
     witness: Witness = NO_WITNESS,
     losing_clinic: Any = None,
+    adversary: Any = None,
     directory: object | None = None,
 ) -> ContextFactory:
     """A factory binding every run to whichever real providers this world has.
@@ -150,6 +151,15 @@ def provider_context_factory(
     faults and one that knew about the object store, and a world with both would have got whichever
     branch happened to be written first. The fault still decides nothing except **which clinic
     client** an armed case is handed, which is the whole of what it was ever allowed to decide.
+
+    ``adversary`` is a :class:`careloop.api.adversary.AdversarialProposals`, or ``None``, and it
+    decides nothing except **which planner** the one case it claims is handed. It is threaded here
+    for the same reason and along the same seam: ``case_id`` is already a parameter of every
+    context factory, so the binding is which object a run holds rather than a check somebody
+    remembered to write, and a run for any other case in the same world is built with the ordinary
+    planner and has no way to reach the fixture. Note what it is *not* given -- it cannot reach the
+    gate, the policy engine, the store, the clinic or the executor, and there is no parameter here
+    or anywhere above through which a caller could tell it what to propose.
     """
     from careloop.graph.providers import object_store_provider
 
@@ -161,6 +171,11 @@ def provider_context_factory(
         bound_clinic = clinic
         if losing_clinic is not None and losing_clinic.claims(case_id):
             bound_clinic = losing_clinic.clinic
+        compromised = (
+            {"planner": adversary.planner()}
+            if adversary is not None and adversary.claims(case_id)
+            else {}
+        )
         return context_for(
             store,
             inbound,
@@ -168,6 +183,7 @@ def provider_context_factory(
             providers=others,
             clinic=bound_clinic,
             witness=witness,
+            **compromised,
             **patient_authority_for(directory, store, case_id),
         )
 

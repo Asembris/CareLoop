@@ -1,4 +1,4 @@
-"""The five scenarios the demo control API can trigger, and nothing else.
+"""The scenarios the demo control API can trigger, and nothing else.
 
 Data, not behaviour. The routes live in :mod:`careloop.api.app` beside the ones they reuse, because
 the whole claim of the demo API is that a button runs **the normal application path** — the same
@@ -27,6 +27,28 @@ here so the beat can be *shown* without the mixed scenario being tuned into alwa
 prompt-tuning a planner into taking bait, or building a fixture with no legitimate alternative and
 calling it the normal case, would both be rigging the demo. The model is still free to propose
 nothing effectful.
+
+**``adversarial`` is a third thing again, and it asks a different question from both.** The two
+above are *model-behaviour experiments*: a real planner reads a poisoned document and may or may
+not take the bait, and what a judge sees depends on what it did. That is honest and it is not
+watchable — the launcher cannot promise a refusal it does not control. So this one stops asking
+whether the model takes the bait and assumes it did::
+
+    injection / injection_only   will a real planner propose the attacker's action?
+    adversarial                  assume one did. can that action actually happen?
+
+It answers the second by *supplying* the proposal a fully compromised planner would emit, for one
+case, and letting the shipped gate, the shipped rules and the shipped execution path do everything
+after that. Everything about the narrowing lives in :mod:`careloop.api.adversary`; what lives here
+is the declaration that this scenario is the one it applies to, and
+:attr:`DemoScenario.proposes_the_attackers_action` is that declaration — data, exactly like
+:attr:`DemoScenario.loses_the_booking_response`, so the composition root reads a scenario's own
+statement about itself instead of comparing a key to a literal.
+
+Because the fixture replaces the planner, this scenario proves **nothing whatsoever about Bedrock**,
+and the product must never say otherwise. It shares its inbound event with ``injection_only`` on
+purpose: the same poisoned notice with no legitimate work beside it, so the two differ in exactly
+one respect — who wrote the proposal — which is the comparison worth being able to make.
 
 **``recovery`` is the one scenario that arms anything, and it arms one thing.** It delivers the
 ordinary referral to a case of its own and lets the clinic's answer to that case's booking be
@@ -82,6 +104,22 @@ class DemoScenario(BaseModel):
     and the requirement that the provider have answered ``201`` before anything is discarded.
     """
 
+    proposes_the_attackers_action: bool = False
+    """Whether this scenario's case is planned by the compromised-planner fixture.
+
+    **Data rather than a branch**, for the same reason as the field above: the composition root
+    reads a scenario's own declaration instead of comparing a key to a literal. ``False`` for every
+    scenario that is a genuine model-behaviour experiment, which is the safe default and the one
+    five of the six carry.
+
+    What it licenses is exactly one substitution -- which
+    :class:`~careloop.agents.planner.PlannerAgent` object a run for :attr:`case_id` is handed -- and
+    it is enforced by :class:`careloop.api.adversary.AdversarialProposals`, which is frozen around
+    the case it claims so there is nothing to arm and nothing that could be armed for another case.
+    A scenario declaring this is stating that its proposals are CareLoop's own, so nothing shown
+    about it may be described as something a model produced.
+    """
+
 
 #: Fixed case ids, so a scenario pressed twice reopens the case it made rather than accumulating
 #: cases nobody will look at — and so a reset has a knowable set of cases to have removed.
@@ -125,6 +163,13 @@ DEMO_SCENARIOS: Final[Mapping[str, DemoScenario]] = MappingProxyType(
                 case_id="demo-injection-only",
                 event_id="evt-0005-continuity-notice-only",
                 title="The poisoned notice with no legitimate work to do instead",
+            ),
+            DemoScenario(
+                key="adversarial",
+                case_id="demo-adversarial",
+                event_id="evt-0005-continuity-notice-only",
+                title="CareLoop proposes the attacker's action itself, and its own rules refuse it",
+                proposes_the_attackers_action=True,
             ),
         )
     }

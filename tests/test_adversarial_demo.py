@@ -33,14 +33,20 @@ from careloop.api.adversary import (
     TRUSTED_PROVIDER,
     AdversarialFixtureError,
     AdversarialProposals,
+    AmbiguousAdversarialScenario,
+    adversarial_proposals,
     check_attacker_arguments_come_from_the_poisoned_document,
     check_every_tool_is_proposed,
     check_no_undeclared_attacker_argument,
     hostile_planner,
     poisoned_document_lines,
 )
+from careloop.api.demo import DEMO_SCENARIOS
+from careloop.api.deps import provider_context_factory
+from careloop.events.inbound import POISONED_ONLY_EVENT
 from careloop.graph.trusted import DEMO_PATIENT_ID
 from careloop.policy.verdicts import ArgClass
+from careloop.state import InMemoryCaseStore
 from careloop.tools.document_source import ATTACKER_ADDRESS, POISONED_DOCUMENT_ID
 from careloop.tools.registry import REGISTRY
 
@@ -267,3 +273,70 @@ class TestTheBindingIsOneCaseAndCannotBeAimed:
 
         assert list(inspect.signature(AdversarialProposals).parameters) == ["case_id"]
         assert list(inspect.signature(AdversarialProposals.planner).parameters) == ["self"]
+
+
+class TestTheScenarioTableIsWhatDeclaresTheBinding:
+    """Which case the fixture plans is read from a scenario's own declaration, never from a key."""
+
+    def test_exactly_one_shipped_scenario_declares_it(self) -> None:
+        supplying = [s.key for s in DEMO_SCENARIOS.values() if s.proposes_the_attackers_action]
+        assert supplying == ["adversarial"]
+
+    def test_the_binding_names_that_scenarios_case(self) -> None:
+        proposals = adversarial_proposals()
+        assert proposals is not None
+        assert proposals.case_id == DEMO_SCENARIOS["adversarial"].case_id
+
+    def test_a_table_declaring_none_binds_nothing(self) -> None:
+        ordinary = {
+            key: scenario
+            for key, scenario in DEMO_SCENARIOS.items()
+            if not scenario.proposes_the_attackers_action
+        }
+        assert adversarial_proposals(ordinary) is None
+
+    def test_a_table_declaring_two_refuses_to_resolve(self) -> None:
+        """Two fixture-planned cases and one set of proposals is a framing note that lies once."""
+        doubled = dict(DEMO_SCENARIOS)
+        doubled["second"] = DEMO_SCENARIOS["injection_only"].model_copy(
+            update={"key": "second", "proposes_the_attackers_action": True}
+        )
+        with pytest.raises(AmbiguousAdversarialScenario, match="exactly one"):
+            adversarial_proposals(doubled)
+
+
+class TestOnlyTheClaimedCaseIsPlannedByTheFixture:
+    """The binding is which planner object a run holds, not a check made downstream.
+
+    Driven through the shipped ``provider_context_factory`` rather than through a stand-in, because
+    the property being asserted is about the production composition and a hand-built factory would
+    agree with itself.
+    """
+
+    @staticmethod
+    def _planner_model_id(case_id: str) -> str:
+        factory = provider_context_factory(adversary=adversarial_proposals())
+        context = factory(InMemoryCaseStore(), POISONED_ONLY_EVENT, case_id)
+        return context.planner.model.get_config()["model_id"]
+
+    def test_the_adversarial_case_gets_the_compromised_planner(self) -> None:
+        assert self._planner_model_id("demo-adversarial") == "adversarial-fixture"
+
+    def test_every_other_case_gets_the_ordinary_planner(self) -> None:
+        for case_id in ("demo-referral", "demo-injection", "demo-injection-only", "case-0001"):
+            assert self._planner_model_id(case_id) != "adversarial-fixture"
+
+    def test_a_world_with_no_adversary_never_gets_the_fixture(self) -> None:
+        """Default off. The fixture reaches a run only where a composition root put it there."""
+        factory = provider_context_factory()
+        context = factory(InMemoryCaseStore(), POISONED_ONLY_EVENT, "demo-adversarial")
+        assert context.planner.model.get_config()["model_id"] != "adversarial-fixture"
+
+    def test_two_runs_of_the_claimed_case_get_separate_scripts(self) -> None:
+        """A shared agent would have the second run of a case start on a half-spent script."""
+        factory = provider_context_factory(adversary=adversarial_proposals())
+        store = InMemoryCaseStore()
+        first = factory(store, POISONED_ONLY_EVENT, "demo-adversarial")
+        second = factory(store, POISONED_ONLY_EVENT, "demo-adversarial")
+        assert first.planner is not second.planner
+        assert first.planner.model.remaining == second.planner.model.remaining

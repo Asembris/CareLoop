@@ -552,6 +552,7 @@ def demo_session_worlds(
     # and a clinic client into every import of it.
     import httpx
 
+    from careloop.api.adversary import adversarial_proposals
     from careloop.api.deps import provider_context_factory
     from careloop.api.faults import booking_response_loss
     from careloop.state.sqlite_store import SqliteCaseStore
@@ -559,6 +560,12 @@ def demo_session_worlds(
     from careloop.tools.objectstore import ObjectStoreClient
 
     shared_events = events if events is not None else EventSimulator()
+
+    # Read once, from the scenario table's own declaration, and shared across worlds. It is frozen
+    # around the case id it claims and holds no per-world state -- ``planner()`` builds a fresh
+    # agent every call -- so there is nothing here for one visitor to change under another, which
+    # is the same argument the shared event simulator above rests on.
+    adversary = adversarial_proposals()
 
     def build(session_id: str) -> ApiDeps:
         clinic = None
@@ -586,6 +593,7 @@ def demo_session_worlds(
                 objects=objects,
                 witness=witness,
                 losing_clinic=faults,
+                adversary=adversary,
                 directory=directory,
             ),
             clinic=clinic,

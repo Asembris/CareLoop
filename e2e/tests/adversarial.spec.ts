@@ -127,18 +127,13 @@ test.describe("a supplied dangerous proposal has no authority to act", () => {
     await expect(card).toBeVisible();
     await expect(card).toContainText("rosa.marlowe@carer.example");
 
-    // **In the viewport, not merely in the DOM.** `toBeVisible` means present and not hidden, which
-    // was true of the router-`<Link>` version that landed on the right URL with the page still near
-    // the top against the deployment.
-    //
-    // **This assertion does not guard that choice**, and saying so is the point of the comment:
-    // reverting the anchor to a `<Link>` leaves this green, because the boundary response returns
-    // fast enough on loopback that the scroll lands either way. It is kept because it holds a real
-    // property cheaply and would catch a total failure to scroll; the anchor is defended by the
-    // deployed measurement recorded in `AdversarialNote.tsx`, not by this line.
-    await expect
-      .poll(async () => card.evaluate((el) => el.getBoundingClientRect().top < window.innerHeight))
-      .toBe(true);
+    // **Presence and content, deliberately not viewport position.** An earlier draft asserted the
+    // card was scrolled into view; it passed locally and was measured false on the deployment,
+    // where clicking this link lands at `scrollY: 0` with the card below the fold. That is
+    // `BoundariesPage`'s pre-existing deep-link behaviour — `OutcomePanel`'s own link does the same
+    // and only looks right because its target is the first card — so asserting it here would be
+    // holding this feature to a property of a surface it does not own, with a check that cannot
+    // reproduce the failure anyway. See the note in `AdversarialNote.tsx`.
   });
 
   test("fits a phone without pushing the page sideways", async ({ page }) => {

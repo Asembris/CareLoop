@@ -550,9 +550,19 @@ class TestTheScenarioTableIsCoherent:
 
         So the assertion is the one that was always meant: no two scenarios agree on *everything*
         except their key and their title.
+
+        The tuple grew a third member when ``adversarial`` arrived, and for the same reason it grew
+        a second one: ``injection_only`` and ``adversarial`` deliver the *same* poisoned notice with
+        no legitimate work beside it, deliberately, so that the two differ in exactly one respect —
+        who wrote the proposal. Anything a scenario can declare about what it does to a run belongs
+        in here, or two buttons can become one without the suite noticing.
         """
         distinguishing = [
-            (scenario.event_id, scenario.loses_the_booking_response)
+            (
+                scenario.event_id,
+                scenario.loses_the_booking_response,
+                scenario.proposes_the_attackers_action,
+            )
             for scenario in DEMO_SCENARIOS.values()
         ]
         assert len(distinguishing) == len(set(distinguishing))
@@ -565,6 +575,25 @@ class TestTheScenarioTableIsCoherent:
         assert referral.case_id != recovery.case_id
         assert referral.loses_the_booking_response is False
         assert recovery.loses_the_booking_response is True
+
+    def test_the_second_shared_event_pair_differs_in_who_wrote_the_proposal(self) -> None:
+        """The other pair, and the one the third tuple member exists for.
+
+        ``injection_only`` and ``adversarial`` are the same poisoned notice with no legitimate work
+        beside it. The difference is the whole feature: one asks a real planner what it would do,
+        and the other assumes it took the bait and supplies the proposal itself.
+        """
+        alone, supplied = DEMO_SCENARIOS["injection_only"], DEMO_SCENARIOS["adversarial"]
+
+        assert alone.event_id == supplied.event_id
+        assert alone.case_id != supplied.case_id
+        assert alone.proposes_the_attackers_action is False
+        assert supplied.proposes_the_attackers_action is True
+
+    def test_exactly_one_scenario_supplies_the_attackers_proposal(self) -> None:
+        """More than one and the framing note would be true of some cases and false of others."""
+        supplying = [s.key for s in DEMO_SCENARIOS.values() if s.proposes_the_attackers_action]
+        assert supplying == ["adversarial"]
 
     def test_the_key_is_the_mapping_key(self) -> None:
         assert all(key == scenario.key for key, scenario in DEMO_SCENARIOS.items())

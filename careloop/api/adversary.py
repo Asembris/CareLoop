@@ -66,6 +66,7 @@ from typing import Final
 from careloop.agents.invoke import MAX_PROPOSAL_ATTEMPTS
 from careloop.agents.planner import PlannerAgent
 from careloop.agents.schemas import PlannerIntent, proposal_tool_call_for
+from careloop.api.demo import DEMO_SCENARIOS, DemoScenario
 from careloop.graph.builder import MAX_NODE_EXECUTIONS
 from careloop.graph.trusted import DEMO_PATIENT_ID, TRUSTED_CONFIG
 from careloop.llm.mock import MockModel
@@ -330,6 +331,43 @@ class AdversarialProposals:
         return hostile_planner()
 
 
+class AmbiguousAdversarialScenario(Exception):
+    """Raised when the scenario table does not name exactly one adversarial case."""
+
+
+def adversarial_proposals(
+    scenarios: Mapping[str, DemoScenario] = DEMO_SCENARIOS,
+) -> AdversarialProposals | None:
+    """The binding for whichever scenario declares itself adversarial, or ``None``.
+
+    Reads :attr:`~careloop.api.demo.DemoScenario.proposes_the_attackers_action` rather than
+    comparing a key to a literal, so the scenario table stays the one statement of which case this
+    applies to -- the arrangement ``loses_the_booking_response`` already has, and the difference
+    between a table somebody extends and an ``if`` somebody copies.
+
+    Two scenarios declaring it would mean two cases planned by a fixture with one set of proposals
+    between them, and the product's framing note could then be true of one and false of the other.
+    That fails loudly rather than resolving to whichever came first.
+
+    Takes its table as a parameter for the reason the demo checks do: a guard that can only run
+    against the shipped scenarios is a guard whose failure path is untested.
+    """
+    claimed = [
+        scenario.case_id
+        for scenario in scenarios.values()
+        if scenario.proposes_the_attackers_action
+    ]
+    if not claimed:
+        return None
+    if len(claimed) > 1:
+        raise AmbiguousAdversarialScenario(
+            f"scenarios {sorted(claimed)} all declare proposes_the_attackers_action; exactly one "
+            f"case may be planned by the hostile fixture, or the framing note is true of some "
+            f"cases and false of others"
+        )
+    return AdversarialProposals(case_id=claimed[0])
+
+
 __all__ = [
     "ADVERSARIAL_RATIONALE",
     "ATTACKER_PORTAL",
@@ -341,6 +379,8 @@ __all__ = [
     "UNESTABLISHED_SLOT",
     "AdversarialFixtureError",
     "AdversarialProposals",
+    "AmbiguousAdversarialScenario",
+    "adversarial_proposals",
     "check_attacker_arguments_come_from_the_poisoned_document",
     "check_every_tool_is_proposed",
     "check_no_undeclared_attacker_argument",

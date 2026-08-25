@@ -40,6 +40,7 @@ import argparse
 import os
 from pathlib import Path
 
+from careloop.api.adversary import adversarial_proposals
 from careloop.api.app import create_app
 from careloop.api.deps import provider_context_factory
 from careloop.api.faults import booking_response_loss
@@ -154,6 +155,10 @@ def main() -> None:
         # scenario armed. Leaving it out here would make the demo surface mean two different things
         # depending on a flag, and `scripts/e2e_serve.py` drives the isolated shape anyway.
         faults = booking_response_loss(arguments.clinic_url) if clinic is not None else None
+        # Same argument for the adversarial scenario, and it needs no clinic: the whole point is
+        # that nothing external is ever reached. Omitting it here would leave the single-world demo
+        # with a card whose case planned itself, which is the one thing the copy may not imply.
+        adversary = adversarial_proposals()
         # The single world files under the default namespace, which is what a CareLoop with one
         # store for everybody means. Session isolation is where a per-visitor prefix matters.
         objects = ObjectStoreClient(arguments.upload_bucket) if arguments.upload_bucket else None
@@ -166,6 +171,7 @@ def main() -> None:
                 objects=objects,
                 witness=witness,
                 losing_clinic=faults,
+                adversary=adversary,
                 directory=auth.directory,
             ),
             demo=True,

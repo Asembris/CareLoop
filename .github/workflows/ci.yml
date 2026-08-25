@@ -137,6 +137,24 @@ jobs:
       - name: Adversarial replay and vacuity proof
         run: python -m evals.replay
 
+      # CareLoopBench's quick tier, in this job rather than a fifth one — for the reason this job
+      # exists. Its output is meant to be *read*: a judge opening the Actions log sees the
+      # adversarial headline above and, immediately below it, how many of CareLoop's declared
+      # properties this commit actually proved and which live proofs certify which commit.
+      #
+      # `quick` and not `core`: the real-protocol proofs bind loopback sockets and fork child
+      # processes, and the `check` job already runs every one of them as part of the whole suite.
+      # What this adds is the *counting*, not a second execution.
+      #
+      # `--check` fails on FAILED and on nothing else. A live proof that has gone STALE is a true
+      # statement about a proof that stopped being about this code, not a breakage, and a tier that
+      # did not touch a claim has discovered nothing about it either. Neither may redden a build.
+      #
+      # This does not replace `pytest -q`. It runs a curated ~1 200-test subset selected by the
+      # claim registry; the `check` job remains the full-repository regression gate.
+      - name: CareLoopBench, quick tier
+        run: python -m careloopbench --tier quick --check
+
   # Property-based schema testing over the HTTP API — tests/test_api_schema.py. Offline and $0: the
   # FastAPI app is driven in-process over ASGI, so there is no server, no port and no model call.
   #

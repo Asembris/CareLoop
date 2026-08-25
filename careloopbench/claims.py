@@ -485,6 +485,19 @@ CLAIMS: Final[tuple[Claim, ...]] = (
         ),
         "Modules under careloop/tools/. Time is stamped by whoever writes the timeline.",
     ),
+    _c(
+        "effect.a-weakened-upload-defence-is-noticed",
+        "If a future engineer weakened an upload defence, would anything turn red?",
+        E,
+        PROTO,
+        (
+            "tests/test_upload_mutations.py::TestEveryMutantIsCaught",
+            "tests/test_upload_mutations.py::TestTheLedgerIsComplete",
+        ),
+        "Single mutations of the upload path. Three of the twelve are proven elsewhere and "
+        "listed rather than duplicated.",
+        counter_evidence=("tests/test_upload_mutations.py::TestEveryMutantNamesALiveTest",),
+    ),
     # ---------------------------------------------------------------- settlement integrity
     _c(
         "settlement.a-booking-is-read-back-independently",
@@ -579,6 +592,22 @@ CLAIMS: Final[tuple[Claim, ...]] = (
             "tests/test_saga_telemetry.py::TestTheFlagIsTelemetryAndNothingElse",
         ),
         "The seam, by AST sweep. It does not claim the exporter is reliable.",
+    ),
+    _c(
+        "settlement.a-weakened-settlement-defence-is-noticed",
+        "If a future engineer weakened a settlement check, would anything turn red?",
+        S,
+        PROP,
+        (
+            "tests/test_evaluator_mutations.py::TestTheShippedEvaluatorIsSafeOnEveryWitness",
+            "tests/test_evaluator_mutations.py::TestEveryMutantIsKilled",
+            "tests/test_evaluator_mutations.py::TestTheLedgerIsWellFormed",
+        ),
+        "Single mutations of the settlement evaluator. Combinations are out of scope.",
+        counter_evidence=(
+            "tests/test_evaluator_mutations.py::TestEveryMutationReachesTheDecisionPath",
+            "tests/test_evaluator_mutations.py::TestTheHarnessDetectsADeliberatelyBrokenEvaluator",
+        ),
     ),
     # --------------------------------------------------------------- identity and isolation
     _c(

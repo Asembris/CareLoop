@@ -17,9 +17,11 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import fnmatch
 import json
 import re
 import subprocess
+import tomllib
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
@@ -906,3 +908,37 @@ class TestAMalformedStoredProofIsRefused:
 
         with pytest.raises(ArtifactRefused, match="not JSON"):
             ingest_one(a_live_claim(), root=a_repository)
+
+
+class TestTheBenchmarkDoesNotShipWithTheProduct:
+    """CareLoopBench is a measuring instrument, and instruments stay in the repository.
+
+    ``bench/``, ``evals/``, ``evaluators/`` and ``demoworld/`` are all outside the distribution for
+    the same reason: nothing a deployed process runs should carry the thing that measures it. This
+    package is one character away from being the exception, because ``include = ["careloop*"]``
+    matches ``careloopbench`` — which it did, until this test was written.
+    """
+
+    def find_configuration(self) -> dict[str, list[str]]:
+        packaging = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        return packaging["tool"]["setuptools"]["packages"]["find"]
+
+    def packaged(self, name: str) -> bool:
+        """Whether setuptools' package discovery would include ``name``, by its own rules."""
+        found = self.find_configuration()
+        included = any(fnmatch.fnmatchcase(name, pattern) for pattern in found.get("include", []))
+        excluded = any(fnmatch.fnmatchcase(name, pattern) for pattern in found.get("exclude", []))
+        return included and not excluded
+
+    def test_the_runtime_package_and_its_subpackages_ship(self) -> None:
+        assert self.packaged("careloop")
+        assert self.packaged("careloop.api")
+        assert self.packaged("careloop.policy")
+
+    def test_this_package_does_not(self) -> None:
+        assert not self.packaged("careloopbench")
+        assert not self.packaged("careloopbench.claims")
+
+    def test_no_other_measuring_instrument_ships_either(self) -> None:
+        for instrument in ("bench", "evals", "evaluators", "demoworld", "objectstore", "scripts"):
+            assert not self.packaged(instrument), instrument

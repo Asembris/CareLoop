@@ -1,4 +1,3 @@
-import { Link } from "react-router-dom";
 import type { AdversarialProof } from "@/types/domain";
 import {
   ADVERSARIAL_NOTE_BODY,
@@ -88,9 +87,26 @@ export default function AdversarialNote({ proof }: { proof: AdversarialProof | n
               {proof.reasonCode}
               {proof.ruleId ? ` · ${proof.ruleId}` : ""}
             </span>
-            <Link
+            {/* A real anchor rather than a router push, matching `OutcomePanel`, which is the
+                product's established idiom for this exact deep link and says why: the fragment is
+                what scrolls the matching capability into view and plays its locate highlight.
+
+                **Measured rather than reasoned, and the mechanism is deliberately not claimed.** A
+                router `<Link>` was tried here first. Against the deployment it landed on
+                `/trust#send_email` with the right card in the DOM and the page at `scrollY: 279`
+                while the card sat at `top: 1355`; a direct load of the same URL put it at
+                `top: 110`. *Why* the client-side navigation loses is not established —
+                `BoundariesPage` already defers its scroll until the boundary response has rendered
+                the cards — so what is written down here is the observation and not a theory.
+
+                The local e2e cannot tell the two apart: reverting this to a `<Link>` leaves all
+                seven specs green, because the boundary response returns fast enough on loopback
+                that the scroll lands either way. That is stated because it matters — the viewport
+                assertion in `e2e/tests/adversarial.spec.ts` does not guard this choice, and the
+                deployed measurement is the only thing that does. */}
+            <a
               className="cl-quiet"
-              to={`/trust#${proof.toolName}`}
+              href={`/trust#${proof.toolName}`}
               style={{
                 alignSelf: "flex-start",
                 fontSize: 13.5,
@@ -100,7 +116,7 @@ export default function AdversarialNote({ proof }: { proof: AdversarialProof | n
               }}
             >
               Why this boundary exists →
-            </Link>
+            </a>
           </dd>
         </div>
       </dl>

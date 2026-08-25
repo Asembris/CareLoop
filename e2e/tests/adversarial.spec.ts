@@ -123,7 +123,22 @@ test.describe("a supplied dangerous proposal has no authority to act", () => {
 
     // The card the deep link asked for, derived server-side from the same ruleset that refused the
     // call. The global promise and the concrete refusal become each other's evidence.
-    await expect(page.locator("#send_email")).toBeVisible();
+    const card = page.locator("#send_email");
+    await expect(card).toBeVisible();
+    await expect(card).toContainText("rosa.marlowe@carer.example");
+
+    // **In the viewport, not merely in the DOM.** `toBeVisible` means present and not hidden, which
+    // was true of the router-`<Link>` version that landed on the right URL with the page still near
+    // the top against the deployment.
+    //
+    // **This assertion does not guard that choice**, and saying so is the point of the comment:
+    // reverting the anchor to a `<Link>` leaves this green, because the boundary response returns
+    // fast enough on loopback that the scroll lands either way. It is kept because it holds a real
+    // property cheaply and would catch a total failure to scroll; the anchor is defended by the
+    // deployed measurement recorded in `AdversarialNote.tsx`, not by this line.
+    await expect
+      .poll(async () => card.evaluate((el) => el.getBoundingClientRect().top < window.innerHeight))
+      .toBe(true);
   });
 
   test("fits a phone without pushing the page sideways", async ({ page }) => {

@@ -1,9 +1,9 @@
 {
   "careloopbench": {
     "tier": "core",
-    "generated_at_commit": "087c6bfeb4bc0c90632fe2b21583c736ec2e8ed0",
-    "registry_digest": "995b4706ff029e5e574019fa123d43b747d44769012fdbb858f4bbf44a8affab",
-    "tests_run": 1230
+    "generated_at_commit": "d5e70fd080cd7daba875ab3691b661753eac5f0b",
+    "registry_digest": "50388296002d6a4400c2c6879da5cd68f04d90c02409c68cc0c5612c90d1bd66",
+    "tests_run": 1491
   },
   "domains": [
     {
@@ -19,22 +19,22 @@
     {
       "domain": "EXTERNAL_EFFECT_SAFETY",
       "title": "External-effect safety",
-      "declared": 10,
-      "proven": 9,
-      "mutation_backed": 1,
+      "declared": 11,
+      "proven": 10,
+      "mutation_backed": 2,
       "by_status": {
-        "PROVEN": 9,
+        "PROVEN": 10,
         "NOT_RUN": 1
       }
     },
     {
       "domain": "SETTLEMENT_INTEGRITY",
       "title": "Settlement integrity",
-      "declared": 9,
-      "proven": 8,
-      "mutation_backed": 3,
+      "declared": 10,
+      "proven": 9,
+      "mutation_backed": 4,
       "by_status": {
-        "PROVEN": 8,
+        "PROVEN": 9,
         "NOT_RUN": 1
       }
     },
@@ -476,6 +476,24 @@
       "artifact": null
     },
     {
+      "id": "effect.a-weakened-upload-defence-is-noticed",
+      "question": "If a future engineer weakened an upload defence, would anything turn red?",
+      "domain": "EXTERNAL_EFFECT_SAFETY",
+      "level": "REAL_PROTOCOL",
+      "status": "PROVEN",
+      "detail": "",
+      "scope": "Single mutations of the upload path. Three of the twelve are proven elsewhere and listed rather than duplicated.",
+      "mutation_backed": true,
+      "evidence": [
+        "tests/test_upload_mutations.py::TestEveryMutantIsCaught",
+        "tests/test_upload_mutations.py::TestTheLedgerIsComplete"
+      ],
+      "counter_evidence": [
+        "tests/test_upload_mutations.py::TestEveryMutantNamesALiveTest"
+      ],
+      "artifact": null
+    },
+    {
       "id": "settlement.a-booking-is-read-back-independently",
       "question": "Is a completed booking confirmed by a separate read of the clinic's own record?",
       "domain": "SETTLEMENT_INTEGRITY",
@@ -610,6 +628,26 @@
         "tests/test_saga_telemetry.py::TestTheFlagIsTelemetryAndNothingElse"
       ],
       "counter_evidence": [],
+      "artifact": null
+    },
+    {
+      "id": "settlement.a-weakened-settlement-defence-is-noticed",
+      "question": "If a future engineer weakened a settlement check, would anything turn red?",
+      "domain": "SETTLEMENT_INTEGRITY",
+      "level": "PROPERTY",
+      "status": "PROVEN",
+      "detail": "",
+      "scope": "Single mutations of the settlement evaluator. Combinations are out of scope.",
+      "mutation_backed": true,
+      "evidence": [
+        "tests/test_evaluator_mutations.py::TestTheShippedEvaluatorIsSafeOnEveryWitness",
+        "tests/test_evaluator_mutations.py::TestEveryMutantIsKilled",
+        "tests/test_evaluator_mutations.py::TestTheLedgerIsWellFormed"
+      ],
+      "counter_evidence": [
+        "tests/test_evaluator_mutations.py::TestEveryMutationReachesTheDecisionPath",
+        "tests/test_evaluator_mutations.py::TestTheHarnessDetectsADeliberatelyBrokenEvaluator"
+      ],
       "artifact": null
     },
     {

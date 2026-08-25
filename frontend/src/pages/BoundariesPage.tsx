@@ -83,28 +83,93 @@ export default function BoundariesPage() {
     };
   }, []);
 
-  /* Bring the asked-for card into view once it exists.
+  /* Bring the asked-for card into view once it exists, and *keep* it there until it lands.
    *
    * Keyed on `reading` as well as on the fragment, so it runs when the cards are really rendered
    * rather than on a page that is still a skeleton. `block: "center"` rather than the default,
    * because the header is sticky and the default puts the card's top edge underneath it.
    *
+   * **One scroll was not enough, and the reason is that something else scrolls afterwards.**
+   * Measured on the deployed app at 1280x800: arriving at `/trust#send_email` by *clicking*
+   * `AdversarialNote`'s link left the page at `scrollY: 0` with the card at `top: 1634`, while a
+   * `scrollIntoView({block:"center"})` issued by hand at that same moment moved it to `1417`. So
+   * the call works and the card exists — the page had simply been put back to the top after this
+   * effect ran. Arriving at the same URL by typing it landed at `scrollY: 1524`, which is the card
+   * at exactly its own `scroll-margin-top` and therefore the *browser's* native fragment scroll
+   * rather than this effect; a link click gets a fresh history entry whose restored position is
+   * `0`, and with `history.scrollRestoration` left at `auto` that restore is what wins.
+   *
+   * The fix is to stop trying to win a race and instead **check the result**, which is a fact
+   * about layout rather than a guess about timing. Each frame asks whether the card is where it
+   * should be and re-asserts **only while it is not**, across a bounded window — so a page that
+   * lands first time scrolls exactly once and merely looks each frame afterwards, and one that is
+   * clobbered recovers on the frame after the clobber. The window is what makes the second case
+   * work: the restore arrives after this effect, so an effect that stopped as soon as it had
+   * succeeded once would stop just before the thing it needs to survive.
+   *
+   * `history.scrollRestoration` is deliberately **left alone**. Setting it to `"manual"` would
+   * silence the clobber, and would also take away the browser's restore for every ordinary back
+   * and forward on this page, which is a much larger thing to break than the one it fixes.
+   *
    * Motion is asked for, never assumed: a reader who has said they do not want it gets the same
-   * destination without the travel, which is the bargain the `clLocate` rule makes too. */
+   * destination without the travel, which is the bargain the `clLocate` rule makes too. The
+   * highlight is not this effect's business at all — `data-locate` is driven straight off
+   * `targeted` in the markup below, so an unknown fragment, a card that never renders and a
+   * scroll that never happens all leave it correct. */
   useEffect(() => {
     if (reading !== "read" || !targeted) return;
 
-    /* Two frames, for the reason `useApplicationReady` waits two: a scroll issued in the same tick
-       as the render is racing the browser's own navigation-time scroll restoration, and loses.
-       Measured on the deployed demo — the highlight played on the right card and the page stayed at
-       `scrollY: 0`, with a manual `scrollIntoView` from the console moving it 421px, which is what
-       told the two apart. Cancelled on unmount so a reader who navigates away mid-wait is not
-       yanked by a page they have left. */
-    let frame = 0;
-    const armed = requestAnimationFrame(() => {
-      frame = requestAnimationFrame(() => {
-        const card = document.getElementById(targeted);
-        if (!card) return;
+    /* The cards are rendered by the time this runs, so a fragment naming no capability is simply
+       not ours — return, rather than watch for something that is never going to appear. That is
+       what makes an unknown or stale `/trust#whatever` cost nothing and throw nothing. */
+    if (!document.getElementById(targeted)) return;
+
+    /* A bound, not a delay. Nothing waits on it and no assertion is timed against it: the scroll
+       happens on the first frame, and the frames after it only *look*. It exists so a page whose
+       layout never settles — or a browser with no `scrollIntoView` — cannot leave a frame loop
+       running behind a reader. ~1s at 60Hz. */
+    const MAX_FRAMES = 60;
+
+    /* What counts as "arrived", and it is deliberately generous in both directions. Requiring an
+       exact scroll offset would re-assert forever against a page whose height is still moving under
+       a lazy font or a revealing section. Requiring `top >= 0` would do something worse: a card
+       taller than the viewport is *centred* with its top above the fold, so that test could never
+       be satisfied and the page would be pinned for the whole window. Any card whose top edge is
+       within the upper three quarters and whose bottom edge has not passed above the viewport is a
+       card the reader is looking at.
+
+       `bottom > 0` rather than `>= 0`, and that is load-bearing rather than fussy. A card whose
+       bottom edge sits exactly on the top of the viewport is not on screen, so the strict form is
+       the accurate one — and it is also what keeps a *degenerate* rect from reading as success. An
+       element that has not been laid out reports every edge as `0`, which the loose form calls
+       "arrived" and skips the scroll for; that is the whole of the page in jsdom, where
+       `tests/boundaries.test.tsx` asserts the scroll is issued at all. Somewhere with no layout
+       should ask for the scroll, not conclude it is unnecessary. */
+    const landed = (card: Element) => {
+      const { top, bottom } = card.getBoundingClientRect();
+      return top <= window.innerHeight * 0.75 && bottom > 0;
+    };
+
+    let frames = 0;
+    let handle = 0;
+    let stopped = false;
+
+    /* A reader who takes over owns the scroll from that moment. Without this, someone who flicked
+       the wheel while the page was still settling would be dragged back to the card. */
+    const yieldToTheReader = () => {
+      stopped = true;
+    };
+    const takeovers = ["wheel", "touchstart", "keydown", "pointerdown"] as const;
+    for (const event of takeovers) {
+      window.addEventListener(event, yieldToTheReader, { passive: true, once: true });
+    }
+
+    const tick = () => {
+      if (stopped) return;
+      const card = document.getElementById(targeted);
+      if (!card) return;
+
+      if (!landed(card)) {
         /* Instant, and **never** `behavior: "smooth"`. Two reasons, and the first is that it does
            not work: measured on the deployed demo, a smooth `scrollIntoView` and a smooth
            `window.scrollTo` both moved the page zero pixels in an embedded browser where the same
@@ -117,13 +182,25 @@ export default function BoundariesPage() {
 
            Optional call, and not defensiveness for its own sake: this is decoration, and decoration
            that can throw takes the whole page down with it. An environment without
-           `scrollIntoView` still gets the card, the highlight and every word on it. */
+           `scrollIntoView` still gets the card, the highlight and every word on it — and, because
+           the check above would then never be satisfied, the bound is what stops it asking. */
         card.scrollIntoView?.({ block: "center" });
-      });
-    });
+      }
+
+      frames += 1;
+      if (frames < MAX_FRAMES) handle = requestAnimationFrame(tick);
+    };
+
+    handle = requestAnimationFrame(tick);
+
+    /* Cancelled on unmount so a reader who navigates away mid-watch is not yanked by a page they
+       have left, and the listeners go with it whether or not they fired. */
     return () => {
-      cancelAnimationFrame(armed);
-      cancelAnimationFrame(frame);
+      stopped = true;
+      cancelAnimationFrame(handle);
+      for (const event of takeovers) {
+        window.removeEventListener(event, yieldToTheReader);
+      }
     };
   }, [reading, targeted]);
 

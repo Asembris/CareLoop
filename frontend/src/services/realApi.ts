@@ -28,6 +28,7 @@
  */
 
 import type {
+  AdversarialProof,
   AgentRun,
   ApprovalInput,
   ApprovalResult,
@@ -62,6 +63,7 @@ import type {
 import {
   actionIntentFor,
   authorizedSummary,
+  SUPPLIED_PROPOSAL_RATIONALE,
   blockedFor,
   clockTime,
   decisionCopy,
@@ -829,7 +831,65 @@ export function buildCase(
     // Read from the stored case, never from `shownState`: the block is evidence about what
     // happened, not a beat in the paced display, and a paced case is briefly a `DONE` case the
     // screen is still walking towards.
-    recovery: recoveryProofFor(detail)
+    recovery: recoveryProofFor(detail),
+    adversarial: adversarialProofFor(detail)
+  };
+}
+
+/** The deterministic boundary test a case's own audit trail records, or `null`.
+
+ *  **Read, never inferred, and never keyed on the scenario the browser launched.** The signature is
+ *  the whole story, and every clause is a durable timeline entry the API already projects:
+ *
+ *  - a `PLAN_PROPOSED` carries CareLoop's own supplied-proposal rationale, which is what
+ *    distinguishes a proposal CareLoop wrote from one a real planner produced;
+ *  - the policy engine really refused that exact tool (`POLICY_DENY`);
+ *  - no action identity was ever frozen (`ACTION_PREPARED` is absent);
+ *  - nothing was executed or suppressed;
+ *  - and the case holds no `ActionRecord` at all.
+ *
+ *  The last three are what the zero-effect block claims, so they are conditions of rendering it
+ *  rather than values it displays. A case that somehow recorded an action fails the signature and
+ *  shows nothing — which is the fail-closed direction: a block asserting nothing happened must not
+ *  be able to appear over a case where something did.
+ *
+ *  The *first* proposal is the one described, deliberately. The fixture proposes every tool in the
+ *  registry so the outcome card's "every action was refused" is earned, and `send_email` is first
+ *  because it is the refusal a cold reader understands without being told what a portal is. */
+export function adversarialProofFor(detail: CaseDetail | null): AdversarialProof | null {
+  if (!detail) return null;
+
+  const supplied = detail.timeline.find(
+    (e) => e.kind === "PLAN_PROPOSED" && payloadString(e, "rationale") === SUPPLIED_PROPOSAL_RATIONALE
+  );
+  if (!supplied) return null;
+
+  const toolName = payloadString(supplied, "tool_name");
+  const refusal = detail.timeline.find(
+    (e) => e.kind === "POLICY_DENY" && payloadString(e, "tool_name") === toolName
+  );
+  if (!refusal) return null;
+
+  if (detail.actions.length > 0) return null;
+  if (detail.timeline.some((e) => e.kind === "ACTION_PREPARED")) return null;
+  if (detail.timeline.some((e) => e.kind === "ACTION_EXECUTED")) return null;
+  if (detail.timeline.some((e) => e.kind === "DUPLICATE_SUPPRESSED")) return null;
+
+  const args = supplied.payload?.args;
+  const destination =
+    args && typeof args === "object" && !Array.isArray(args)
+      ? String((args as Record<string, unknown>).to ?? (args as Record<string, unknown>).portal_id ?? "")
+      : "";
+
+  return {
+    proposedAction: toolPhrase(toolName),
+    destination,
+    refusalText: blockedFor(toolName, payloadString(refusal, "reason_code")).text,
+    reasonCode: payloadString(refusal, "reason_code"),
+    ruleId: payloadString(refusal, "matched_rule_id"),
+    toolName,
+    recordedActions: detail.actions.length,
+    refusals: detail.timeline.filter((e) => e.kind === "POLICY_DENY").length
   };
 }
 

@@ -50,6 +50,18 @@ SWEPT: tuple[tuple[str, str], ...] = (
     ("docs", "judges.md"),
 )
 
+#: Files the glob above reaches that are not product surfaces.
+#:
+#: A ``*.test.tsx`` ships in no build and no judge reads one, and the adversarial spec necessarily
+#: *enumerates* the forbidden phrasings in order to assert the screen does not use them --
+#: ``[/the ai/i, /bedrock/i, /took the bait/i]`` is a list of things being checked for, not a
+#: claim. That is the same distinction :func:`without_comments` draws inside a file, applied at
+#: whole-file granularity because the sentences live in code rather than in comments.
+#:
+#: Narrow on purpose: only test files, matched on the suffix. Copy lives in the ordinary modules
+#: beside them and every one of those is still swept.
+NOT_A_PRODUCT_SURFACE: tuple[str, ...] = (".test.ts", ".test.tsx")
+
 #: Sentences attributing the supplied proposal to a model.
 #:
 #: Every one would be false about the deterministic scenario. Bounded by ``[^.]`` so a match cannot
@@ -93,7 +105,11 @@ FORBIDDEN: tuple[tuple[str, str], ...] = (
 def swept_files() -> list[Path]:
     found: list[Path] = []
     for folder, pattern in SWEPT:
-        found.extend(sorted((REPO_ROOT / folder).rglob(pattern)))
+        found.extend(
+            path
+            for path in sorted((REPO_ROOT / folder).rglob(pattern))
+            if not path.name.endswith(NOT_A_PRODUCT_SURFACE)
+        )
     return found
 
 
@@ -129,6 +145,7 @@ class TestNothingClaimsAModelWroteTheSuppliedProposal:
 
         assert len(files) > 20
         assert any(path.name == "scenarios.ts" for path in files)
+        assert not any(path.name.endswith(NOT_A_PRODUCT_SURFACE) for path in files)
         assert any(path.name == "presentation.ts" for path in files)
         assert any(path.name == "judges.md" for path in files)
 

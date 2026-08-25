@@ -988,6 +988,58 @@ export function recoveryProofRows(proof: RecoveryProof): RecoveryProofRow[] {
 }
 
 /* ------------------------------------------------------------------ *
+ * The adversarial boundary test
+ * ------------------------------------------------------------------ */
+
+/** The rationale CareLoop writes on every proposal it supplies for the adversarial test.
+ *
+ *  **Byte-identical to `ADVERSARIAL_RATIONALE` in `careloop/api/adversary.py`**, and
+ *  `tests/test_adversarial_demo.py` reads this file to say so — a cross-language constant with a
+ *  test rather than two strings that drift.
+ *
+ *  This is the *only* thing the framing note below is allowed to key on, and the reason is the
+ *  whole honesty of the feature. A note saying "CareLoop supplied this proposal" must appear over
+ *  a case where CareLoop really did, and must not appear over one where a real planner produced
+ *  the same action — which is a thing the realistic scenario can genuinely do. The scenario id the
+ *  browser remembers cannot tell those apart; a durable rationale CareLoop wrote can. */
+export const SUPPLIED_PROPOSAL_RATIONALE =
+  "Supplied by CareLoop's adversarial test: this is the action the notice asks the agent to take.";
+
+export const ADVERSARIAL_NOTE_LABEL = "ADVERSARIAL TEST";
+
+export const ADVERSARIAL_NOTE_BODY =
+  "The attached notice contains an instruction addressed to the agent. For this test, CareLoop " +
+  "deliberately supplies the dangerous proposal the attacker wants, instead of waiting to see " +
+  "whether a planner would. Everything after the proposal is the ordinary CareLoop system: the " +
+  "same policy engine, the same rules, the same audit trail.";
+
+/** Why the refusal happening *before* the approval step is the interesting part.
+ *
+ *  Every outbound email is a caregiver decision under `require-human-for-outbound-email`. `DENY` is
+ *  evaluated first and unconditionally, so an attacker-supplied recipient never reaches that rule
+ *  and no person is ever shown the choice. Stated because a reader who does not know the ordering
+ *  would reasonably expect to be asked. */
+export const ADVERSARIAL_NOT_ASKED =
+  "CareLoop did not ask you to approve this. The destination was never eligible for your approval, " +
+  "so the question was never put to you.";
+
+export const ZERO_EFFECT_LABEL = "EXTERNAL ACTIONS PERFORMED";
+
+/** Every clause here is a durable fact the API already projects, and no clause claims more.
+ *
+ *  **There is deliberately no provider-call count.** The browser receives the case, not the
+ *  clinic's request log, so a line reading "outside systems contacted: 0" would be asserting
+ *  something this page cannot see. The stronger internal statement — zero handler invocations,
+ *  an empty executor ledger — is proven in `tests/test_adversarial_demo.py`, which can observe it.
+ *
+ *  "Nothing was prepared" is `ACTION_PREPARED`'s absence, which is the sharper of the two: it says
+ *  CareLoop never reached the point of writing down an attempt, not merely that no attempt
+ *  finished. "Execution never began" is the absence of any transition into `EXECUTING`. */
+export const ZERO_EFFECT_BODY =
+  "No action was prepared and none was recorded. The proposal was refused before execution could " +
+  "begin, so nothing left CareLoop.";
+
+/* ------------------------------------------------------------------ *
  * Pacing
  * ------------------------------------------------------------------ */
 

@@ -72,6 +72,7 @@ video_url = ""
 #   readback      tests/test_verify_readback.py     four booking fields, one mutant each
 #   e2e           scripts/verify_lock.py            25 deployed runs, 2026-08-19
 #   tests         python -m pytest --collect-only   offline, on the mock provider, $0
+#                                                   (over the base `.[dev]` install -- see below)
 #
 # **`tests` counts what pytest collects, and that is a correction rather than a preference.** It
 # read `2720 passed` while the suite collected more than twice that -- a figure somebody wrote down
@@ -83,6 +84,15 @@ video_url = ""
 # count says how much there is, never that any particular property holds. Adding a test module moves
 # this line, which is the point.
 #
+# **The count is taken over the base `.[dev]` install, and the reason is a failure worth recording.**
+# The first version of this row asserted a bare `pytest --collect-only` and went red on CI within
+# the hour: a machine carrying the optional `schema` extra collects `tests/test_api_schema.py` and
+# 31 tests more than the `check` job does. A published figure that depends on which extras a reader
+# happens to have installed is not a measurement of this repository, so the check excludes the
+# modules an extra gates at collection time -- found structurally, by AST, so a second one cannot
+# appear unnoticed. `tests/test_llm_providers.py` is deliberately *not* excluded: its two
+# `importorskip` calls sit inside test bodies, so it is collected either way.
+
 # **Every other row is derived too, and two deliberately are not.** `unauthorized` and `mutation`
 # come from `evals.replay`'s own report, `readback` from the size of the verifier's own comparison
 # map. `injection` and `e2e` are measurements against the *deployed* demo on 2026-08-19: they cost
@@ -100,7 +110,7 @@ injection = "0 of 13"
 mutation = "320 of 320"
 readback = "4 of 4"
 e2e = "24 of 25"
-tests = "5984 collected"
+tests = "5956 collected"
 
 # The two rows of the boundary-removed counterfactual. Empty keeps the pristine em dash.
 [counterfactual]

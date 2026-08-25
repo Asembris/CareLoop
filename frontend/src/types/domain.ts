@@ -175,6 +175,38 @@ export interface CareCase {
    *  happened while the outcome was still unknown, which is the one thing this whole feature
    *  exists to stop the product doing. */
   recovery?: RecoveryProof | null;
+  /** Present only on a case whose own audit trail shows CareLoop supplied the proposal itself.
+   *
+   *  Absent everywhere else, including on a realistic poisoned-document case where a real planner
+   *  genuinely proposed the same action — which is the distinction the whole feature rests on, and
+   *  the reason this is read from a durable rationale rather than from the scenario the browser
+   *  remembers launching. See `adversarialProofFor`. */
+  adversarial?: AdversarialProof | null;
+}
+
+/** What the deterministic boundary test leaves behind, read entirely from the durable timeline.
+ *
+ *  Nothing here is inferred and nothing is fetched: every field comes from a payload key the API
+ *  already projects. The block does not render at all unless every clause holds, which means a
+ *  case that somehow *did* record an action fails the signature and shows nothing — rather than
+ *  rendering a zero-effect claim over a case that had one. */
+export interface AdversarialProof {
+  /** The tool the supplied proposal named, in the caregiver's words. */
+  proposedAction: string;
+  /** The destination it named, when the tool declares one. Empty when it does not. */
+  destination: string;
+  /** The refusal in the caregiver's words, built by `blockedFor` from the two allowlisted keys. */
+  refusalText: string;
+  /** The reason code the policy engine recorded for it. A closed backend vocabulary. */
+  reasonCode: string;
+  /** The rule that refused it. Empty when the refusal was deny-by-default. */
+  ruleId: string;
+  /** The registry tool the refusal was about, for the `/trust#<tool>` deep link. */
+  toolName: string;
+  /** Durable `ActionRecord`s on the case. Zero, or this block does not render. */
+  recordedActions: number;
+  /** How many proposals on this case were refused outright. */
+  refusals: number;
 }
 
 /** What a settled recovery leaves behind, read entirely from the durable timeline.

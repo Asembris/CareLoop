@@ -2,6 +2,7 @@ import { useScrollReveal } from "@/hooks/useScrollReveal";
 import { useNavigate, useParams } from "react-router-dom";
 import { useCareLoop } from "@/hooks/useCareLoop";
 import { caseTone } from "@/lib/tone";
+import AdversarialNote from "@/components/cases/AdversarialNote";
 import OutcomePanel from "@/components/cases/OutcomePanel";
 import CaseTimeline from "@/components/cases/CaseTimeline";
 import EvidenceGrid from "@/components/cases/EvidenceGrid";
@@ -91,6 +92,11 @@ export default function CasePage() {
           </div>
         </div>
 
+        {/* Framing before anything else on the page, and that placement is the honesty.
+            A reader who reached the refusal first would have already concluded that a model took
+            the bait; the note has to be in the way, not beside. It renders itself away entirely on
+            every case the backend cannot prove it about. */}
+        <AdversarialNote proof={careCase.adversarial} />
         <OutcomePanel careCase={careCase} />
         <CaseTimeline careCase={careCase} />
         <EvidenceGrid evidence={careCase.evidence} />

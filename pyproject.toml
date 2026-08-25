@@ -203,9 +203,12 @@ careloop = ["policy/*.yaml", "events/fixtures/*.json", "tools/fixtures/*.pdf"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# A hung test must fail the run, not burn the CI budget. The whole suite finishes in under a
-# second, so 60s is a runaway detector rather than a performance budget — the loop-bound test
-# (T4) has to fail loudly if the graph primitives ever stop bounding the loop.
+# A hung test must fail the run, not burn the CI budget. No individual test comes close to this
+# bound — the whole suite is 286s wall on a development machine, and most of that is the handful
+# of modules driving real sockets and real child processes — so 60s is a runaway detector rather
+# than a performance budget, and the loop-bound test (T4) has to fail loudly if the graph
+# primitives ever stop bounding the loop. This read "the whole suite finishes in under a second"
+# until CareLoopBench measured it: true of a much smaller suite, and never re-derived since.
 timeout = 60
 # Pinned, not left to the default, because the default is platform-dependent: pytest-timeout uses
 # SIGALRM where it exists (Linux) and threads where it does not (Windows). Two reasons to pin to

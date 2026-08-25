@@ -23,6 +23,7 @@ sentence naming the node. The check costs one interpreter start; the readable fa
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 import sys
 import tempfile
@@ -171,11 +172,101 @@ def run_evidence(nodes: Sequence[str], *, root: Path = REPO_ROOT) -> EvidenceRun
     )
 
 
+#: What the two replay targets are called. Derived from the report's own ``permissive`` flag and
+#: never passed in, so the protected result and the mutant result cannot be labelled the wrong way
+#: round by a caller.
+PROTECTED: Final[str] = "PROTECTED"
+ALLOW_ALL: Final[str] = "ALLOW_ALL"
+
+
+@dataclass(frozen=True)
+class ReplaySide:
+    """One target of the adversarial replay: the shipped rules, or the allow-all mutant."""
+
+    system: str
+    attempts: int
+    unauthorized: int
+    refused: int
+    effects: int
+    errored: int
+
+
+@dataclass(frozen=True)
+class AdversarialEvidence:
+    """Both targets, held apart.
+
+    They are two fields of two different names rather than a list of two rows, because the whole
+    value of this measurement is the *contrast* and a reader must never have to work out which way
+    round it is. ``0 of 320`` on its own is also what a broken harness reports.
+    """
+
+    protected: ReplaySide
+    allow_all: ReplaySide
+
+    @property
+    def is_contrasting(self) -> bool:
+        """Did removing the authority layer change the answer at all?"""
+        return self.allow_all.unauthorized > self.protected.unauthorized
+
+
+def replay_side(report: object) -> ReplaySide:
+    """One :class:`evals.replay.ReplayReport`, reduced to what a reader needs.
+
+    ``system`` comes from the report's own ``permissive`` flag. There is deliberately no parameter
+    for it: a benchmark that let the caller name the target could label the mutant's result as the
+    shipped system's, which is the one lie this measurement exists to make impossible.
+    """
+    permissive = bool(report.permissive)  # type: ignore[attr-defined]
+    return ReplaySide(
+        system=ALLOW_ALL if permissive else PROTECTED,
+        attempts=report.attempts,  # type: ignore[attr-defined]
+        unauthorized=report.unauthorised_actions,  # type: ignore[attr-defined]
+        refused=report.attempts_that_reached_a_refusal,  # type: ignore[attr-defined]
+        effects=sum(
+            outcome.external_effects
+            for outcome in report.outcomes  # type: ignore[attr-defined]
+        ),
+        errored=report.errored,  # type: ignore[attr-defined]
+    )
+
+
+def run_adversarial_replay() -> AdversarialEvidence:
+    """Replay the committed corpus twice, through the shipped rules and through the mutant.
+
+    Called in process rather than parsed out of ``python -m evals.replay``'s console output: the
+    numbers are already typed on :class:`evals.replay.ReplayReport`, and reading them off a
+    printed line would put a regular expression between the measurement and the report of it.
+
+    This imports ``evals`` and nothing from ``careloop``. The replay drives the real graph, the
+    real ``rules.yaml`` and both enforcement points itself; CareLoopBench neither knows nor checks
+    how it does that.
+    """
+    from evals.corpus import load_corpus
+    from evals.replay import replay_corpus
+
+    corpus = load_corpus()
+
+    async def both() -> tuple[object, object]:
+        return (
+            await replay_corpus(corpus),
+            await replay_corpus(corpus, permissive=True),
+        )
+
+    shipped, mutant = asyncio.run(both())
+    return AdversarialEvidence(protected=replay_side(shipped), allow_all=replay_side(mutant))
+
+
 __all__ = [
+    "ALLOW_ALL",
+    "PROTECTED",
+    "AdversarialEvidence",
     "EvidenceDoesNotCollect",
     "EvidenceRun",
     "NodeOutcome",
+    "ReplaySide",
     "check_collects",
     "junit_classname",
+    "replay_side",
+    "run_adversarial_replay",
     "run_evidence",
 ]

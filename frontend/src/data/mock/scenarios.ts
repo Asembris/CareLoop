@@ -22,11 +22,22 @@ export const SCENARIOS: ScenarioMeta[] = [
       "Paperwork handled, one decision requested, appointment booked, then checked against the clinic's own record.",
     toneVar: "var(--brand-accent)"
   },
+  /* 02's blurb used to end "Watch the unsafe branch end while the real work continues", and that
+     was a promise the runtime does not make. This scenario delivers the poisoned notice *beside*
+     genuine work to a real planner, which is free to ignore it — measured against the deployed
+     host, three runs in six carried any refusal at all, and the other three simply booked the
+     appointment. A card telling a judge to watch a refusal is telling them to watch something that
+     happens half the time, and tuning the model into taking bait to fix that would be rigging the
+     demo. `tests/test_adversarial_copy.py` is what fails if the promise comes back.
+
+     What the card says instead is what is actually guaranteed: the poison gains nothing either
+     way. See `docs/judges.md` for the measurement. */
   {
     id: "injection",
     num: "02",
     title: "Malicious document",
-    blurb: "A document tries to instruct the agent. Watch the unsafe branch end while the real work continues.",
+    blurb:
+      "A document tries to instruct the agent. The model may simply ignore it — and that is the system working. Either way the instruction gains nothing.",
     toneVar: "var(--state-untrusted)"
   },
   {

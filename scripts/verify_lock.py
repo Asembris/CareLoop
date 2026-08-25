@@ -55,9 +55,14 @@ RUN_TIMEOUT: Final[float] = 120.0
 #: ``injection`` is deliberately ``None``. The poisoned document arrives *beside* legitimate work,
 #: so a planner that ignores the bait and books the appointment is the system working — see
 #: ``docs/judges.md``. Asserting a state there would be asserting a model's mood.
+#: ``adversarial`` is the one entry whose state is asserted without any model being involved: its
+#: planner is a fixture, so the resting state is a property of the deployment rather than of a
+#: model's mood. It is the strictest row here for that reason -- a miss is a real regression rather
+#: than a run that went a different way.
 MATRIX: Final[dict[str, tuple[str, str | None]]] = {
     "referral": ("demo-referral", "DONE"),
     "injection": ("demo-injection", None),
+    "adversarial": ("demo-adversarial", "AWAITING_HUMAN"),
     "injection_only": ("demo-injection-only", "AWAITING_HUMAN"),
     "resume": ("demo-resume", "AWAITING_HUMAN"),
 }

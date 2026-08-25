@@ -21,6 +21,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import dataclasses
+import re
 from pathlib import Path
 
 import pytest
@@ -60,6 +61,8 @@ from careloop.state.case import TimelineEvent, TimelineKind
 from careloop.tools.document_source import ATTACKER_ADDRESS, POISONED_DOCUMENT_ID
 from careloop.tools.executor import MockExternalExecutor
 from careloop.tools.registry import REGISTRY
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 class TestTheAttackerReallyAskedForThis:
@@ -691,3 +694,59 @@ class TestThereIsOneProductionBindingSite:
                         offenders.append(f"{subpackage}/{path.name}")
 
         assert offenders == []
+
+
+class TestTheSuppliedRationaleIsOneStringInTwoLanguages:
+    """The browser matches the rationale exactly, so the two spellings may never drift.
+
+    ``frontend/src/services/presentation.ts`` cannot import a Python constant, and the framing note
+    renders on **exact equality** with it. A silent divergence would not break anything loudly: the
+    backend would keep supplying the proposal, the gate would keep refusing it, and the note would
+    simply stop appearing -- leaving a judge reading a refusal with no statement of who wrote the
+    proposal, which is the one thing this feature exists to prevent.
+    """
+
+    PRESENTATION = REPO_ROOT / "frontend" / "src" / "services" / "presentation.ts"
+
+    def test_the_frontend_constant_is_where_it_claims_to_be(self) -> None:
+        assert self.PRESENTATION.exists()
+        assert "SUPPLIED_PROPOSAL_RATIONALE" in self.PRESENTATION.read_text(encoding="utf-8")
+
+    def test_both_languages_spell_it_identically(self) -> None:
+        source = self.PRESENTATION.read_text(encoding="utf-8")
+        match = re.search(
+            r"export const SUPPLIED_PROPOSAL_RATIONALE\s*=\s*\n?\s*\"([^\"]*)\";", source
+        )
+        assert match is not None, "the frontend constant is no longer a single string literal"
+
+        assert match.group(1) == ADVERSARIAL_RATIONALE
+
+
+class TestTheEndToEndHarnessDrivesTheShippedFixture:
+    """``scripts/e2e_serve.py`` scripts every other demo case and must not script this one.
+
+    The e2e's whole value here is that a judge path is exercised against the proposals the product
+    ships. A harness that restated them would keep passing after the real fixture drifted, which is
+    the failure mode that looks most like success.
+    """
+
+    HARNESS = REPO_ROOT / "scripts" / "e2e_serve.py"
+
+    def test_the_harness_does_not_script_the_adversarial_case(self) -> None:
+        from scripts.e2e_serve import SCRIPTS
+
+        assert DEMO_SCENARIOS["adversarial"].case_id not in SCRIPTS
+
+    def test_the_harness_binds_the_production_fixture_for_it(self) -> None:
+        from scripts.e2e_serve import planner_for
+
+        planner = planner_for(DEMO_SCENARIOS["adversarial"].case_id)
+
+        assert planner.model.get_config()["model_id"] == "adversarial-fixture"
+
+    def test_the_harness_still_scripts_every_other_demo_case(self) -> None:
+        from scripts.e2e_serve import planner_for
+
+        for key in ("referral", "injection", "resume", "recovery", "injection_only"):
+            planner = planner_for(DEMO_SCENARIOS[key].case_id)
+            assert planner.model.get_config()["model_id"] != "adversarial-fixture"

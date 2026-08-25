@@ -52,6 +52,7 @@ from careloop.agents.schemas import (
     proposal_tool_call_for,
 )
 from careloop.agents.triage import TriageAgent
+from careloop.api.adversary import adversarial_proposals
 from careloop.api.app import create_app
 from careloop.api.demo import DEMO_SCENARIOS
 from careloop.api.deps import ApiDeps
@@ -273,7 +274,24 @@ def triage_for() -> TriageAgent:
     )
 
 
+#: The shipped adversarial binding, read from the scenario table exactly as a deployment reads it.
+#:
+#: **Not a copy of the hostile proposals**, and that is the point of reaching for it here. The
+#: deterministic scenario's whole claim is that the proposals a judge sees are the ones
+#: ``careloop/api/adversary.py`` ships, so an e2e that restated them in :data:`SCRIPTS` would be
+#: driving a look-alike and would keep passing after the real fixture drifted.
+ADVERSARY: Final = adversarial_proposals()
+
+
 def planner_for(case_id: str) -> PlannerAgent:
+    """The planner this harness binds to ``case_id``.
+
+    The adversarial demo case gets the **production** fixture rather than anything scripted here;
+    every other case gets this file's own script. That ordering is deliberate: a case named in both
+    places would be a second answer to which proposals the demonstration makes.
+    """
+    if ADVERSARY is not None and ADVERSARY.claims(case_id):
+        return ADVERSARY.planner()
     return PlannerAgent(
         ScriptedModel(
             proposal_outputs=[

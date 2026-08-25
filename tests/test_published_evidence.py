@@ -13,6 +13,12 @@ replay's own report, the verifier's own comparison map, pytest's own collection 
 a compared field or adding a test module turns this file red rather than leaving a number behind
 that nobody re-derived.
 
+**A derivation has to be a property of the repository rather than of the machine.** The
+regression-count row learned that the hard way: asserted against a bare collection, it passed
+locally and failed on CI, because an optional extra adds 31 collectable tests. The rule it settled
+on is the general one — derive over the base install, and check structurally that the exclusion is
+exactly the modules an extra gates.
+
 **Two rows cannot be derived here, and they are named rather than skipped.** ``injection`` and
 ``e2e`` are measurements against the *deployed* demo on a particular day: they cost real model
 calls, they cannot be reproduced offline, and inventing an offline substitute for them would be
@@ -26,6 +32,7 @@ is produced. It is anti-drift and nothing else.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import re
 import subprocess
@@ -74,11 +81,56 @@ def replayed() -> tuple[object, object]:
     return asyncio.run(both())
 
 
+def collection_gated_modules() -> tuple[str, ...]:
+    """Test modules whose *collection* depends on an optional extra being installed.
+
+    A ``pytest.importorskip`` at module scope removes the whole file from collection when the
+    package is absent; the same call inside a test body does not — that one is collected and skips
+    at run time. Only the first kind moves a collection count, so only the first kind is found
+    here, by AST rather than by grep: walking into a ``class`` or ``def`` would have swept up
+    ``tests/test_llm_providers.py``, whose two calls sit inside test methods and change nothing.
+    """
+    gated: list[str] = []
+    for path in sorted((REPO_ROOT / "tests").glob("test_*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            if any(
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "importorskip"
+                for call in ast.walk(node)
+            ):
+                gated.append(f"tests/{path.name}")
+                break
+    return tuple(gated)
+
+
 @pytest.fixture(scope="module")
 def collected() -> int:
-    """How many tests this repository's suite collects, asked of pytest rather than remembered."""
+    """How many tests the base install collects, asked of pytest rather than remembered.
+
+    **The extras are excluded, and that is the whole correction.** A bare collection is not a
+    property of this repository — it is a property of the machine running it. A developer with the
+    optional ``schema`` extra installed collects ``tests/test_api_schema.py`` and 31 more tests
+    than CI's ``check`` job, which installs ``.[dev]`` alone; pinning a published figure to the
+    first would make the site red on CI and green locally, which is worse than the stale number it
+    replaced. So the count is taken over the base install, which is what the ledger row's own
+    ``method`` line names and what CI actually runs.
+    """
+    ignores = [f"--ignore={module}" for module in collection_gated_modules()]
     finished = subprocess.run(
-        [sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider"],
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--collect-only",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            *ignores,
+        ],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
@@ -169,6 +221,14 @@ class TestTheRegressionRowIsMetadataAndIsCurrent:
     Collection rather than "passed" on purpose. Whether the suite is *green* is established by CI
     on every push, which is what the row's own ``method`` line names; a number this file could
     honestly produce without running 5 000 tests is how many there are.
+
+    **Over the base install, not over whatever the reader happens to have installed.** The first
+    version of this asserted a bare collection and went red on CI within the hour: a machine
+    carrying the optional ``schema`` extra collects ``tests/test_api_schema.py`` and 31 tests more
+    than ``.[dev]`` does. A published figure that depends on which extras are present is not a
+    measurement of this repository, so the modules whose collection is gated behind an extra are
+    excluded — and :func:`collection_gated_modules` finds them structurally, so a second one cannot
+    appear without :class:`TestTheExclusionIsExactlyWhatItClaims` noticing.
     """
 
     def test_it_is_what_pytest_collects(self, collected: int) -> None:
@@ -194,3 +254,38 @@ class TestTheDeployedRowsAreNamedRatherThanInvented:
 
         for key in OPERATOR_MEASURED:
             assert receipts["evidence"][key]["path"] == "scripts/verify_lock.py"
+
+
+class TestTheExclusionIsExactlyWhatItClaims:
+    """The count excludes something, so what it excludes has to be checked rather than trusted."""
+
+    def test_only_the_schema_module_is_gated_at_collection_time(self) -> None:
+        """A second gated module is a decision about the published figure, not a detail."""
+        assert collection_gated_modules() == ("tests/test_api_schema.py",)
+
+    def test_the_gated_module_really_is_gated_at_module_scope(self) -> None:
+        """Vacuity: if this call moved inside a test, excluding the file would drop real tests."""
+        source = (REPO_ROOT / "tests" / "test_api_schema.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        at_module_scope = [
+            node
+            for node in tree.body
+            if not isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef)
+            and any(
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "importorskip"
+                for call in ast.walk(node)
+            )
+        ]
+
+        assert at_module_scope
+
+    def test_a_module_gating_inside_a_test_body_is_not_excluded(self) -> None:
+        """``tests/test_llm_providers.py`` is the case that would be wrong to exclude.
+
+        Its two ``importorskip`` calls sit inside test methods, so the file is collected either
+        way and its tests skip at run time where the ``bench`` extra is absent. Excluding it would
+        make the published count 72 lower than what CI collects.
+        """
+        assert "tests/test_llm_providers.py" not in collection_gated_modules()

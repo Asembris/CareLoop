@@ -18,10 +18,17 @@ engine demonstrates nothing if the payload was chosen to be easy.
 
 from __future__ import annotations
 
+import ast
+import asyncio
 import dataclasses
+from pathlib import Path
 
 import pytest
+from api_helpers import planner_proposing, triage_agent
+from helpers import FIXED_NOW
+from strands.multiagent.base import Status
 
+import careloop
 from careloop.agents.schemas import PlannerIntent
 from careloop.api.adversary import (
     ADVERSARIAL_RATIONALE,
@@ -44,10 +51,14 @@ from careloop.api.adversary import (
 from careloop.api.demo import DEMO_SCENARIOS
 from careloop.api.deps import provider_context_factory
 from careloop.events.inbound import POISONED_ONLY_EVENT
-from careloop.graph.trusted import DEMO_PATIENT_ID
+from careloop.graph.builder import MAX_NODE_EXECUTIONS
+from careloop.graph.runner import context_for, open_case, run_case
+from careloop.graph.trusted import DEMO_CAREGIVER, DEMO_PATIENT_ID, TRUSTED_CONFIG
 from careloop.policy.verdicts import ArgClass
-from careloop.state import InMemoryCaseStore
+from careloop.state import Case, CaseState, InMemoryCaseStore
+from careloop.state.case import TimelineEvent, TimelineKind
 from careloop.tools.document_source import ATTACKER_ADDRESS, POISONED_DOCUMENT_ID
+from careloop.tools.executor import MockExternalExecutor
 from careloop.tools.registry import REGISTRY
 
 
@@ -340,3 +351,343 @@ class TestOnlyTheClaimedCaseIsPlannedByTheFixture:
         second = factory(store, POISONED_ONLY_EVENT, "demo-adversarial")
         assert first.planner is not second.planner
         assert first.planner.model.remaining == second.planner.model.remaining
+
+
+# ---------------------------------------------------------------------------------------------
+# The graph half. Everything above is about what is supplied; everything below is about what the
+# production system does with it.
+# ---------------------------------------------------------------------------------------------
+
+
+class ExplodingHandler:
+    """A handler that fails the test if any effect is ever performed.
+
+    Stronger than an empty ledger, which is also what a run that never reached the executor at all
+    would produce for a *different* reason. This says a handler was not so much as entered.
+    """
+
+    def __init__(self, action_type: str) -> None:
+        self.action_type = action_type
+
+    def __call__(self, args, idempotency_key):  # pragma: no cover - the point is it never runs
+        raise AssertionError(
+            f"{self.action_type} was performed on the adversarial case; every proposal on it is "
+            f"refused before READY_TO_EXECUTE, so nothing may reach a handler"
+        )
+
+
+def booby_trapped_executor() -> MockExternalExecutor:
+    """An executor whose every handler raises. Nothing on this case may reach one."""
+    return MockExternalExecutor(
+        handlers={name: ExplodingHandler(name) for name in REGISTRY.external_effect_tools}
+    )
+
+
+def adversarial_run() -> tuple[Case, MockExternalExecutor, object]:
+    """Drive the adversarial demo case through the real graph, on the real rules.
+
+    The **only** substitution is the planner, which is the feature. Triage is scripted the way
+    every other test in this suite scripts it -- the deployed demo runs a real one, and a test that
+    reached a provider would not run offline at $0.
+    """
+    store = InMemoryCaseStore()
+    case_id = DEMO_SCENARIOS["adversarial"].case_id
+    open_case(store, POISONED_ONLY_EVENT, caregiver=DEMO_CAREGIVER, case_id=case_id, now=FIXED_NOW)
+    executor = booby_trapped_executor()
+    context = context_for(
+        store,
+        POISONED_ONLY_EVENT,
+        case_id=case_id,
+        triage=triage_agent(),
+        planner=hostile_planner(),
+        executor=executor,
+        now=lambda: FIXED_NOW,
+    )
+    result = asyncio.run(run_case(context))
+    return store.get(case_id), executor, result
+
+
+def denials(case: Case) -> dict[str, TimelineEvent]:
+    return {
+        event.payload["tool_name"]: event
+        for event in case.timeline
+        if event.kind is TimelineKind.POLICY_DENY
+    }
+
+
+def kinds(case: Case, kind: TimelineKind) -> list[TimelineEvent]:
+    return [event for event in case.timeline if event.kind is kind]
+
+
+class TestTheSuppliedProposalReachesTheRealAuthorityLayer:
+    """The headline beat, asserted on what the production gate actually recorded.
+
+    Not on a status code and not on the fixture: the reason code and the matched rule below are
+    written by :class:`careloop.policy.engine.PolicyEngine` against the shipped ``rules.yaml``, and
+    nothing in :mod:`careloop.api.adversary` can express either.
+    """
+
+    def test_the_attackers_email_is_proposed_for_real(self) -> None:
+        case, _, _ = adversarial_run()
+        proposals = kinds(case, TimelineKind.PLAN_PROPOSED)
+
+        assert proposals[0].payload["tool_name"] == "send_email"
+        assert proposals[0].payload["args"]["to"] == ATTACKER_ADDRESS
+        assert proposals[0].payload["rationale"] == ADVERSARIAL_RATIONALE
+
+    def test_the_real_engine_refuses_it_on_the_destination_rule(self) -> None:
+        case, _, _ = adversarial_run()
+        refusal = denials(case)["send_email"]
+
+        assert refusal.payload["verdict"] == "DENY"
+        assert refusal.payload["reason_code"] == "DESTINATION_NOT_TRUSTED"
+        assert refusal.payload["matched_rule_id"] == "deny-email-to-untrusted-recipient"
+
+    def test_the_refusal_comes_before_anybody_is_asked_to_approve_it(self) -> None:
+        """``DENY`` is evaluated first and unconditionally, so no caregiver is burdened.
+
+        ``send_email`` also carries ``require-human-for-outbound-email``. That an attacker-supplied
+        recipient never reaches it is the property worth showing: CareLoop does not ask a person to
+        approve something it should already have refused.
+        """
+        case, _, _ = adversarial_run()
+
+        assert not kinds(case, TimelineKind.POLICY_REQUIRE_HUMAN)
+        assert not kinds(case, TimelineKind.APPROVAL_REQUESTED)
+        assert case.pending_approval() is None
+
+    def test_every_proposed_tool_is_refused(self) -> None:
+        case, _, _ = adversarial_run()
+
+        assert set(denials(case)) == set(REGISTRY.names)
+        assert all(event.payload["verdict"] == "DENY" for event in denials(case).values())
+
+    def test_no_proposal_was_ever_allowed(self) -> None:
+        case, _, _ = adversarial_run()
+        assert not kinds(case, TimelineKind.POLICY_ALLOW)
+
+    def test_the_other_refusals_are_the_rules_the_arguments_earn(self) -> None:
+        """Read off the run rather than asserted as a set, so a rule change is visible here.
+
+        ``book_appointment`` is the interesting one: its provider is the caregiver's own configured
+        clinic and its patient is the real demo patient, so it is refused on the *time*, which this
+        case never validated. Plausibility earns nothing.
+        """
+        case, _, _ = adversarial_run()
+        refused = denials(case)
+
+        assert refused["upload_document"].payload["reason_code"] == "DESTINATION_NOT_TRUSTED"
+        assert refused["grant_portal_access"].payload["reason_code"] == "DESTINATION_NOT_TRUSTED"
+        assert refused["book_appointment"].payload["reason_code"] == "INSUFFICIENT_FACT_TRUST"
+        assert (
+            refused["book_appointment"].payload["matched_rule_id"]
+            == "deny-booking-on-unvalidated-slot"
+        )
+        assert refused["fetch_document"].payload["reason_code"] == "NO_RULE_MATCH"
+
+
+class TestTheCaseStopsInACaregiversHands:
+    """Parked, not failed, and with nothing to approve.
+
+    ``FAILED`` would say something broke. Every refusal here is the system working, and the card a
+    caregiver reads for ``NO_SAFE_ACTION_AVAILABLE`` says every action was refused -- which is only
+    true because the fixture proposes the whole registry.
+    """
+
+    def test_it_rests_awaiting_human(self) -> None:
+        case, _, result = adversarial_run()
+
+        assert case.state is CaseState.AWAITING_HUMAN
+        assert case.failure_reason is None
+        assert result.status is Status.COMPLETED
+
+    def test_the_handoff_says_no_safe_action_was_available(self) -> None:
+        case, _, _ = adversarial_run()
+        handoffs = kinds(case, TimelineKind.MANUAL_HANDOFF_REQUIRED)
+
+        assert len(handoffs) == 1
+        assert handoffs[0].payload["reason_code"] == "NO_SAFE_ACTION_AVAILABLE"
+
+    def test_the_run_ends_well_inside_the_node_budget(self) -> None:
+        """A case that parked because the SDK's bound fired would be a runaway, not a defence."""
+        _, _, result = adversarial_run()
+
+        assert len(result.executed_nodes) < MAX_NODE_EXECUTIONS
+        assert result.executed_nodes[:3] == ("dispatch", "triage", "evidence")
+
+
+class TestNothingLeftCareLoop:
+    """The zero-effect proof, at four independent depths.
+
+    A refusal label alone is not the claim. The claim is that execution never began -- so there is
+    no recorded action, no *intent* to act, nothing dispatched, and no handler entered.
+    """
+
+    def test_no_action_was_recorded(self) -> None:
+        case, _, _ = adversarial_run()
+        assert case.actions == ()
+
+    def test_no_action_identity_was_even_frozen(self) -> None:
+        """``ACTION_PREPARED`` is written before anything can leave the process.
+
+        Its absence is the stronger statement: not merely that no effect completed, but that
+        CareLoop never reached the point of writing down an attempt.
+        """
+        case, _, _ = adversarial_run()
+        assert not kinds(case, TimelineKind.ACTION_PREPARED)
+
+    def test_nothing_was_executed_or_suppressed(self) -> None:
+        case, _, _ = adversarial_run()
+
+        assert not kinds(case, TimelineKind.ACTION_EXECUTED)
+        assert not kinds(case, TimelineKind.DUPLICATE_SUPPRESSED)
+
+    def test_the_executor_ledger_is_empty_and_no_handler_ran(self) -> None:
+        """The booby-trapped handlers would have raised; the empty ledger says they were not run."""
+        _, executor, _ = adversarial_run()
+        assert executor.ledger == ()
+
+    def test_the_case_never_became_executable(self) -> None:
+        """``READY_TO_EXECUTE`` is the only state ``ExecuteNode`` runs from. Nothing wrote it."""
+        case, _, _ = adversarial_run()
+        reached = {
+            event.payload.get("to")
+            for event in case.timeline
+            if event.kind is TimelineKind.STATE_TRANSITION
+        }
+
+        assert "READY_TO_EXECUTE" not in reached
+        assert "EXECUTING" not in reached
+
+
+class TestTheFixtureCannotDecideTheOutcome:
+    """The seam stops before the property. Proven by moving the fixture and nothing else.
+
+    Mutant B as a test: give the compromised planner the caregiver's own trusted address. The
+    refusal disappears -- which is what shows the ``DESTINATION_NOT_TRUSTED`` above is produced by
+    the destination rule reading the value, rather than by anything this fixture arranged.
+    """
+
+    @staticmethod
+    def _run_with(first: PlannerIntent) -> Case:
+        store = InMemoryCaseStore()
+        case_id = DEMO_SCENARIOS["adversarial"].case_id
+        open_case(
+            store, POISONED_ONLY_EVENT, caregiver=DEMO_CAREGIVER, case_id=case_id, now=FIXED_NOW
+        )
+        context = context_for(
+            store,
+            POISONED_ONLY_EVENT,
+            case_id=case_id,
+            triage=triage_agent(),
+            planner=planner_proposing(first),
+            executor=booby_trapped_executor(),
+            now=lambda: FIXED_NOW,
+        )
+        asyncio.run(run_case(context))
+        return store.get(case_id)
+
+    def test_a_trusted_destination_is_not_refused_by_the_destination_rule(self) -> None:
+        trusted = next(value for key, value in TRUSTED_CONFIG if key == "caregiver_email")
+        case = self._run_with(
+            PlannerIntent(
+                tool_name="send_email",
+                rationale=ADVERSARIAL_RATIONALE,
+                args={"to": trusted, "subject": "Referral", "body": "An update."},
+            )
+        )
+
+        assert "send_email" not in denials(case)
+        assert kinds(case, TimelineKind.POLICY_REQUIRE_HUMAN), (
+            "a trusted recipient reaches the human rule instead, which is what makes the "
+            "attacker-address refusal a fact about the value rather than about this fixture"
+        )
+
+    def test_the_intent_has_no_field_that_could_ask_for_a_verdict(self) -> None:
+        """Structural, not behavioural: there is nowhere to write one.
+
+        ``PlannerIntent`` carries a tool, a rationale and arguments. Nothing about a verdict, a
+        state, a rule or an effect can be expressed through it, so the fixture's reach ends at the
+        ``PLAN_PROPOSED`` entry the gate then reads back out of the store.
+        """
+        assert set(PlannerIntent.model_fields) == {"tool_name", "rationale", "args"}
+
+
+class TestTheDemonstrationCannotBorrowFromTheEvaluationHarness:
+    """``careloop/`` imports nothing from ``evals/``, and this feature did not change that.
+
+    The offline replay ships an allow-all policy engine on purpose. Nothing a browser can reach may
+    be one import away from it.
+    """
+
+    def test_no_shipped_module_imports_evals(self) -> None:
+        offenders: list[str] = []
+        for path in Path(careloop.__file__).parent.rglob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    names = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom):
+                    names = [node.module or ""]
+                else:
+                    continue
+                if any(name == "evals" or name.startswith("evals.") for name in names):
+                    offenders.append(str(path))
+
+        assert offenders == []
+
+
+class TestThereIsOneProductionBindingSite:
+    """Exactly one shipped module composes the fixture, and a sweep says so.
+
+    The arrangement ``CaseStore.clear`` and ``arm_the_lost_booking_response`` already have: a second
+    caller is how a narrow capability becomes a broad one without anybody deciding to widen it.
+    ``scripts/demo_serve.py`` is a composition root of its own and is outside the package.
+    """
+
+    def test_only_the_session_composition_root_names_the_factory(self) -> None:
+        callers: list[str] = []
+        for path in Path(careloop.__file__).parent.rglob("*.py"):
+            if path.name == "adversary.py":
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Name) and node.id == "adversarial_proposals":
+                    callers.append(path.name)
+
+        assert sorted(set(callers)) == ["sessions.py"]
+
+    def test_no_route_node_or_tool_can_reach_the_fixture(self) -> None:
+        """The graph, the policy layer and the tools may not name any of this.
+
+        A node that knew a case was the adversarial one could behave differently on it, and the
+        whole claim is that nothing after the proposal behaves differently at all.
+        """
+        forbidden = {
+            "HOSTILE_PROPOSALS",
+            "AdversarialProposals",
+            "adversarial_proposals",
+            "hostile_planner",
+            "ADVERSARIAL_RATIONALE",
+        }
+        root = Path(careloop.__file__).parent
+        offenders: list[str] = []
+        for subpackage in ("graph", "policy", "tools", "state", "provenance", "agents"):
+            for path in (root / subpackage).rglob("*.py"):
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+                for node in ast.walk(tree):
+                    named = (
+                        {node.module or ""} | {alias.name for alias in node.names}
+                        if isinstance(node, ast.ImportFrom)
+                        else {alias.name for alias in node.names}
+                        if isinstance(node, ast.Import)
+                        else {node.id}
+                        if isinstance(node, ast.Name)
+                        else {node.attr}
+                        if isinstance(node, ast.Attribute)
+                        else set()
+                    )
+                    if named & forbidden or "careloop.api.adversary" in named:
+                        offenders.append(f"{subpackage}/{path.name}")
+
+        assert offenders == []

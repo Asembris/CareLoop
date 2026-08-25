@@ -71,8 +71,25 @@ video_url = ""
 #   injection     scripts/verify_lock.py            13 runs of the poison-only scenario, 2026-08-19
 #   readback      tests/test_verify_readback.py     four booking fields, one mutant each
 #   e2e           scripts/verify_lock.py            25 deployed runs, 2026-08-19
-#   tests         python -m pytest -q               offline, on the mock provider, $0
+#   tests         python -m pytest --collect-only   offline, on the mock provider, $0
 #
+# **`tests` counts what pytest collects, and that is a correction rather than a preference.** It
+# read `2720 passed` while the suite collected more than twice that -- a figure somebody wrote down
+# after a run nobody remembers, on the one page in this repository that no test and no CI job read.
+# It is now derived, by `tests/test_published_evidence.py`, from pytest's own collection: a count of
+# how many tests there are is something an offline check can honestly produce, where "and they all
+# passed" is CI's claim on every push and is what the row's own `method` line names. It is
+# reliability *metadata* and is deliberately no part of any CareLoopBench domain -- a total test
+# count says how much there is, never that any particular property holds. Adding a test module moves
+# this line, which is the point.
+#
+# **Every other row is derived too, and two deliberately are not.** `unauthorized` and `mutation`
+# come from `evals.replay`'s own report, `readback` from the size of the verifier's own comparison
+# map. `injection` and `e2e` are measurements against the *deployed* demo on 2026-08-19: they cost
+# real model calls and cannot be reproduced offline, so they are named in that file's
+# `OPERATOR_MEASURED` table with the tool and the day that produced them rather than given an
+# offline substitute that would be worth less than the honest absence of one.
+
 # **`e2e` is `24 of 25` and not `25 of 25`, deliberately.** One resume run ended FAILED because the
 # model failed twice running to form a proposal satisfying its own schema. Nothing unsafe happened
 # and nothing was performed, but it is a real outcome and the entry's own caveat line says what it
@@ -83,7 +100,7 @@ injection = "0 of 13"
 mutation = "320 of 320"
 readback = "4 of 4"
 e2e = "24 of 25"
-tests = "2720 passed"
+tests = "5955 collected"
 
 # The two rows of the boundary-removed counterfactual. Empty keeps the pristine em dash.
 [counterfactual]

@@ -1,7 +1,7 @@
 {
   "careloopbench": {
     "tier": "core",
-    "generated_at_commit": "d5e70fd080cd7daba875ab3691b661753eac5f0b",
+    "generated_at_commit": "14ef6ef5dbd4548d1cc03ed574fda86085aab3ec",
     "registry_digest": "50388296002d6a4400c2c6879da5cd68f04d90c02409c68cc0c5612c90d1bd66",
     "tests_run": 1491
   },

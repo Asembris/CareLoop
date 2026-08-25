@@ -196,7 +196,13 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["careloop*"]
+# `careloop` and its subpackages, and deliberately not `careloop*`. That glob is one character
+# from correct and would have shipped `careloopbench` inside the distribution: the benchmark is a
+# measuring instrument that lives in the repository, exactly as `bench/`, `evals/`, `evaluators/`
+# and `demoworld/` do, and a reporter that installed itself alongside the thing it reports on
+# would be in the deployed process with no reason to be there. `tests/test_careloopbench.py`
+# asserts this rather than trusting the glob.
+include = ["careloop", "careloop.*"]
 
 [tool.setuptools.package-data]
 careloop = ["policy/*.yaml", "events/fixtures/*.json", "tools/fixtures/*.pdf"]

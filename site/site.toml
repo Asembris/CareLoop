@@ -100,7 +100,7 @@ injection = "0 of 13"
 mutation = "320 of 320"
 readback = "4 of 4"
 e2e = "24 of 25"
-tests = "5981 collected"
+tests = "5984 collected"
 
 # The two rows of the boundary-removed counterfactual. Empty keeps the pristine em dash.
 [counterfactual]

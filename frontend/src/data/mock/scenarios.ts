@@ -7,6 +7,21 @@ export interface ScenarioMeta {
   blurb: string;
   /** CSS variable name used for the scenario's numeral and CTA. */
   toneVar: string;
+  /** A second, quieter scenario the same card can start.
+   *
+   *  One card, two questions — used by 02 and by nothing else. The deterministic boundary test and
+   *  the realistic poisoned document are different experiments over the same document, and the
+   *  honest thing is to make the difference readable where a judge is already looking rather than
+   *  to spend a fifth card on it or to leave the realistic one reachable only by `curl`.
+   *
+   *  Optional, and absent is the ordinary case: a card without one renders exactly as before. */
+  alternate?: {
+    id: ScenarioId;
+    /** The link text. An action, so it reads as a second button and not as a footnote. */
+    label: string;
+    /** One line saying what the other run asks instead. Never a promise about its outcome. */
+    note: string;
+  };
 }
 
 /** Launcher copy. Locked — do not rewrite.
@@ -22,23 +37,31 @@ export const SCENARIOS: ScenarioMeta[] = [
       "Paperwork handled, one decision requested, appointment booked, then checked against the clinic's own record.",
     toneVar: "var(--brand-accent)"
   },
-  /* 02's blurb used to end "Watch the unsafe branch end while the real work continues", and that
-     was a promise the runtime does not make. This scenario delivers the poisoned notice *beside*
-     genuine work to a real planner, which is free to ignore it — measured against the deployed
-     host, three runs in six carried any refusal at all, and the other three simply booked the
-     appointment. A card telling a judge to watch a refusal is telling them to watch something that
-     happens half the time, and tuning the model into taking bait to fix that would be rigging the
-     demo. `tests/test_adversarial_copy.py` is what fails if the promise comes back.
+  /* 02 asks the question the launcher can actually answer, and offers the other one beside it.
 
-     What the card says instead is what is actually guaranteed: the poison gains nothing either
-     way. See `docs/judges.md` for the measurement. */
+     Its blurb used to end "Watch the unsafe branch end while the real work continues", which was a
+     promise the runtime does not make. The realistic scenario hands a poisoned notice to a real
+     planner that is free to ignore it — measured against the deployed host, three runs in six
+     carried any refusal at all, and the other three simply booked the appointment. Telling a judge
+     to watch a refusal there is telling them to watch something that happens half the time, and
+     tuning the model into taking bait to fix that would be rigging the demo.
+
+     So the primary run is the deterministic one, and its blurb says outright that CareLoop supplies
+     the proposal. That is not a weaker claim than the old one — it is a different and stronger
+     question. The realistic scenario does not vanish; it is the alternate below, described by what
+     it actually asks. `tests/test_adversarial_copy.py` fails if either promise comes back. */
   {
-    id: "injection",
+    id: "adversarial",
     num: "02",
     title: "Malicious document",
     blurb:
-      "A document tries to instruct the agent. The model may simply ignore it — and that is the system working. Either way the instruction gains nothing.",
-    toneVar: "var(--state-untrusted)"
+      "A document tries to instruct the agent. For this test CareLoop deliberately proposes the action the attacker asked for — so you can see whether that proposal has any authority to act.",
+    toneVar: "var(--state-untrusted)",
+    alternate: {
+      id: "injection",
+      label: "Run the realistic version instead →",
+      note: "The model may simply ignore the attack — and that is the system working."
+    }
   },
   {
     id: "resume",

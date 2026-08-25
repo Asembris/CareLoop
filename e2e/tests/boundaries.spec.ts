@@ -160,6 +160,52 @@ test.describe("the boundary is read from what enforces it", () => {
   });
 });
 
+test.describe("a deep link from a settled case", () => {
+  /* `OutcomePanel`'s ALLOWED BY row links to `/trust#<tool>`, and the obvious implementation — the
+   * browser's own `:target` — does not work: the fragment is resolved at navigation time and the
+   * capabilities do not exist then, so nothing matches and nothing scrolls. Reproduced on the
+   * deployed demo before the fix, with the card in the DOM under the right id and `:target` null.
+   *
+   * Asserted in a real browser rather than in jsdom, which has no layout and therefore cannot tell
+   * a scroll that happened from one that did not. */
+
+  test("marks and reveals the capability the link names", async ({ page }) => {
+    await page.goto("/trust#book_appointment");
+    const booking = card(page, "book_appointment");
+    await booking.waitFor();
+
+    await expect(booking).toHaveAttribute("data-locate", "true");
+    await expect(card(page, "send_email")).not.toHaveAttribute("data-locate", "true");
+
+    // In the viewport and clear of the sticky header, which is the whole point of a deep link:
+    // landing on the card rather than merely having it somewhere on the page.
+    await expect(booking).toBeInViewport();
+    const box = await booking.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.y).toBeGreaterThan(80);
+  });
+
+  test("reveals a capability far enough down that arriving means scrolling", async ({ page }) => {
+    // `book_appointment` is the first card and could pass by luck. This one cannot: it is below the
+    // fold on load, so the assertion is that the page really moved.
+    await page.goto("/trust");
+    await card(page, "grant_portal_access").waitFor();
+    expect(await page.evaluate(() => Math.round(window.scrollY))).toBe(0);
+
+    await page.goto("/trust#grant_portal_access");
+    await card(page, "grant_portal_access").waitFor();
+
+    await expect(card(page, "grant_portal_access")).toBeInViewport();
+    expect(await page.evaluate(() => Math.round(window.scrollY))).toBeGreaterThan(0);
+  });
+
+  test("marks nothing when the page is opened without a fragment", async ({ page }) => {
+    await page.goto("/trust");
+    await card(page, "book_appointment").waitFor();
+    await expect(page.locator("[data-locate]")).toHaveCount(0);
+  });
+});
+
 test.describe("the nav says what the page is", () => {
   test("reaches My Boundaries and marks it current", async ({ page }) => {
     await page.goto("/");

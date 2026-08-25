@@ -940,10 +940,116 @@ CLAIMS: Final[tuple[Claim, ...]] = (
 check_registry(CLAIMS)
 
 
+#: Live proofs, declared here beside the executable claims so that one registry answers "what does
+#: CareLoop claim" and one report shows both kinds side by side.
+#:
+#: **Three of the four have no stored record and are deliberately not faked.** Each names the
+#: command that would produce one; ``evidence/live/README.md`` carries the same table for an
+#: operator. A ``NOT_RUN`` row is worth more than a transcription of prose into something shaped
+#: like tool output, and it is the row that makes the whole surface trustworthy — a page on which
+#: everything is proven is a page nobody checked.
+LIVE_CLAIMS: Final[tuple[Claim, ...]] = (
+    Claim(
+        id="identity.a-real-token-was-verified-through-the-deployment",
+        question="Has a real OIDC access token ever been verified by the deployed build?",
+        domain=IDENT,
+        level=ExecutionLevel.LIVE_DEPLOYMENT,
+        artifact=ArtifactRef(
+            proof_id="live.production-identity",
+            path="evidence/live/production-identity.json",
+            tool=(
+                "a hosted-UI login by hand, with scripts/verify_deploy.py for the anonymous half"
+            ),
+            surface=(
+                "careloop/identity/",
+                "careloop/api/auth.py",
+                "careloop/api/access.py",
+                "careloop/api/deps.py",
+                "deploy/caregivers.json",
+                "frontend/src/services/auth.ts",
+            ),
+        ),
+        scope=(
+            "The identity boundary when production mode is served. The public URL serves demo "
+            "mode today, which deploy/careloop.env states and a test asserts."
+        ),
+    ),
+    Claim(
+        id="settlement.a-real-trace-was-judged-in-aws",
+        question="Has an AWS evaluator ever judged CareLoop's settlement claim on a real trace?",
+        domain=S,
+        level=ExecutionLevel.LIVE_DEPLOYMENT,
+        artifact=ArtifactRef(
+            proof_id="live.agentcore-settlement",
+            path="evidence/live/agentcore-settlement.json",
+            tool=(
+                "python scripts/evaluations_prove.py --out evidence/live/agentcore-settlement.json"
+            ),
+            surface=(
+                "evaluators/",
+                "careloop/graph/witness.py",
+                "scripts/witness_span.py",
+                "scripts/observability.py",
+            ),
+        ),
+        scope=(
+            "Whether the instrumented transport corroborates the claim beside it. AWS never "
+            "queries the clinic, and this is not a proof that CareLoop cannot lie."
+        ),
+    ),
+    Claim(
+        id="effect.the-object-stores-write-contract-was-measured",
+        question="Was the create-once write contract measured against real Amazon S3?",
+        domain=E,
+        level=ExecutionLevel.LIVE_PROVIDER,
+        artifact=ArtifactRef(
+            proof_id="live.objectstore-contract",
+            path="evidence/live/objectstore-contract.json",
+            tool=(
+                "python scripts/objectstore_contract.py --bucket <scratch>"
+                " --out evidence/live/objectstore-contract.json"
+            ),
+            surface=(
+                "careloop/tools/objectstore.py",
+                "objectstore/",
+                "scripts/objectstore_contract.py",
+            ),
+        ),
+        scope=(
+            "The provider's behaviour on one day. The offline suite runs the same assertions "
+            "against the substitute on every commit, which is what keeps them comparable."
+        ),
+    ),
+    Claim(
+        id="adversarial.the-poisoned-scenario-was-run-against-the-deployment",
+        question="Has the poison-only scenario ever been run against the deployed build?",
+        domain=R,
+        level=ExecutionLevel.LIVE_DEPLOYMENT,
+        artifact=ArtifactRef(
+            proof_id="live.deployed-injection-lock",
+            path="evidence/live/deployed-lock.json",
+            tool="python scripts/verify_lock.py --out evidence/live/deployed-lock.json",
+            surface=("careloop/", "demoworld/", "frontend/src/"),
+        ),
+        scope=(
+            "Runs of one scenario against one model on one day. The corpus replay is the "
+            "attack-agnostic measurement and is executed on every invocation."
+        ),
+    ),
+)
+
+check_registry(CLAIMS + LIVE_CLAIMS)
+
+#: What CareLoopBench reports on: everything declared, executable and live alike.
+EVERY_CLAIM: Final[tuple[Claim, ...]] = CLAIMS + LIVE_CLAIMS
+
+
 __all__ = [
     "ARTIFACT_ROOT",
     "CLAIMS",
     "CLAIM_ID",
+    "EVERY_CLAIM",
+    "LIVE_CLAIMS",
     "NODE_ID",
     "ArtifactRef",
     "Claim",

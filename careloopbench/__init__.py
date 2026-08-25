@@ -12,7 +12,16 @@ Repo-only, exactly as ``evals/`` and ``evaluators/`` are: ``pyproject.toml`` pac
 
 from __future__ import annotations
 
-from careloopbench.claims import CLAIMS, Claim, RegistryRefused
+from careloopbench.claims import CLAIMS, EVERY_CLAIM, LIVE_CLAIMS, Claim, RegistryRefused
 from careloopbench.levels import Domain, ExecutionLevel, Status
 
-__all__ = ["CLAIMS", "Claim", "Domain", "ExecutionLevel", "RegistryRefused", "Status"]
+__all__ = [
+    "CLAIMS",
+    "EVERY_CLAIM",
+    "LIVE_CLAIMS",
+    "Claim",
+    "Domain",
+    "ExecutionLevel",
+    "RegistryRefused",
+    "Status",
+]

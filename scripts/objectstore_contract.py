@@ -35,6 +35,8 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import json
+import pathlib
 import sys
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -283,6 +285,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--prefix", default="careloop-contract")
     parser.add_argument("--endpoint-url", default=None, help="point at a substitute instead of AWS")
     parser.add_argument("--region", default="us-east-1")
+    parser.add_argument(
+        "--out",
+        default=None,
+        help="also write the observations as JSON, for CareLoopBench to ingest verbatim",
+    )
     arguments = parser.parse_args(argv)
 
     import boto3
@@ -294,6 +301,25 @@ def main(argv: list[str] | None = None) -> int:
     for check in report.checks:
         print(check)
     print(f"\n{len(report.checks) - len(report.failures)}/{len(report.checks)} satisfied")
+    if arguments.out:
+        # Observations only: what each check is called, whether it held, and what the
+        # provider actually answered. No bucket, no key, no prefix and no endpoint --
+        # a record of a measurement is not a place to publish where it was taken.
+        pathlib.Path(arguments.out).write_text(
+            json.dumps(
+                {
+                    "checks": [
+                        {"name": c.name, "satisfied": c.satisfied, "observed": c.observed}
+                        for c in report.checks
+                    ],
+                    "satisfied": report.satisfied,
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        print(f"wrote {arguments.out}")
     return 0 if report.satisfied else 1
 
 

@@ -1,0 +1,34 @@
+{
+  "proof_id": "live.production-identity",
+  "tool": "a hosted-UI login completed by hand, with scripts/verify_deploy.py for the anonymous half",
+  "attested_commit": "49630e5da9398ba38b59b4cf52c3a835114276fc",
+  "attestation": "OPERATOR",
+  "ingested_at_commit": "087c6bfeb4bc0c90632fe2b21583c736ec2e8ed0",
+  "produced_at": "2026-08-24",
+  "environment": "the deployed build behind CloudFront, served with CARELOOP_AUTH_MODE=production",
+  "surface_digest": "564c30c2cddc67982e0a1ab1e69e0fd31a900a98abdde685c15e832f4abbd5b4",
+  "raw": {
+    "note": "No machine-readable output exists for this run. It was a browser login and a sequence of requests through the distribution, and what is recorded here is what the operator observed, attested by them. It is deliberately not dressed up as tool output: the attestation field says OPERATOR for exactly this reason. Nothing here carries a token, a claim, an issuer subject or any other credential.",
+    "identity_provider": "Amazon Cognito user pool, hosted UI, public PKCE client, openid scope only",
+    "observed": [
+      "a real hosted-UI login completed against the deployed distribution",
+      "the authorization-code exchange used PKCE and the returned state matched the one sent, exactly",
+      "the resulting access token was accepted through CloudFront and verified in FastAPI",
+      "the ID token from that same login was refused where the access token was accepted",
+      "a tampered token was refused",
+      "the verified subject resolved, through CareLoop's own directory, to caregiver cg-proof-01",
+      "workspace ownership held: a workspace belonging to another principal did not resolve",
+      "a booking for the granted patient PT-4417 was authorised and performed against the clinic",
+      "the clinic was read back independently and the observation was MATCHED; the case reached DONE",
+      "a document was uploaded to real Amazon S3 and settled by a fresh read; the case reached DONE",
+      "an X-Caregiver header supplied by the caller carried no production authority",
+      "an unauthenticated caller produced zero external effects at the provider",
+      "the provider payloads carried no caller identity"
+    ],
+    "not_observed": [
+      "nothing here establishes that a token cannot be forged, only that these ones verified or were refused as described",
+      "no measurement of token revocation or refresh was made; there is no revocation story to measure",
+      "the distribution now serves CARELOOP_AUTH_MODE=demo again, which deploy/careloop.env states and tests/test_deployed_identity_configuration.py asserts. That is a change of which mode is served, not a change to the boundary this proof is about."
+    ]
+  }
+}

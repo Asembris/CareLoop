@@ -38,7 +38,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Final
 
-from careloopbench.claims import CLAIMS, ArtifactRef, Claim
+from careloopbench.claims import EVERY_CLAIM, ArtifactRef, Claim
 from careloopbench.levels import SHORT_COMMIT, Status
 from careloopbench.report import ClaimResult
 
@@ -193,7 +193,7 @@ def ingest_one(claim: Claim, *, root: Path = REPO_ROOT) -> ClaimResult:
 
 
 def live_results(
-    claims: Sequence[Claim] = CLAIMS, *, root: Path = REPO_ROOT
+    claims: Sequence[Claim] = EVERY_CLAIM, *, root: Path = REPO_ROOT
 ) -> dict[str, ClaimResult]:
     """Every live claim, resolved. Executed claims are absent, which is what the caller expects."""
     return {claim.id: ingest_one(claim, root=root) for claim in claims if not claim.is_executed}

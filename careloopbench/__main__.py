@@ -24,7 +24,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from careloopbench.claims import CLAIMS, evidence_nodes, selected
+from careloopbench.claims import EVERY_CLAIM, evidence_nodes, selected
 from careloopbench.ingest import ArtifactRefused, live_results
 from careloopbench.levels import TIERS
 from careloopbench.report import build, render_console, render_markdown, to_payload
@@ -47,7 +47,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     arguments = parser.parse_args(argv)
 
-    covered = selected(CLAIMS, TIERS[arguments.tier])
+    covered = selected(EVERY_CLAIM, TIERS[arguments.tier])
     try:
         run = run_evidence(evidence_nodes(covered))
     except EvidenceDoesNotCollect as broken:

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import json
 import re
 from pathlib import Path
 from typing import Final
@@ -34,6 +35,14 @@ from careloopbench.claims import (
     selected,
 )
 from careloopbench.levels import TIERS, Domain, ExecutionLevel, Status
+from careloopbench.report import (
+    BenchResult,
+    ClaimResult,
+    evaluate,
+    registry_digest,
+    render_markdown,
+    to_payload,
+)
 from careloopbench.runner import (
     ALLOW_ALL,
     PROTECTED,
@@ -517,3 +526,178 @@ class TestTheAdversarialContrastIsStructural:
         assert evidence.protected.refused == evidence.protected.attempts
         assert evidence.protected.effects == 0
         assert evidence.protected.errored == 0
+
+
+class TestTheRendererCarriesNoNumbersOfItsOwn:
+    """Every count in both outputs is derived. This is what stops one being typed in.
+
+    ``0`` and ``1`` are permitted because they are indices and emptiness, never a benchmark
+    value; a formatting width lives in :mod:`careloopbench.levels` for the same reason. Anything
+    else appearing as an integer literal in the renderer would be a number nobody re-derived,
+    which is the hand-maintained ledger this layer exists to replace.
+    """
+
+    def integer_literals(self, path: Path) -> list[int]:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        return [
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, int)
+            # bool is an int subclass; a flag is not a count.
+            and not isinstance(node.value, bool)
+        ]
+
+    def test_the_renderer_holds_only_indices(self) -> None:
+        assert set(self.integer_literals(BENCH_ROOT / "report.py")) <= {0, 1}
+
+    def test_the_check_would_notice(self) -> None:
+        """Vacuity: a module that really does carry a written-down total must be caught."""
+        written = ast.parse("PROVEN = 61\n")
+        found = [
+            node.value
+            for node in ast.walk(written)
+            if isinstance(node, ast.Constant) and isinstance(node.value, int)
+        ]
+
+        assert not set(found) <= {0, 1}
+
+
+def synthetic_result(*statuses: Status) -> BenchResult:
+    """A result carrying one claim per given status, spread across the domains that exist."""
+    rows = tuple(
+        ClaimResult(a_claim(id=f"authority.s{index}", domain=Domain.AUTHORITY_INTEGRITY), status)
+        for index, status in enumerate(statuses)
+    )
+    return BenchResult(
+        tier="quick",
+        head_commit="0" * 40,
+        registry_digest="f" * 64,
+        results=rows,
+        adversarial=None,
+        tests_run=len(rows),
+    )
+
+
+class TestNothingButProvenIsCounted:
+    """The fold that would matter most, refused for each status in turn."""
+
+    @pytest.mark.parametrize(
+        "status",
+        [Status.PROVEN_AT, Status.STALE, Status.NOT_RUN, Status.FAILED, Status.NOT_APPLICABLE],
+    )
+    def test_a_non_proven_status_is_in_the_denominator_and_not_the_numerator(
+        self, status: Status
+    ) -> None:
+        payload = to_payload(synthetic_result(Status.PROVEN, status))
+        authority = next(
+            row for row in payload["domains"] if row["domain"] == Domain.AUTHORITY_INTEGRITY.value
+        )
+
+        assert authority["proven"] == 1
+        assert authority["declared"] == 2
+        assert authority["by_status"][status.value] == 1
+
+    def test_every_status_present_is_reported_by_its_own_name(self) -> None:
+        payload = to_payload(synthetic_result(Status.PROVEN, Status.STALE, Status.NOT_APPLICABLE))
+        authority = next(
+            row for row in payload["domains"] if row["domain"] == Domain.AUTHORITY_INTEGRITY.value
+        )
+
+        assert set(authority["by_status"]) == {
+            Status.PROVEN.value,
+            Status.STALE.value,
+            Status.NOT_APPLICABLE.value,
+        }
+
+    def test_a_domain_with_nothing_in_it_is_still_declared(self) -> None:
+        payload = to_payload(synthetic_result(Status.PROVEN))
+        titles = {row["domain"] for row in payload["domains"]}
+
+        assert titles == {domain.value for domain in Domain}
+
+
+class TestFailingEvidenceCannotRenderAsProven:
+    """The end-to-end version, over the synthetic tree whose tests really do fail."""
+
+    def test_a_claim_whose_evidence_fails_names_the_node_and_is_not_proven(
+        self, synthetic_repo: Path
+    ) -> None:
+        good = a_claim(id="authority.good", evidence=("tests/test_synthetic.py::TestItPasses",))
+        bad = a_claim(id="authority.bad", evidence=("tests/test_synthetic.py::TestItFails",))
+        claims = (*one_per_domain_without_authority(), good, bad)
+        check_registry(claims)
+
+        run = run_evidence(
+            ("tests/test_synthetic.py::TestItPasses", "tests/test_synthetic.py::TestItFails"),
+            root=synthetic_repo,
+        )
+        results = {row.claim.id: row for row in evaluate(claims, tier="quick", run=run)}
+
+        assert results["authority.good"].status is Status.PROVEN
+        assert results["authority.bad"].status is Status.FAILED
+        assert "TestItFails" in results["authority.bad"].detail
+
+    def test_a_claim_whose_counter_evidence_fails_is_not_proven_either(
+        self, synthetic_repo: Path
+    ) -> None:
+        """A detector that stopped reproducing the old behaviour stops distinguishing anything."""
+        claim = a_claim(
+            id="authority.backed",
+            evidence=("tests/test_synthetic.py::TestItPasses",),
+            counter_evidence=("tests/test_synthetic.py::TestItFails",),
+        )
+        run = run_evidence(
+            ("tests/test_synthetic.py::TestItPasses", "tests/test_synthetic.py::TestItFails"),
+            root=synthetic_repo,
+        )
+
+        (result,) = evaluate((claim,), tier="quick", run=run)
+
+        assert result.status is Status.FAILED
+
+
+def one_per_domain_without_authority() -> tuple[Claim, ...]:
+    """Domain coverage without occupying the authority ids the tests above use."""
+    others = [claim for claim in one_per_domain() if claim.domain is not Domain.AUTHORITY_INTEGRITY]
+    return (*others, a_claim(id="authorityintegrity.example"))
+
+
+CANONICAL: Final[Path] = REPO_ROOT / "docs" / "evidence.json"
+RENDERED: Final[Path] = REPO_ROOT / "docs" / "evidence.md"
+
+
+class TestThePublishedPairAgreesWithItself:
+    """``docs/evidence.md`` is a projection of ``docs/evidence.json`` and of nothing else.
+
+    Both are committed, which is what makes this assertion cheap: it needs no pytest subprocess
+    and no replay, so a broken projection is caught by the targeted gate rather than only by a
+    full run. And because the canonical file carries the registry's digest, a claim edited without
+    regenerating the pair is red here too — which is the only thing standing between "the registry
+    changed" and "the published page quietly describes a different set of claims".
+    """
+
+    def payload(self) -> dict[str, object]:
+        return json.loads(CANONICAL.read_text(encoding="utf-8"))
+
+    def test_the_markdown_is_exactly_what_the_json_renders(self) -> None:
+        assert render_markdown(self.payload()) == RENDERED.read_text(encoding="utf-8")
+
+    def test_the_canonical_result_describes_the_registry_this_repository_declares(self) -> None:
+        assert self.payload()["careloopbench"]["registry_digest"] == registry_digest(CLAIMS)
+
+    def test_it_names_the_commit_it_was_generated_at_rather_than_certifying_this_one(self) -> None:
+        """The pair is regenerated deliberately, so it always names an earlier commit than HEAD.
+
+        That is the honest shape and the header says so in those words. What must never happen is
+        the file implying it was re-derived against whatever a reader has checked out.
+        """
+        text = RENDERED.read_text(encoding="utf-8")
+
+        assert "generated at commit" in text
+        assert len(str(self.payload()["careloopbench"]["generated_at_commit"])) > MODULES_AT_LEAST
+
+    def test_every_declared_claim_has_a_row(self) -> None:
+        rows = {row["id"] for row in self.payload()["claims"]}  # type: ignore[union-attr]
+
+        assert rows == {claim.id for claim in CLAIMS}

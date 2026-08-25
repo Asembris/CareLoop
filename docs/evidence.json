@@ -1,8 +1,8 @@
 {
   "careloopbench": {
     "tier": "core",
-    "generated_at_commit": "f57880af3a97cf9f6615d3ae79d9e060e194b58b",
-    "registry_digest": "c02db4ed66dd38e5c9c13b6f8522a5b2833bd0cbb4782c1b10805a02ee96cc51",
+    "generated_at_commit": "087c6bfeb4bc0c90632fe2b21583c736ec2e8ed0",
+    "registry_digest": "995b4706ff029e5e574019fa123d43b747d44769012fdbb858f4bbf44a8affab",
     "tests_run": 1230
   },
   "domains": [
@@ -19,41 +19,45 @@
     {
       "domain": "EXTERNAL_EFFECT_SAFETY",
       "title": "External-effect safety",
-      "declared": 9,
+      "declared": 10,
       "proven": 9,
       "mutation_backed": 1,
       "by_status": {
-        "PROVEN": 9
+        "PROVEN": 9,
+        "NOT_RUN": 1
       }
     },
     {
       "domain": "SETTLEMENT_INTEGRITY",
       "title": "Settlement integrity",
-      "declared": 8,
+      "declared": 9,
       "proven": 8,
       "mutation_backed": 3,
       "by_status": {
-        "PROVEN": 8
+        "PROVEN": 8,
+        "NOT_RUN": 1
       }
     },
     {
       "domain": "IDENTITY_AND_ISOLATION",
       "title": "Identity and isolation",
-      "declared": 12,
+      "declared": 13,
       "proven": 12,
       "mutation_backed": 1,
       "by_status": {
-        "PROVEN": 12
+        "PROVEN": 12,
+        "PROVEN_AT": 1
       }
     },
     {
       "domain": "ADVERSARIAL_ROBUSTNESS",
       "title": "Adversarial robustness",
-      "declared": 3,
+      "declared": 4,
       "proven": 3,
       "mutation_backed": 1,
       "by_status": {
-        "PROVEN": 3
+        "PROVEN": 3,
+        "NOT_RUN": 1
       }
     },
     {
@@ -1114,6 +1118,98 @@
         "tests/test_recovery_copy.py::TestTheSweepCatchesWhatItIsFor"
       ],
       "artifact": null
+    },
+    {
+      "id": "identity.a-real-token-was-verified-through-the-deployment",
+      "question": "Has a real OIDC access token ever been verified by the deployed build?",
+      "domain": "IDENTITY_AND_ISOLATION",
+      "level": "LIVE_DEPLOYMENT",
+      "status": "PROVEN_AT",
+      "detail": "proven at 49630e5da939 · operator-attested",
+      "scope": "The identity boundary when production mode is served. The public URL serves demo mode today, which deploy/careloop.env states and a test asserts.",
+      "mutation_backed": false,
+      "evidence": [],
+      "counter_evidence": [],
+      "artifact": {
+        "proof_id": "live.production-identity",
+        "path": "evidence/live/production-identity.json",
+        "tool": "a hosted-UI login by hand, with scripts/verify_deploy.py for the anonymous half",
+        "surface": [
+          "careloop/identity/",
+          "careloop/api/auth.py",
+          "careloop/api/access.py",
+          "careloop/api/deps.py",
+          "deploy/caregivers.json",
+          "frontend/src/services/auth.ts"
+        ]
+      }
+    },
+    {
+      "id": "settlement.a-real-trace-was-judged-in-aws",
+      "question": "Has an AWS evaluator ever judged CareLoop's settlement claim on a real trace?",
+      "domain": "SETTLEMENT_INTEGRITY",
+      "level": "LIVE_DEPLOYMENT",
+      "status": "NOT_RUN",
+      "detail": "no stored proof; run python scripts/evaluations_prove.py --out evidence/live/agentcore-settlement.json",
+      "scope": "Whether the instrumented transport corroborates the claim beside it. AWS never queries the clinic, and this is not a proof that CareLoop cannot lie.",
+      "mutation_backed": false,
+      "evidence": [],
+      "counter_evidence": [],
+      "artifact": {
+        "proof_id": "live.agentcore-settlement",
+        "path": "evidence/live/agentcore-settlement.json",
+        "tool": "python scripts/evaluations_prove.py --out evidence/live/agentcore-settlement.json",
+        "surface": [
+          "evaluators/",
+          "careloop/graph/witness.py",
+          "scripts/witness_span.py",
+          "scripts/observability.py"
+        ]
+      }
+    },
+    {
+      "id": "effect.the-object-stores-write-contract-was-measured",
+      "question": "Was the create-once write contract measured against real Amazon S3?",
+      "domain": "EXTERNAL_EFFECT_SAFETY",
+      "level": "LIVE_PROVIDER",
+      "status": "NOT_RUN",
+      "detail": "no stored proof; run python scripts/objectstore_contract.py --bucket <scratch> --out evidence/live/objectstore-contract.json",
+      "scope": "The provider's behaviour on one day. The offline suite runs the same assertions against the substitute on every commit, which is what keeps them comparable.",
+      "mutation_backed": false,
+      "evidence": [],
+      "counter_evidence": [],
+      "artifact": {
+        "proof_id": "live.objectstore-contract",
+        "path": "evidence/live/objectstore-contract.json",
+        "tool": "python scripts/objectstore_contract.py --bucket <scratch> --out evidence/live/objectstore-contract.json",
+        "surface": [
+          "careloop/tools/objectstore.py",
+          "objectstore/",
+          "scripts/objectstore_contract.py"
+        ]
+      }
+    },
+    {
+      "id": "adversarial.the-poisoned-scenario-was-run-against-the-deployment",
+      "question": "Has the poison-only scenario ever been run against the deployed build?",
+      "domain": "ADVERSARIAL_ROBUSTNESS",
+      "level": "LIVE_DEPLOYMENT",
+      "status": "NOT_RUN",
+      "detail": "no stored proof; run python scripts/verify_lock.py --out evidence/live/deployed-lock.json",
+      "scope": "Runs of one scenario against one model on one day. The corpus replay is the attack-agnostic measurement and is executed on every invocation.",
+      "mutation_backed": false,
+      "evidence": [],
+      "counter_evidence": [],
+      "artifact": {
+        "proof_id": "live.deployed-injection-lock",
+        "path": "evidence/live/deployed-lock.json",
+        "tool": "python scripts/verify_lock.py --out evidence/live/deployed-lock.json",
+        "surface": [
+          "careloop/",
+          "demoworld/",
+          "frontend/src/"
+        ]
+      }
     }
   ],
   "adversarial": {

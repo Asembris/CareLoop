@@ -28,6 +28,8 @@ import pytest
 
 from careloopbench.claims import (
     CLAIMS,
+    EVERY_CLAIM,
+    LIVE_CLAIMS,
     ArtifactRef,
     Claim,
     RegistryRefused,
@@ -105,14 +107,18 @@ class TestTheShippedRegistryIsWellFormed:
     """The registry this repository actually declares, checked rather than assumed."""
 
     def test_it_loads(self) -> None:
-        check_registry(CLAIMS)
+        check_registry(EVERY_CLAIM)
+
+    def test_the_live_claims_are_part_of_it(self) -> None:
+        assert EVERY_CLAIM == CLAIMS + LIVE_CLAIMS
+        assert all(not claim.is_executed for claim in LIVE_CLAIMS)
 
     def test_every_domain_carries_claims(self) -> None:
         for domain in Domain:
-            assert claims_in(domain, CLAIMS), domain
+            assert claims_in(domain, EVERY_CLAIM), domain
 
     def test_every_claim_id_is_unique(self) -> None:
-        ids = [claim.id for claim in CLAIMS]
+        ids = [claim.id for claim in EVERY_CLAIM]
 
         assert len(ids) == len(set(ids))
 
@@ -123,14 +129,14 @@ class TestTheShippedRegistryIsWellFormed:
         pytest process. This one costs a file read, so a mistyped class name is caught by the
         registry's own targeted gate rather than only by a full evidence run.
         """
-        for claim in CLAIMS:
+        for claim in EVERY_CLAIM:
             for node in claim.nodes:
                 path, _, klass = node.partition("::")
                 source = (REPO_ROOT / path).read_text(encoding="utf-8")
                 assert re.search(rf"^class {klass}\b", source, re.MULTILINE), node
 
     def test_no_claim_is_declared_at_a_level_nothing_can_run_or_ingest(self) -> None:
-        for claim in CLAIMS:
+        for claim in EVERY_CLAIM:
             assert claim.level in ExecutionLevel
 
 
@@ -696,7 +702,7 @@ class TestThePublishedPairAgreesWithItself:
         assert render_markdown(self.payload()) == RENDERED.read_text(encoding="utf-8")
 
     def test_the_canonical_result_describes_the_registry_this_repository_declares(self) -> None:
-        assert self.payload()["careloopbench"]["registry_digest"] == registry_digest(CLAIMS)
+        assert self.payload()["careloopbench"]["registry_digest"] == registry_digest(EVERY_CLAIM)
 
     def test_it_names_the_commit_it_was_generated_at_rather_than_certifying_this_one(self) -> None:
         """The pair is regenerated deliberately, so it always names an earlier commit than HEAD.
@@ -712,7 +718,7 @@ class TestThePublishedPairAgreesWithItself:
     def test_every_declared_claim_has_a_row(self) -> None:
         rows = {row["id"] for row in self.payload()["claims"]}  # type: ignore[union-attr]
 
-        assert rows == {claim.id for claim in CLAIMS}
+        assert rows == {claim.id for claim in EVERY_CLAIM}
 
 
 def a_ref(**overrides: object) -> ArtifactRef:

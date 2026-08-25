@@ -161,17 +161,51 @@ Nothing in it is a credential — no token, no password, no key. An address is *
 address CareLoop may write to; a subject is an opaque identifier the issuer already puts in every
 token.
 
-## What the deployed proof must show, once this exists
+## The deployed proof, as measured
 
-Through the real CloudFront distribution, never the origin:
+**This was performed.** The resources above were provisioned, `CARELOOP_AUTH_MODE=production` was
+deployed, and the seven checks below were carried out against the real CloudFront distribution —
+never the origin — on **2026-08-24**, at commit **`49630e5`**. That is the commit the claim
+certifies, and CareLoopBench renders it as exactly that:
+[`evidence/live/production-identity.json`](../evidence/live/production-identity.json), read by
+`careloopbench/ingest.py` and shown in [`evidence.md`](evidence.md) as
+`PROVEN_AT 49630e5da939 · operator-attested`.
 
-1. `GET /api/auth` reports `PRODUCTION` and publishes the login endpoints.
-2. A protected route with **no** token answers `401`.
-3. A malformed and an expired token both answer `401`.
-4. A hosted-UI login yields a bearer token that reaches FastAPI, verifies, maps to a caregiver, and
-   passes the patient grant.
-5. That caregiver's booking reaches Demo World and the independent read-back returns `MATCHED`.
-6. A second caregiver is refused that case with `404`, and the clinic holds nothing extra.
-7. The S3 upload path still works for an authorised caregiver.
+| # | Check | Result |
+| --- | --- | --- |
+| 1 | `GET /api/auth` reports `PRODUCTION` and publishes the login endpoints | measured |
+| 2 | A protected route with **no** token answers `401` | measured |
+| 3 | A malformed token and a tampered token both answer `401` | measured |
+| 4 | A hosted-UI login yields a bearer token that reaches FastAPI, verifies, maps to a caregiver, and passes the patient grant | measured |
+| 5 | That caregiver's booking reaches Demo World and the independent read-back returns `MATCHED` | measured — the case reached `DONE` |
+| 6 | A workspace belonging to another principal does not resolve, and the clinic holds nothing extra | measured |
+| 7 | The S3 upload path still works for an authorised caregiver | measured — a real `PutObject`, settled by a fresh read, case `DONE` |
 
-Until all seven are measured, the production identity claim is not earned.
+Four things beyond the list were measured in the same pass and are recorded with it: the
+authorization-code exchange used PKCE and the returned `state` matched exactly; the **ID token from
+that same login was refused** where the access token was accepted; an `X-Caregiver` header supplied
+by the caller carried no production authority; and an unauthenticated caller produced **zero**
+external effects at the provider, asserted against the clinic's own record rather than against a
+status code.
+
+**The attestation is `OPERATOR`, and that word is doing real work.** No machine-readable artifact
+exists for this run — it was a browser login and a sequence of requests through a CDN, and
+CareLoop's deployment publishes no build identifier on the wire, so nothing in the transcript could
+name the commit it ran against. The record therefore says a person observed this and attests to the
+commit themselves. It is deliberately not dressed up as tool output. Making it `MEASURED` would
+mean publishing a build id from `GET /api/health` or `GET /api/build`, which is a change to the
+product's own surface and is a separate decision.
+
+**What the record does not carry, on purpose:** no access token, no ID token, no `Authorization`
+header, no Cognito subject and no session id. `careloopbench/ingest.py` refuses a stored proof
+carrying any of them, by field name and by shape, and the repository's sweep over tracked text
+files covers that directory as well. The caregiver (`cg-proof-01`) and the patient (`PT-4417`) are
+synthetic fixtures and appear in the committed directory already.
+
+**The distribution serves `demo` again.** `deploy/careloop.env` says so and
+`tests/test_deployed_identity_configuration.py` asserts it, which is why the proof's declared
+dependency surface is the identity boundary itself — `careloop/identity/`, `careloop/api/auth.py`,
+`careloop/api/access.py`, `careloop/api/deps.py`, `deploy/caregivers.json` and the browser's login
+service — and not the line that decides which mode is served. Flipping that one word back is a
+one-value deploy; none of the code this proof is about has changed since it was taken, which is
+what keeps the row `PROVEN_AT` rather than `STALE`.

@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
-from careloopbench.claims import CLAIMS, Claim
+from careloopbench.claims import EVERY_CLAIM, Claim
 from careloopbench.levels import PROVEN_STATUSES, SHORT_COMMIT, TIERS, Domain, Status
 from careloopbench.runner import AdversarialEvidence, EvidenceRun, ReplaySide
 
@@ -91,7 +91,7 @@ def head_commit(root: Path = REPO_ROOT) -> str:
     return finished.stdout.strip() or UNKNOWN_COMMIT
 
 
-def registry_digest(claims: Sequence[Claim] = CLAIMS) -> str:
+def registry_digest(claims: Sequence[Claim] = EVERY_CLAIM) -> str:
     """A digest over what the registry declares.
 
     Committed alongside the rendered documents so that editing the registry without regenerating
@@ -233,7 +233,7 @@ def _in(result: BenchResult, domain: Domain) -> tuple[ClaimResult, ...]:
 def build(
     *,
     tier: str,
-    claims: Sequence[Claim] = CLAIMS,
+    claims: Sequence[Claim] = EVERY_CLAIM,
     run: EvidenceRun | None,
     adversarial: AdversarialEvidence | None,
     live: Mapping[str, ClaimResult] | None = None,

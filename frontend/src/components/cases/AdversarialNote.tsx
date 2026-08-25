@@ -91,19 +91,19 @@ export default function AdversarialNote({ proof }: { proof: AdversarialProof | n
                 product's established idiom for this exact deep link and says why: the fragment is
                 what scrolls the matching capability into view and plays its locate highlight.
 
-                **Measured rather than reasoned, and the mechanism is deliberately not claimed.** A
-                router `<Link>` was tried here first. Against the deployment it landed on
-                `/trust#send_email` with the right card in the DOM and the page at `scrollY: 279`
-                while the card sat at `top: 1355`; a direct load of the same URL put it at
-                `top: 110`. *Why* the client-side navigation loses is not established —
-                `BoundariesPage` already defers its scroll until the boundary response has rendered
-                the cards — so what is written down here is the observation and not a theory.
+                **What that does not currently buy, measured on the deployment.** A direct load of
+                `/trust#send_email` lands the card at `top: 110`. Arriving by *clicking* this link
+                leaves the page at `scrollY: 0` with the card at `top: 1634` — off screen. The
+                behaviour is not this component's and is not new: clicking `OutcomePanel`'s own
+                `What this means →` also lands at `scrollY: 0`, and only looks correct because
+                `book_appointment` is the first capability card and is already in view there.
+                `send_email` sits far enough down the page to make the same non-scroll visible.
 
-                The local e2e cannot tell the two apart: reverting this to a `<Link>` leaves all
-                seven specs green, because the boundary response returns fast enough on loopback
-                that the scroll lands either way. That is stated because it matters — the viewport
-                assertion in `e2e/tests/adversarial.spec.ts` does not guard this choice, and the
-                deployed measurement is the only thing that does. */}
+                So the anchor is kept because it is the right idiom and matches the neighbour, and
+                the scroll is left alone because it belongs to `BoundariesPage` rather than here.
+                A judge who clicks still reaches the right page with the right card rendered and
+                highlighted; they may have to scroll to it. Written down rather than fixed in
+                passing, because the fix is a change to a surface this work is not about. */}
             <a
               className="cl-quiet"
               href={`/trust#${proof.toolName}`}

@@ -126,6 +126,22 @@ test.describe("a supplied dangerous proposal has no authority to act", () => {
     await expect(page.locator("#send_email")).toBeVisible();
   });
 
+  test("fits a phone without pushing the page sideways", async ({ page }) => {
+    // The note carries a 50-character email address, which is exactly the kind of string that
+    // silently widens a page on a narrow screen. `overflowWrap: anywhere` is what stops it, and
+    // this is what fails if somebody removes it.
+    await page.setViewportSize({ width: 375, height: 812 });
+    await pressBoundaryTest(page);
+    await openTheCase(page);
+
+    await expect(page.getByLabel("Adversarial test")).toBeVisible({ timeout: RUN_TIMEOUT });
+
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth
+    );
+    expect(overflow).toBeLessThanOrEqual(1);
+  });
+
   test("shows no adversarial note on an ordinary booking", async ({ page }) => {
     // The vacuity proof for the note. Scenario 01 books and verifies without anything supplying a
     // proposal, so it has nothing to frame and must frame nothing.

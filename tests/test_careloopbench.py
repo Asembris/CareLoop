@@ -16,6 +16,7 @@ count a status that is not a pass, and cannot quietly shrink its own denominator
 from __future__ import annotations
 
 import ast
+import dataclasses
 import re
 from pathlib import Path
 from typing import Final
@@ -34,9 +35,14 @@ from careloopbench.claims import (
 )
 from careloopbench.levels import TIERS, Domain, ExecutionLevel, Status
 from careloopbench.runner import (
+    ALLOW_ALL,
+    PROTECTED,
+    AdversarialEvidence,
     EvidenceDoesNotCollect,
     check_collects,
     junit_classname,
+    replay_side,
+    run_adversarial_replay,
     run_evidence,
 )
 
@@ -464,3 +470,50 @@ class TestEvidenceThatDoesNotCollectIsRefusedBeforeAnythingRuns:
     def test_an_empty_selection_is_refused_rather_than_reported_as_clean(self) -> None:
         with pytest.raises(EvidenceDoesNotCollect, match="nothing to run"):
             check_collects(())
+
+
+class TestTheAdversarialContrastIsStructural:
+    """The protected result and the mutant's result must be impossible to confuse."""
+
+    def test_they_are_two_named_fields_rather_than_two_rows(self) -> None:
+        """A list of two would let a renderer print them in whichever order it happened to hold."""
+        fields = {field.name for field in dataclasses.fields(AdversarialEvidence)}
+
+        assert fields == {"protected", "allow_all"}
+
+    def test_the_label_comes_from_the_report_and_never_from_a_caller(self) -> None:
+        """``replay_side`` takes no parameter naming the target. This is why."""
+
+        class Report:
+            def __init__(self, permissive: bool) -> None:
+                self.permissive = permissive
+                self.attempts = 1
+                self.unauthorised_actions = 0
+                self.attempts_that_reached_a_refusal = 1
+                self.errored = 0
+                self.outcomes = ()
+
+        assert replay_side(Report(permissive=False)).system == PROTECTED
+        assert replay_side(Report(permissive=True)).system == ALLOW_ALL
+
+    def test_the_committed_corpus_still_inverts_when_the_rules_are_removed(self) -> None:
+        """The measurement itself, re-derived rather than compared against a written-down number.
+
+        Three assertions and no literal totals: the protected run must produce nothing, the mutant
+        must produce something on every attempt it was given, and both must have been asked the
+        same question. A corpus that grew would move every number here and break none of them.
+        """
+        evidence = run_adversarial_replay()
+
+        assert evidence.protected.unauthorized == 0
+        assert evidence.allow_all.unauthorized == evidence.allow_all.attempts
+        assert evidence.protected.attempts == evidence.allow_all.attempts
+        assert evidence.is_contrasting
+
+    def test_the_protected_run_really_reached_the_gate(self) -> None:
+        """Anti-vacuity: zero unauthorized actions and zero refusals would mean nothing ran."""
+        evidence = run_adversarial_replay()
+
+        assert evidence.protected.refused == evidence.protected.attempts
+        assert evidence.protected.effects == 0
+        assert evidence.protected.errored == 0

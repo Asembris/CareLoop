@@ -3191,11 +3191,19 @@ Carry these forward. Nothing here is blocking the next commit except where it sa
    misquoting `slot_start` on 8 of 8, and an exact-match trust rule denies every one of those. And
    nothing here re-measured triage, which has been correct on every run since session A. Full
    detail in [`live-loop-findings.md`](live-loop-findings.md).
-2. **`ReasonCode` vocabulary — now six. Grown once, deliberately.** New codes are added centrally
-   to the enum, never as free text on a rule, and every addition is recorded here. See
-   *The sixth reason code* under session 2 for why `AUTHORITY_NOT_TRUSTED` was added rather than
-   stretching an existing code. `tests/test_reason_purity.py` asserts `len(ReasonCode) == 6`, so
-   the next addition has to be a decision rather than a drift.
+2. **`ReasonCode` vocabulary — now eleven. Grown deliberately, one decision at a time.** New
+   codes are added centrally to the enum, never as free text on a rule, and every addition is
+   recorded in `CLAUDE.md` beside the property that forced it. See *The sixth reason code* under
+   session 2 for why `AUTHORITY_NOT_TRUSTED` was added rather than stretching an existing code.
+   `tests/test_reason_purity.py` asserts the exact count, so the next addition has to be a
+   decision rather than a drift.
+
+   **This entry said "now six" long after it stopped being true**, which is the shape of stale
+   claim CareLoopBench was built to find. Five have been added since — `NO_SAFE_ACTION_AVAILABLE`,
+   `EXTERNAL_STATE_NOT_CONFIRMED`, `NO_VALID_PROPOSAL_PRODUCED`,
+   `EXTERNAL_OUTCOME_NOT_ESTABLISHED` and `PATIENT_AUTHORITY_DENIED` — and each is argued for in
+   `CLAUDE.md` where it was introduced. The assertion in `test_reason_purity.py` was kept current
+   throughout; only this line was not, because nothing re-derived it.
 
    One stretch remains, and it is the approved delta D5: an undeclared argument denies with
    `NO_RULE_MATCH`. Honest — no rule did match — but it shares a code with the default deny.

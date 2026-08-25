@@ -1785,6 +1785,13 @@ have nothing to consult. Two mutants, in their own places: dropping `may_act_on`
 **Reading a case you own is still allowed after revocation.** Deliberate: a caregiver whose access
 was withdrawn may still see what was done in their name. Only *acting* stops.
 
+**`PATIENT_AUTHORITY_DENIED` is the eleventh `ReasonCode`, and it is a refusal rather than a park.**
+It says this case may not be acted on and stops. It names no caregiver, no grant and no mechanism --
+invariant 6's rule applied to a question the graph does not know the answer to either, since the
+layer that decides it holds no directory. Like the four parking codes it gives the planner no
+directive: no argument it could change would make the case actionable. No rule carries it and the
+engine never emits it; the API boundary does.
+
 **No custom cryptography and no custom parser.** `PyJWT[crypto]` owns signature verification,
 base64url handling and JWKS caching; `careloop/identity/oidc.py` owns only the policy -- a positive
 `algorithms=("RS256",)` allowlist, exact issuer, exact audience, `token_use`, `exp`/`nbf`/`iat` with

@@ -19,6 +19,8 @@ import ast
 import dataclasses
 import json
 import re
+import subprocess
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
@@ -33,6 +35,13 @@ from careloopbench.claims import (
     claims_in,
     evidence_nodes,
     selected,
+)
+from careloopbench.ingest import (
+    OPERATOR,
+    REQUIRED,
+    ArtifactRefused,
+    ingest_one,
+    surface_digest,
 )
 from careloopbench.levels import TIERS, Domain, ExecutionLevel, Status
 from careloopbench.report import (
@@ -65,6 +74,9 @@ NODE: Final[str] = "tests/test_careloopbench.py::TestTheShippedRegistryIsWellFor
 
 #: The floor the import sweep must clear before its "nothing imports it" means anything.
 MODULES_AT_LEAST: Final[int] = 3
+
+#: How long a git commit hash is, for the synthetic records below.
+COMMIT_CHARACTERS: Final[int] = 40
 
 
 def a_claim(**overrides: object) -> Claim:
@@ -701,3 +713,190 @@ class TestThePublishedPairAgreesWithItself:
         rows = {row["id"] for row in self.payload()["claims"]}  # type: ignore[union-attr]
 
         assert rows == {claim.id for claim in CLAIMS}
+
+
+def a_ref(**overrides: object) -> ArtifactRef:
+    """A live proof reference pointing at the synthetic repository below."""
+    fields: dict[str, object] = {
+        "proof_id": "live.example",
+        "path": "evidence/live/example.json",
+        "tool": "scripts/example.py",
+        "surface": ("watched.txt",),
+    }
+    fields.update(overrides)
+    return ArtifactRef(**fields)  # type: ignore[arg-type]
+
+
+def an_envelope(digest: str, **overrides: object) -> dict[str, object]:
+    """A well-formed stored proof, so each test below changes exactly one thing."""
+    envelope: dict[str, object] = {
+        "proof_id": "live.example",
+        "tool": "scripts/example.py",
+        "attested_commit": "a" * COMMIT_CHARACTERS,
+        "attestation": OPERATOR,
+        "ingested_at_commit": "b" * COMMIT_CHARACTERS,
+        "produced_at": "2026-08-25",
+        "environment": "a synthetic one",
+        "surface_digest": digest,
+        "raw": {"result": "PASS"},
+    }
+    envelope.update(overrides)
+    return envelope
+
+
+GIT = ["git", "-c", "user.email=nobody@example.invalid", "-c", "user.name=nobody"]
+
+
+@pytest.fixture
+def a_repository(tmp_path: Path) -> Path:
+    """A real one-commit repository, so the digest is taken over really committed bytes."""
+    (tmp_path / "watched.txt").write_text("before\n", encoding="utf-8")
+    (tmp_path / "evidence" / "live").mkdir(parents=True)
+    subprocess.run([*GIT, "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run([*GIT, "add", "watched.txt"], cwd=tmp_path, check=True)
+    subprocess.run([*GIT, "commit", "-qm", "one"], cwd=tmp_path, check=True)
+    return tmp_path
+
+
+def store(root: Path, envelope: Mapping[str, object]) -> None:
+    path = root / "evidence" / "live" / "example.json"
+    path.write_text(json.dumps(envelope), encoding="utf-8")
+
+
+def move_the_surface(root: Path) -> None:
+    (root / "watched.txt").write_text("after\n", encoding="utf-8")
+    subprocess.run([*GIT, "add", "watched.txt"], cwd=root, check=True)
+    subprocess.run([*GIT, "commit", "-qm", "two"], cwd=root, check=True)
+
+
+def a_live_claim() -> Claim:
+    return Claim(
+        id="authority.live",
+        question="Was it measured?",
+        domain=Domain.AUTHORITY_INTEGRITY,
+        level=ExecutionLevel.LIVE_PROVIDER,
+        artifact=a_ref(),
+        scope="The one measurement it records.",
+    )
+
+
+class TestAStoredProofCertifiesItsOwnCommit:
+    """Three outcomes and no fourth. None of them is ``PROVEN``."""
+
+    def digest(self, root: Path) -> str:
+        return surface_digest(("watched.txt",), root=root)
+
+    def test_a_matching_surface_is_proven_at_the_commit_it_names(self, a_repository: Path) -> None:
+        store(a_repository, an_envelope(self.digest(a_repository)))
+
+        result = ingest_one(a_live_claim(), root=a_repository)
+
+        assert result.status is Status.PROVEN_AT
+        assert result.detail.startswith("proven at aaa")
+        assert "operator-attested" in result.detail
+
+    def test_a_moved_surface_is_stale_and_names_what_moved(self, a_repository: Path) -> None:
+        store(a_repository, an_envelope(self.digest(a_repository)))
+        move_the_surface(a_repository)
+
+        result = ingest_one(a_live_claim(), root=a_repository)
+
+        assert result.status is Status.STALE
+        assert "watched.txt" in result.detail
+
+    def test_a_stale_proof_is_not_a_pass(self, a_repository: Path) -> None:
+        store(a_repository, an_envelope(self.digest(a_repository)))
+        move_the_surface(a_repository)
+
+        assert not ingest_one(a_live_claim(), root=a_repository).is_proven
+
+    def test_a_proof_whose_surface_still_matches_is_still_not_a_pass(
+        self, a_repository: Path
+    ) -> None:
+        """``PROVEN_AT`` never becomes ``PROVEN``. This invocation watched nothing happen."""
+        store(a_repository, an_envelope(self.digest(a_repository)))
+
+        result = ingest_one(a_live_claim(), root=a_repository)
+
+        assert result.status is not Status.PROVEN
+        assert not result.is_proven
+
+    def test_a_missing_artifact_is_not_run_and_names_the_tool(self, a_repository: Path) -> None:
+        result = ingest_one(a_live_claim(), root=a_repository)
+
+        assert result.status is Status.NOT_RUN
+        assert "scripts/example.py" in result.detail
+
+    def test_a_surface_matching_nothing_is_refused(self, a_repository: Path) -> None:
+        """Two empty surfaces hash alike, so a mistyped path would never go stale."""
+        with pytest.raises(ArtifactRefused, match="matches nothing"):
+            surface_digest(("no/such/path",), root=a_repository)
+
+    def test_the_digest_follows_the_commit_and_not_the_working_tree(
+        self, a_repository: Path
+    ) -> None:
+        """An uncommitted edit is not a reason to call somebody else's measurement stale."""
+        before = self.digest(a_repository)
+        (a_repository / "watched.txt").write_text("edited but not committed\n", encoding="utf-8")
+
+        assert self.digest(a_repository) == before
+
+
+class TestAMalformedStoredProofIsRefused:
+    """Fail closed: a record CareLoopBench cannot read is never a row it renders."""
+
+    def digest(self, root: Path) -> str:
+        return surface_digest(("watched.txt",), root=root)
+
+    @pytest.mark.parametrize("field", REQUIRED)
+    def test_every_declared_field_is_required(self, a_repository: Path, field: str) -> None:
+        envelope = an_envelope(self.digest(a_repository))
+        del envelope[field]
+        store(a_repository, envelope)
+
+        with pytest.raises(ArtifactRefused, match=field):
+            ingest_one(a_live_claim(), root=a_repository)
+
+    def test_an_unknown_attestation(self, a_repository: Path) -> None:
+        store(a_repository, an_envelope(self.digest(a_repository), attestation="TRUST_ME"))
+
+        with pytest.raises(ArtifactRefused, match="attestation"):
+            ingest_one(a_live_claim(), root=a_repository)
+
+    def test_a_proof_naming_no_commit(self, a_repository: Path) -> None:
+        store(a_repository, an_envelope(self.digest(a_repository), attested_commit="  "))
+
+        with pytest.raises(ArtifactRefused, match="certifies nothing"):
+            ingest_one(a_live_claim(), root=a_repository)
+
+    def test_a_record_whose_proof_id_is_not_the_declared_one(self, a_repository: Path) -> None:
+        store(a_repository, an_envelope(self.digest(a_repository), proof_id="live.something-else"))
+
+        with pytest.raises(ArtifactRefused, match="the registry declares"):
+            ingest_one(a_live_claim(), root=a_repository)
+
+    def test_a_record_carrying_something_shaped_like_a_token(self, a_repository: Path) -> None:
+        envelope = an_envelope(self.digest(a_repository))
+        envelope["raw"] = {"header": "eyJhbGciOi.eyJzdWIiOi.signature"}
+        store(a_repository, envelope)
+
+        with pytest.raises(ArtifactRefused, match="token"):
+            ingest_one(a_live_claim(), root=a_repository)
+
+    @pytest.mark.parametrize("field", ["access_token", "id_token", "sub", "client_secret"])
+    def test_a_record_carrying_a_credential_shaped_field(
+        self, a_repository: Path, field: str
+    ) -> None:
+        envelope = an_envelope(self.digest(a_repository))
+        envelope["raw"] = {"observed": {field: "whatever"}}
+        store(a_repository, envelope)
+
+        with pytest.raises(ArtifactRefused, match=field):
+            ingest_one(a_live_claim(), root=a_repository)
+
+    def test_a_record_that_is_not_json(self, a_repository: Path) -> None:
+        path = a_repository / "evidence" / "live" / "example.json"
+        path.write_text("not json at all", encoding="utf-8")
+
+        with pytest.raises(ArtifactRefused, match="not JSON"):
+            ingest_one(a_live_claim(), root=a_repository)

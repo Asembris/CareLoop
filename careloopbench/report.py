@@ -330,14 +330,14 @@ def render_markdown(payload: Mapping[str, Any]) -> str:
             "Measured once, elsewhere, by somebody running a tool. **Each row certifies the commit",
             "it names, never this one.**",
             "",
-            "| proof | status | at commit | attestation | tool |",
+            "| proof | status | evidence | tool | dependency surface |",
             "| --- | --- | --- | --- | --- |",
         ]
         for row in live_rows:
-            detail = row["detail"] or "—"
+            surface = ", ".join(f"`{path}`" for path in row["artifact"]["surface"])
             lines.append(
-                f"| {row['artifact']['proof_id']} | `{row['status']}` | {detail} "
-                f"| — | `{row['artifact']['tool']}` |"
+                f"| {row['artifact']['proof_id']} | **{row['status']}** "
+                f"| {row['detail'] or '—'} | `{row['artifact']['tool']}` | {surface} |"
             )
     else:
         lines.append("No live proof is declared in this registry.")

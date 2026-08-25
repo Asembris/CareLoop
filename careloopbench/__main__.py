@@ -25,6 +25,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from careloopbench.claims import CLAIMS, evidence_nodes, selected
+from careloopbench.ingest import ArtifactRefused, live_results
 from careloopbench.levels import TIERS
 from careloopbench.report import build, render_console, render_markdown, to_payload
 from careloopbench.runner import EvidenceDoesNotCollect, run_adversarial_replay, run_evidence
@@ -53,10 +54,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"careloopbench: {broken}", file=sys.stderr)
         return EXIT_BROKEN
 
+    try:
+        live = live_results()
+    except ArtifactRefused as refused:
+        print(f"careloopbench: {refused}", file=sys.stderr)
+        return EXIT_BROKEN
+
     result = build(
         tier=arguments.tier,
         run=run,
         adversarial=run_adversarial_replay(),
+        live=live,
     )
     payload = to_payload(result)
 

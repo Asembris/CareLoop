@@ -121,6 +121,12 @@ class MockCareLoopApi implements CareLoopApi {
        claim. Refused with an empty run rather than falling through to `resume`, which would have
        shown a judge the wrong scenario under the right button. */
     if (id === "recovery") return { scenarioId: id, runId: "", caseId: "" };
+    /* Refused for the same reason, one step sharper. The deterministic scenario's whole claim is
+       that a real policy engine refused a real proposal recorded in a real timeline; a scripted
+       choreography that drew the same rows would be the fake refusal this feature exists to avoid
+       ever shipping. `injection` above keeps its choreography because it is a pacing study of a
+       run whose outcome the mock never claimed to guarantee. */
+    if (id === "adversarial") return { scenarioId: id, runId: "", caseId: "" };
     return this.resume();
   }
 

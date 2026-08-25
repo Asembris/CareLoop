@@ -39,7 +39,7 @@ export type EventTone = "neutral" | "decision" | "verified" | "denied" | "untrus
  *  is made instead by `tests/test_verify_readback.py::TestTheIndependenceProof`, which moves the
  *  appointment behind CareLoop's back and requires verification to fail. A test that proves it
  *  beats a button whose backend state contradicts its own screen. */
-export type ScenarioId = "referral" | "injection" | "resume" | "recovery";
+export type ScenarioId = "referral" | "injection" | "adversarial" | "resume" | "recovery";
 
 /** One step of a fact's provenance journey, rendered as a dot and a sentence in the lens. */
 export interface ProvenanceStep {

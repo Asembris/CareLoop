@@ -24,7 +24,12 @@ import type { ScenarioId } from "@/types/domain";
  */
 const SCENE_ZONES: Partial<Record<ScenarioId, string>> = {
   referral: "referral",
-  injection: "injection"
+  // Both halves of 02 draw the same sequence, and honestly: the field's `injection` zone draws a
+  // branch that ends, which is what happens on the deterministic run every time and on the
+  // realistic one whenever the planner takes the bait. The card carries one zone because it is one
+  // scenario asked two ways.
+  injection: "injection",
+  adversarial: "injection"
 };
 
 /**
@@ -91,7 +96,13 @@ export default function DemoPage() {
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: 18 }}>
           {SCENARIOS.map((s) => (
-            <ScenarioCard key={s.id} scenario={s} onPick={() => start(s.id)} sceneZone={SCENE_ZONES[s.id]} />
+            <ScenarioCard
+              key={s.id}
+              scenario={s}
+              onPick={() => start(s.id)}
+              onPickAlternate={s.alternate ? () => start(s.alternate!.id) : undefined}
+              sceneZone={SCENE_ZONES[s.id]}
+            />
           ))}
         </div>
 

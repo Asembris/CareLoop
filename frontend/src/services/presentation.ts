@@ -1055,6 +1055,9 @@ export function pacedState(
 const TITLES: Record<string, string> = {
   "demo-referral": "Cardiology referral",
   "demo-injection": "Care continuity packet",
+  // The same poisoned notice as 02's realistic variant, and the title has to say which row is
+  // which for the same reason `demo-recovery` does — a judge may well have both on screen.
+  "demo-adversarial": "Care continuity packet · boundary test",
   "demo-resume": "Appointment instructions",
   // The same referral as 01, which is the point of the scenario — so the title has to say which
   // row is which, or a judge with both on screen cannot tell them apart.

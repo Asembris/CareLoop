@@ -33,6 +33,12 @@ from careloopbench.claims import (
     selected,
 )
 from careloopbench.levels import TIERS, Domain, ExecutionLevel, Status
+from careloopbench.runner import (
+    EvidenceDoesNotCollect,
+    check_collects,
+    junit_classname,
+    run_evidence,
+)
 
 REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[1]
 BENCH_ROOT: Final[Path] = REPO_ROOT / "careloopbench"
@@ -340,3 +346,121 @@ class TestCareLoopBenchKnowsNothingAboutEnforcement:
         }
 
         assert "careloop" in roots
+
+
+SYNTHETIC = """
+import pytest
+
+
+class TestItPasses:
+    def test_one(self) -> None:
+        assert True
+
+    def test_two(self) -> None:
+        assert True
+
+
+class TestItFails:
+    def test_one(self) -> None:
+        assert False
+
+
+class TestItErrors:
+    def test_one(self, nothing_provides_this) -> None:
+        assert True
+
+
+class TestItSkips:
+    @pytest.mark.skip(reason="deliberately")
+    def test_one(self) -> None:
+        assert True
+
+
+class TestItHoldsNothing:
+    pass
+"""
+
+
+@pytest.fixture
+def synthetic_repo(tmp_path: Path) -> Path:
+    """A throwaway tree whose tests do each of the things a benchmark must not call a pass."""
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_synthetic.py").write_text(SYNTHETIC, encoding="utf-8")
+    return tmp_path
+
+
+class TestOnlyAPassIsAPass:
+    """The rule the whole layer rests on, exercised against tests that really do fail."""
+
+    def test_the_junit_mapping_is_the_whole_of_it(self) -> None:
+        assert junit_classname("tests/test_x.py::TestY") == "tests.test_x.TestY"
+
+    def test_a_passing_class_passes(self, synthetic_repo: Path) -> None:
+        run = run_evidence(("tests/test_synthetic.py::TestItPasses",), root=synthetic_repo)
+
+        assert run.passed("tests/test_synthetic.py::TestItPasses")
+        assert run.outcomes["tests/test_synthetic.py::TestItPasses"].tests == 2
+
+    def test_a_failing_class_does_not(self, synthetic_repo: Path) -> None:
+        node = "tests/test_synthetic.py::TestItFails"
+
+        run = run_evidence((node,), root=synthetic_repo)
+
+        assert not run.passed(node)
+        assert run.outcomes[node].status == "failure"
+
+    def test_an_erroring_class_does_not(self, synthetic_repo: Path) -> None:
+        node = "tests/test_synthetic.py::TestItErrors"
+
+        run = run_evidence((node,), root=synthetic_repo)
+
+        assert not run.passed(node)
+        assert run.outcomes[node].status == "error"
+
+    def test_a_skipped_class_does_not(self, synthetic_repo: Path) -> None:
+        """The one a reader assumes away. A skip is an absence of evidence, not evidence."""
+        node = "tests/test_synthetic.py::TestItSkips"
+
+        run = run_evidence((node,), root=synthetic_repo)
+
+        assert not run.passed(node)
+        assert run.outcomes[node].status == "skipped"
+
+    def test_a_class_holding_no_tests_does_not(self, synthetic_repo: Path) -> None:
+        node = "tests/test_synthetic.py::TestItHoldsNothing"
+
+        with pytest.raises(EvidenceDoesNotCollect, match="TestItHoldsNothing"):
+            run_evidence((node,), root=synthetic_repo)
+
+    def test_one_run_answers_for_every_node_it_was_given(self, synthetic_repo: Path) -> None:
+        nodes = (
+            "tests/test_synthetic.py::TestItPasses",
+            "tests/test_synthetic.py::TestItFails",
+            "tests/test_synthetic.py::TestItSkips",
+        )
+
+        run = run_evidence(nodes, root=synthetic_repo)
+
+        assert set(run.outcomes) == set(nodes)
+        assert run.failing(nodes) == (
+            "tests/test_synthetic.py::TestItFails (failure)",
+            "tests/test_synthetic.py::TestItSkips (skipped)",
+        )
+
+
+class TestEvidenceThatDoesNotCollectIsRefusedBeforeAnythingRuns:
+    """A renamed test must read as a broken pointer, not as a quietly smaller denominator."""
+
+    def test_a_node_naming_a_class_that_does_not_exist(self, synthetic_repo: Path) -> None:
+        node = "tests/test_synthetic.py::TestSomebodyRenamedThis"
+
+        with pytest.raises(EvidenceDoesNotCollect, match="TestSomebodyRenamedThis"):
+            run_evidence((node,), root=synthetic_repo)
+
+    def test_a_node_naming_a_module_that_does_not_exist(self, synthetic_repo: Path) -> None:
+        with pytest.raises(EvidenceDoesNotCollect, match="test_absent"):
+            run_evidence(("tests/test_absent.py::TestX",), root=synthetic_repo)
+
+    def test_an_empty_selection_is_refused_rather_than_reported_as_clean(self) -> None:
+        with pytest.raises(EvidenceDoesNotCollect, match="nothing to run"):
+            check_collects(())

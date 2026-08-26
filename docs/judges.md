@@ -58,8 +58,9 @@ page, because the clinic check below needs it.
 A world lives as long as you are using it. Leave it for half an hour, or come back after a
 redeploy, and you get a fresh one with an empty dashboard — that is a forgotten world, not a fault.
 **The public URL therefore does not demonstrate durable ownership of a case across processes**; the
-thing that does is [`scripts/resume_demo.py`](../scripts/resume_demo.py), which carries one case through three separate
-processes over a SQLite file on disk, with [`tests/test_resume.py`](../tests/test_resume.py) asserting it.
+thing that does is [`scripts/resume_demo.py`](../scripts/resume_demo.py), which carries one case
+through three separate processes over a SQLite file on disk, with
+[`tests/test_resume.py`](../tests/test_resume.py) asserting it.
 
 ---
 
@@ -309,8 +310,8 @@ had instead of making a second one. So:
 
 Check the last one yourself at `/clinic/slots?session=<your world>`: two of the three seeded slots
 are still free, not one. The evidence block on the finished case says the same thing in the same
-words, and [`tests/test_recovery_copy.py`](../tests/test_recovery_copy.py) fails the build if any screen in this product ever starts
-claiming CareLoop avoided the second request.
+words, and [`tests/test_recovery_copy.py`](../tests/test_recovery_copy.py) fails the build if any
+screen in this product ever starts claiming CareLoop avoided the second request.
 
 **What the live demo does not show, and where it is.** A CareLoop process that is *killed*
 mid-booking recovers the same way, from a durable store, in a brand-new process. That cannot be
@@ -323,8 +324,8 @@ process killed with `os._exit` on the line after the clinic confirms:
 .venv/Scripts/python -m pytest tests/test_saga_chaos.py -q
 ```
 
-[`scripts/resume_demo.py`](../scripts/resume_demo.py) is the same property over a file on disk, carrying one case through three
-separate processes.
+[`scripts/resume_demo.py`](../scripts/resume_demo.py) is the same property over a file on disk,
+carrying one case through three separate processes.
 
 ---
 

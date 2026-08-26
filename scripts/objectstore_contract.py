@@ -305,6 +305,13 @@ def main(argv: list[str] | None = None) -> int:
         # Observations only: what each check is called, whether it held, and what the
         # provider actually answered. No bucket, no key, no prefix and no endpoint --
         # a record of a measurement is not a place to publish where it was taken.
+        #
+        # ``passed`` is ``report.satisfied`` and is not a second opinion about it: one attribute
+        # decides this field and the exit code below, so a reader of the file and a caller of the
+        # process cannot be told different things. It is spelled ``passed`` because that is the
+        # name every proof tool here answers to and the name a recorder can require without
+        # knowing which proof it is holding; ``satisfied`` stays beside it as this contract's own
+        # vocabulary, unchanged, because the observations are not what this patch is about.
         pathlib.Path(arguments.out).write_text(
             json.dumps(
                 {
@@ -313,6 +320,7 @@ def main(argv: list[str] | None = None) -> int:
                         for c in report.checks
                     ],
                     "satisfied": report.satisfied,
+                    "passed": report.satisfied,
                 },
                 indent=2,
             )

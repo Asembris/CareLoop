@@ -851,6 +851,61 @@ describe("a completed case", () => {
   });
 });
 
+describe("the independent-verification claim is evidence-bound", () => {
+  const CLAIM = "This is based on the clinic's record, not CareLoop's own report.";
+
+  it("renders over a MATCHED independent read, sentence before enum", async () => {
+    const done = card({ case_id: "demo-referral", state: "DONE", section: "completed" });
+    serve([done], {
+      "demo-referral": [
+        entry("PLAN_PROPOSED", { tool_name: "book_appointment", args: BOOKING }),
+        entry("VERIFICATION_PASSED", { tool_name: "book_appointment", read_back: "true", observation: "MATCHED" })
+      ]
+    });
+    show("/case/demo-referral");
+
+    await screen.findByText("Appointment booked and confirmed");
+    expect(screen.getByText(CLAIM)).toBeInTheDocument();
+    // The human reading leads and the backend's exact recorded word sits under it, still verbatim.
+    expect(screen.getByText("Confirmed by an independent read")).toBeInTheDocument();
+    expect(screen.getByText("MATCHED")).toBeInTheDocument();
+  });
+
+  it("never renders over a completion that only checked CareLoop's own record", async () => {
+    // The mutant this kills is the tempting one: keying the claim on "settled" rather than on the
+    // projected observation, which would assert independence for a closed-loop verification.
+    const done = card({ case_id: "demo-resume", state: "DONE", section: "completed" });
+    serve([done], {
+      "demo-resume": [
+        entry("PLAN_PROPOSED", { tool_name: "send_email", args: { to: "records@northgate.example", subject: "Referral" } }),
+        entry("VERIFICATION_PASSED", { tool_name: "send_email", read_back: "false", observation: "NOT_OBSERVED" })
+      ]
+    });
+    show("/case/demo-resume");
+
+    await screen.findByText("Email sent");
+    expect(screen.queryByText(CLAIM)).not.toBeInTheDocument();
+    expect(screen.getByText("Not read back")).toBeInTheDocument();
+  });
+
+  it("never renders over a verification that recorded no observation at all", async () => {
+    // A case persisted before the observation vocabulary existed still projects a read-back; what
+    // it cannot truthfully carry is a claim keyed on an outcome nobody recorded.
+    const done = card({ case_id: "demo-referral", state: "DONE", section: "completed" });
+    serve([done], {
+      "demo-referral": [
+        entry("PLAN_PROPOSED", { tool_name: "book_appointment", args: BOOKING }),
+        entry("VERIFICATION_PASSED", { tool_name: "book_appointment", read_back: "true" })
+      ]
+    });
+    show("/case/demo-referral");
+
+    await screen.findByText("Appointment booked and confirmed");
+    expect(screen.queryByText(CLAIM)).not.toBeInTheDocument();
+    expect(screen.queryByText("MATCHED")).not.toBeInTheDocument();
+  });
+});
+
 describe("the guided route's next step", () => {
   it("leads a settled referral to the launcher, where the next card frames itself", async () => {
     const done = card({ case_id: "demo-referral", state: "DONE", section: "completed" });

@@ -1,6 +1,7 @@
 import type { CareCase } from "@/types/domain";
 import { caseTone } from "@/lib/tone";
 import {
+  INDEPENDENT_OF_OWN_REPORT,
   OBSERVED_VALUES_WITHHELD,
   RECOVERY_PROOF_BODY,
   RECOVERY_PROOF_TITLE,
@@ -73,28 +74,30 @@ export default function OutcomePanel({ careCase }: { careCase: CareCase }) {
               <span style={{ fontSize: 15 }}>{readback.authorized}</span>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-              <span style={LABEL}>OBSERVED AT CLINIC</span>
-              <span style={{ fontSize: 15 }}>{readback.observed}</span>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
               <span style={LABEL}>RESULT</span>
               <span style={{ fontSize: 15, color: tone }}>{readback.result}</span>
             </div>
-            {readback.observation ? (
-              <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                <span style={LABEL}>OBSERVATION</span>
+            {/* One cell for what verification observed, sentence first. It used to be two — a
+                plain phrase under OBSERVED AT CLINIC and the bare enum under OBSERVATION — which
+                asked a cold reader to work out that they were the same fact at two altitudes. The
+                human reading leads and the backend's closed vocabulary word sits under it, still
+                verbatim, because a judge checking the trail deserves the exact word it records. */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+              <span style={LABEL}>OBSERVATION</span>
+              <span style={{ fontSize: 15 }}>{readback.observed}</span>
+              {readback.observation ? (
                 <span
                   style={{
                     fontFamily: "var(--font-mono)",
-                    fontSize: 13,
+                    fontSize: 12.5,
                     letterSpacing: "0.06em",
                     color: OBSERVATION_TONE[readback.observation] ?? "inherit"
                   }}
                 >
                   {readback.observation}
                 </span>
-              </div>
-            ) : null}
+              ) : null}
+            </div>
           </div>
         ) : null}
 
@@ -141,6 +144,14 @@ export default function OutcomePanel({ careCase }: { careCase: CareCase }) {
             <span style={{ fontSize: 14, lineHeight: 1.6, color: "var(--muted-foreground)" }}>
               {readback.observationText}
             </span>
+            {/* Only over a MATCHED independent read. Any wider — "every settled case", or even
+                "every observed case" — and the line claims independence for verifications that
+                only checked CareLoop's own record. */}
+            {readback.observation === "MATCHED" ? (
+              <span style={{ fontSize: 14, lineHeight: 1.6, color: "var(--muted-foreground)" }}>
+                {INDEPENDENT_OF_OWN_REPORT}
+              </span>
+            ) : null}
             {readback.observation !== "NOT_OBSERVED" ? (
               <span style={{ fontSize: 12.5, lineHeight: 1.6, color: "var(--muted-foreground)" }}>
                 {OBSERVED_VALUES_WITHHELD}

@@ -1,6 +1,7 @@
 import { useNavigate } from "react-router-dom";
 import { useCareLoop } from "@/hooks/useCareLoop";
 import DashboardHero from "@/components/dashboard/DashboardHero";
+import JudgeIntro from "@/components/dashboard/JudgeIntro";
 import SectionHeading from "@/components/dashboard/SectionHeading";
 import DecisionCard from "@/components/dashboard/DecisionCard";
 import CaseRow from "@/components/dashboard/CaseRow";
@@ -81,6 +82,12 @@ export default function HomePage() {
         }}
       >
         <DashboardHero greeting={greeting()} line={hero.line} sub={hero.sub} />
+
+        {/* Only on a live dashboard with nothing on it — the cold visitor's first screen, and no
+            other. `connecting`, `unreachable` and `at_capacity` are already saying something true
+            about the world, `starting` is already saying work was asked for, and a dashboard with
+            a case on it is a product surface rather than a homepage. */}
+        {connection === "live" && !anyCases && !starting ? <JudgeIntro /> : null}
 
         {/* Each band is marked `data-scene-exclude` rather than each card inside it: the field
             keeps only its six largest boxes, so one section covers its rows and the gaps between

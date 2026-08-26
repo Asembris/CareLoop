@@ -112,6 +112,15 @@ python -m venv .venv
 provider, at $0, with no provider SDK installed and no credentials configured. CI asserts that
 rather than assuming it.
 
+**The tested toolchain is a narrower claim than the declared one, and the two are different
+questions.** `pyproject.toml` declares `requires-python = ">=3.12"`, which is the floor a
+resolver enforces. What is actually *exercised* is **Python 3.12**: every CI job pins it,
+`deploy/bootstrap.sh` installs a managed 3.12 onto the instance, and the `strands-agents` pin was
+verified by execution against 3.12 and nothing else. That is not a statement that a later Python
+fails — it is a statement that nobody has run one. The frontend and the end-to-end suite are
+tested on **Node 24**, which `.nvmrc`, both `engines` ranges and CI's `node-version` all name;
+`tests/test_setup_docs.py` fails if they stop agreeing.
+
 <details>
 <summary><b>Running the whole demo locally</b> — two processes, and it needs a real model</summary>
 

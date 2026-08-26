@@ -1,7 +1,7 @@
 {
   "careloopbench": {
     "tier": "core",
-    "generated_at_commit": "407a98a909972678db26583219424b3da0db40c4",
+    "generated_at_commit": "28601a3cbabb5bf164047a38c087815db043693c",
     "registry_digest": "50388296002d6a4400c2c6879da5cd68f04d90c02409c68cc0c5612c90d1bd66",
     "tests_run": 1497
   },
@@ -24,7 +24,7 @@
       "mutation_backed": 2,
       "by_status": {
         "PROVEN": 10,
-        "NOT_RUN": 1
+        "PROVEN_AT": 1
       }
     },
     {
@@ -1211,8 +1211,8 @@
       "question": "Was the create-once write contract measured against real Amazon S3?",
       "domain": "EXTERNAL_EFFECT_SAFETY",
       "level": "LIVE_PROVIDER",
-      "status": "NOT_RUN",
-      "detail": "no stored proof; run python scripts/objectstore_contract.py --bucket <scratch> --out evidence/live/objectstore-contract.json",
+      "status": "PROVEN_AT",
+      "detail": "proven at 28601a3cbabb · operator-attested",
       "scope": "The provider's behaviour on one day. The offline suite runs the same assertions against the substitute on every commit, which is what keeps them comparable.",
       "mutation_backed": false,
       "evidence": [],

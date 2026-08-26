@@ -20,11 +20,14 @@ If you add an asset later, keep the reference relative.
 
 ## Publishing it
 
-**Settings → Pages → Build and deployment: source `GitHub Actions`.** The
-workflow builds `index.html` with `adapt.py`, runs the two gates, uploads `site/`
-as the Pages artifact and deploys it from `main` only; pull requests validate
-without publishing. A failed gate uploads nothing, so the previously deployed
-version stays exactly as it was.
+**No Pages workflow exists yet, and publishing is a manual act.**
+`.github/workflows/` carries CI and the demo health check and nothing that
+builds or publishes this directory — so today the procedure is by hand: run
+`adapt.py`, pass the two gates, and upload `site/` as the Pages artifact
+(Settings → Pages → Build and deployment: source `GitHub Actions`). When the
+workflow is written it should do exactly that from `main` only, with pull
+requests validating without publishing — a failed gate uploads nothing, so the
+previously deployed version stays exactly as it was.
 
 Two things must be true before the first deploy, and neither is about this
 directory: the repository has to be public (or on a plan that serves Pages from

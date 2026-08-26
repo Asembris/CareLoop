@@ -1,0 +1,76 @@
+{
+  "proof_id": "live.objectstore-contract",
+  "tool": "python scripts/objectstore_contract.py --bucket <scratch> --out evidence/live/objectstore-contract.json",
+  "attested_commit": "28601a3cbabb5bf164047a38c087815db043693c",
+  "attestation": "OPERATOR",
+  "ingested_at_commit": "28601a3cbabb5bf164047a38c087815db043693c",
+  "produced_at": "2026-08-26",
+  "environment": "Real Amazon S3 in AWS CloudShell, us-east-1. The measurement ran from a standalone copy of scripts/objectstore_contract.py whose SHA-256 was verified as b2336f2b2a529f61e87698838066890c259ee3a72d8c8f464143e8e6e5c5d36f against the attested commit, rather than from a git checkout of it -- which is why this record is OPERATOR-attested rather than MEASURED: a person verified the digest, no tool observed the commit. One synthetic object under a unique proof prefix, created and deleted by the run itself; an independent listing afterwards returned KeyCount 0. Bucket versioning was confirmed never enabled, which is what makes the read of a deleted key an unambiguous absence.",
+  "surface_digest": "f144d342832981a680346c01f78637da212c7c87f8dc91d9effc8192e3fbfb63",
+  "raw": {
+    "checks": [
+      {
+        "name": "create-once-on-absent-key",
+        "satisfied": true,
+        "observed": "HTTP 200"
+      },
+      {
+        "name": "create-returns-a-checksum",
+        "satisfied": true,
+        "observed": "ChecksumSHA256='YqvAyeXGueWABpLXUXr/miCmQ9InI5DKkCuy2Nl+J/o='"
+      },
+      {
+        "name": "same-key-same-bytes-is-refused",
+        "satisfied": true,
+        "observed": "PreconditionFailed HTTP 412"
+      },
+      {
+        "name": "same-key-divergent-bytes-is-refused",
+        "satisfied": true,
+        "observed": "PreconditionFailed HTTP 412"
+      },
+      {
+        "name": "the-refused-write-changed-nothing",
+        "satisfied": true,
+        "observed": "held bytes match the original: True"
+      },
+      {
+        "name": "fresh-read-returns-the-stored-bytes",
+        "satisfied": true,
+        "observed": "sha256=62abc0c9e5c6b9e5..."
+      },
+      {
+        "name": "metadata-round-trips",
+        "satisfied": true,
+        "observed": "Metadata={'document-id': 'doc-0005-receipt', 'portal-id': 'PORTAL-NORTHGATE-RECORDS'}"
+      },
+      {
+        "name": "reported-checksum-corroborates",
+        "satisfied": true,
+        "observed": "ChecksumSHA256='YqvAyeXGueWABpLXUXr/miCmQ9InI5DKkCuy2Nl+J/o='"
+      },
+      {
+        "name": "exactly-one-object-under-the-key",
+        "satisfied": true,
+        "observed": "KeyCount=1"
+      },
+      {
+        "name": "without-the-precondition-it-overwrites",
+        "satisfied": true,
+        "observed": "HTTP 200, now holds the divergent bytes: True"
+      },
+      {
+        "name": "delete-is-accepted",
+        "satisfied": true,
+        "observed": "HTTP 204"
+      },
+      {
+        "name": "absent-key-answers-no-such-key",
+        "satisfied": true,
+        "observed": "NoSuchKey HTTP 404"
+      }
+    ],
+    "satisfied": true,
+    "passed": true
+  }
+}

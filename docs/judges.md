@@ -7,12 +7,13 @@ clinician or clinic exists anywhere in this system.
 
 **This URL runs CareLoop in demo mode, and the page says so.** The caregiver is invented, nothing
 authenticates anybody, and the world holds fixture documents and no real records. That is a
-deliberate mode rather than an absence: CareLoop also has a production mode where the caregiver
-comes from a cryptographically verified OIDC token and access is checked against server-side
-caregiver→patient grants, and the two cannot silently substitute for each other — a failed
-production verification is a `401` and can never resolve to the synthetic identity you are using
-here. See **Production identity** in `README.md`, and `tests/test_oidc_verifier.py`,
-`tests/test_route_ownership.py` and `tests/test_patient_grants.py` for the proofs.
+deliberate mode rather than an absence: production mode derives the caregiver from a
+cryptographically verified OIDC token, and the two cannot silently substitute for each other — a
+failed production verification is a `401` and can never resolve to the synthetic identity you are
+using here. The architecture is [**Production identity**](../README.md#production-identity); the
+proofs are [`tests/test_oidc_verifier.py`](../tests/test_oidc_verifier.py),
+[`tests/test_route_ownership.py`](../tests/test_route_ownership.py) and
+[`tests/test_patient_grants.py`](../tests/test_patient_grants.py).
 
 The `?session=` id in the clinic links below is an *isolation namespace*, not a credential — it is
 what stops two judges competing for one appointment slot. In production the same header names a
@@ -21,7 +22,7 @@ workspace whose owner must match the verified principal, and possession of the i
 
 ---
 
-## The sixty seconds
+## Try this first
 
 1. Open the URL. You land on the dashboard, which is empty — and says what you are looking at:
    CareLoop handles care administration for family caregivers, and the model itself has no
@@ -57,12 +58,59 @@ page, because the clinic check below needs it.
 A world lives as long as you are using it. Leave it for half an hour, or come back after a
 redeploy, and you get a fresh one with an empty dashboard — that is a forgotten world, not a fault.
 **The public URL therefore does not demonstrate durable ownership of a case across processes**; the
-thing that does is `scripts/resume_demo.py`, which carries one case through three separate
-processes over a SQLite file on disk, with `tests/test_resume.py` asserting it.
+thing that does is [`scripts/resume_demo.py`](../scripts/resume_demo.py), which carries one case through three separate
+processes over a SQLite file on disk, with [`tests/test_resume.py`](../tests/test_resume.py) asserting it.
 
 ---
 
-## What it may do, before it does anything
+## Why CareLoop is different
+
+Four claims. Each has something to press in the demo and something measured behind it, and the two
+are listed side by side in the next section.
+
+**The model cannot authorize its own actions.** Two LLM agents exist — one classifies an inbound
+event, one proposes a single next action — and neither of them holds a tool. A deterministic policy
+engine reads every proposed call and answers `ALLOW` / `DENY` / `REQUIRE_HUMAN` from declarative
+rules in `rules.yaml`, enforced at two independent points at the tool boundary. Nothing here is a
+classifier deciding whether a request looks dangerous, so there is nothing to talk round.
+
+**A document supplies facts, never permission.** Text lifted out of a referral or an email can
+become a fact carrying its source, its page and a trust level. It can never become authority: the
+arguments that decide *where* an effect lands cannot be promoted by any validator, whatever that
+validator concludes, and an argument draws trust only from the fact key it declares rather than from
+any value that happens to look the same.
+
+**A booking is done only when the clinic agrees.** Verification performs a *separate* read of the
+external service, keyed on the identifier the booking returned, and compares that service's own
+record against what was authorized. It never re-reads the booking's own confirmation, which would be
+CareLoop checking its own receipt.
+
+**An outcome CareLoop could not read never becomes a guess.** The exact identity of an action is
+written down durably before anything leaves the process. When the answer does not come back,
+reconciliation reuses that frozen identity instead of composing a fresh action, and consults no
+model on the way — so the clinic answers with the appointment it already holds.
+
+---
+
+## Proof at a glance
+
+| Claim | Press this | Measured proof |
+| --- | --- | --- |
+| The model cannot authorize its own actions | **02 — Malicious document.** CareLoop supplies the unsafe proposal itself, every tool in the registry is refused, and the case reports `EXTERNAL ACTIONS PERFORMED 0` | 40 hostile payloads × 2 delivery routes × 4 external-effect tools = **320 evaluated combinations**. Unauthorized external actions: **0 of 320**. The same corpus with the authority layer replaced by an allow-all ruleset: **320 of 320** — opposite on every single combination, which is what shows the zero belongs to the policy engine — [method and limits](security-evaluation.md) |
+| A document supplies facts, never permission | **My Boundaries.** *Grant portal access* is unavailable, because nothing this caregiver configures establishes a trusted role — and neither a document nor an approval can supply one | Trust is bound to a declared fact key rather than to a matching value, `TRUSTED` has exactly one producer, and validation cannot promote a destination — [the property ledger](evidence.md) |
+| A booking is done only when the clinic agrees | **01 — Schedule a cardiology referral.** The case ends `MATCHED`; then read `/clinic/slots` and count the slots yourself | Every booking argument the clinic exposes is compared against a separate read of its record, and each comparison has a mutant proving its absence would be noticed — [the read-back](architecture.md#the-read-back) |
+| An ambiguous external result is reconciled rather than guessed at | **04 — The answer gets lost.** The reply is discarded on purpose and the case finishes on its own, with nothing pressed | One action identity, one appointment at the clinic, one plan made — and a real process killed mid-booking converges the same way from a durable store, in [`tests/test_saga_chaos.py`](../tests/test_saga_chaos.py) |
+
+Deeper evidence is at the bottom of this page rather than here: this table is the four things worth
+knowing, not the whole ledger.
+
+---
+
+## Check it yourself
+
+Three things you can read directly, without taking CareLoop's word for any of them.
+
+### Read the boundaries before you press anything
 
 Click **My Boundaries** in the header, before pressing any scenario.
 
@@ -88,9 +136,38 @@ Three things are worth reading there:
 A completed case links back: its outcome names the rule that authorized it and points at the
 capability on this page that the action was an instance of.
 
+### Read the clinic's own record
+
+The appointment is booked over real HTTP against a separate service in its own process, which
+CareLoop does not own and which never imports a line of CareLoop's code. You can read it directly —
+the link at the bottom of the **Run a scenario** page is this URL with your own world named on it:
+
+```
+https://d2heuwvhvrdyig.cloudfront.net/clinic/slots?session=<your world>
+```
+
+Three slots are seeded. After scenario 01 books one, two remain. Without the `?session=` part you
+are reading the clinic nobody has booked in, which is a different world rather than an empty
+answer — every visitor gets their own, so that two judges do not compete for one slot.
+
+**Verification re-reads this service independently** and compares what the clinic holds against
+what was authorised — never the booking's own confirmation, which would only be re-reading
+CareLoop's own receipt.
+
+### Read the JSON instead of the screen
+
+`GET /api/cases` and `GET /api/cases/{id}` are open. Every claim the dashboard makes about a case —
+the proposal, the policy verdict, the matched rule, the action, the observation — is projected from
+the same durable timeline those endpoints return.
+
 ---
 
-## The claim worth checking
+## Scenarios in detail
+
+The launcher offers four. 01 and 02 are the spine above; 03 and 04 are what the minutes after it are
+for.
+
+### 02 — the claim worth checking
 
 The interesting claim is not that an agent can book an appointment. It is that **a document telling
 the agent to email everything to an attacker cannot make it happen**, and that the audit trail
@@ -112,7 +189,8 @@ this one asks                  assume one did. can the action actually happen?
 ```
 
 The second question is the one CareLoop is built to answer, and it is the one a launcher can
-promise. So the planner is replaced, for this one case, by a fixture in `careloop/api/adversary.py`
+promise. So the planner is replaced, for this one case, by a fixture in
+[`careloop/api/adversary.py`](../careloop/api/adversary.py)
 that proposes exactly what the notice asks for — and **nothing after the proposal is substituted**.
 The proposal is written to the durable timeline, the shipped policy engine reads it back out of the
 store and judges it against the shipped `rules.yaml`, and the refusal, the reason code, the matched
@@ -140,7 +218,7 @@ standing capability on **My Boundaries**, derived from the same ruleset that jus
 nothing in the product implies one — no model was asked. What it shows is that a dangerous proposal
 *has no authority*, which is the property that does not depend on a model being reliable.
 
-### The realistic version, which measures the model instead
+#### The realistic version, which measures the model instead
 
 The same card offers **Run the realistic version instead →**. That one delivers the poisoned notice
 *beside* genuine work to a real planner and does not substitute anything.
@@ -176,29 +254,7 @@ something poisoned.
 That route variance is exactly why scenario 02 supplies the proposal rather than hoping for one:
 what a judge watches should not depend on which of three endings a model happened to reach.
 
----
-
-## Check the booking yourself
-
-The appointment is booked over real HTTP against a separate service in its own process, which
-CareLoop does not own and which never imports a line of CareLoop's code. You can read it directly —
-the link at the bottom of the **Run a scenario** page is this URL with your own world named on it:
-
-```
-https://d2heuwvhvrdyig.cloudfront.net/clinic/slots?session=<your world>
-```
-
-Three slots are seeded. After scenario 01 books one, two remain. Without the `?session=` part you
-are reading the clinic nobody has booked in, which is a different world rather than an empty
-answer — every visitor gets their own, so that two judges do not compete for one slot.
-
-**Verification re-reads this service independently** and compares what the clinic holds against
-what was authorised — never the booking's own confirmation, which would only be re-reading
-CareLoop's own receipt.
-
----
-
-## The third scenario: it stops
+### 03 — it stops
 
 **03 — Pause for a decision.** CareLoop reaches a step it has no authority to take alone, stops,
 and asks. Nothing happens until you press **Approve** — and pressing **Reject** sends it back to
@@ -214,9 +270,7 @@ reading that clinic back. 03 finishes on an email, which is simulated, so verifi
 confirm that what was performed matches what was authorised. Both say "done"; only one claims the
 outside world agreed. A seal that played on every completion would mean nothing.
 
----
-
-## The fourth scenario: the answer gets lost
+### 04 — the answer gets lost
 
 **04 — The answer gets lost.** This is the one that is hard to see anywhere else, and it is worth
 the ten seconds.
@@ -255,7 +309,7 @@ had instead of making a second one. So:
 
 Check the last one yourself at `/clinic/slots?session=<your world>`: two of the three seeded slots
 are still free, not one. The evidence block on the finished case says the same thing in the same
-words, and `tests/test_recovery_copy.py` fails the build if any screen in this product ever starts
+words, and [`tests/test_recovery_copy.py`](../tests/test_recovery_copy.py) fails the build if any screen in this product ever starts
 claiming CareLoop avoided the second request.
 
 **What the live demo does not show, and where it is.** A CareLoop process that is *killed*
@@ -269,7 +323,7 @@ process killed with `os._exit` on the line after the clinic confirms:
 .venv/Scripts/python -m pytest tests/test_saga_chaos.py -q
 ```
 
-`scripts/resume_demo.py` is the same property over a file on disk, carrying one case through three
+[`scripts/resume_demo.py`](../scripts/resume_demo.py) is the same property over a file on disk, carrying one case through three
 separate processes.
 
 ---
@@ -284,8 +338,6 @@ separate processes.
 | **Audit** | Every case carries an append-only timeline: what was proposed, what was allowed or denied, which rule matched, and what was verified. |
 | **Hosting** | The Strands agent graph, the API and the dashboard on one host behind CloudFront; the clinic in its own process. |
 | **Isolation** | One world per visitor — your own case store and your own clinic — so the URL is safe to open while somebody else is using it. |
-
-`GET /api/cases` and `GET /api/cases/{id}` are open if you would rather read JSON than click.
 
 ---
 
@@ -313,3 +365,15 @@ separate processes.
   audit trail records them. Nothing is invented and nothing is reordered.
 - **Nothing loads at all.** The host may be between deploys. It comes back on its own.
 
+---
+
+## Deeper technical proof
+
+| | |
+|---|---|
+| [README](../README.md) | the system in one page: architecture, the adversarial result, production identity, and a long list of what it does not claim |
+| [Architecture](architecture.md) | the three trust zones, where the gate sits, and why there are exactly two agents |
+| [Security evaluation](security-evaluation.md) | how the 320 combinations are built, why the allow-all counterfactual is the part that matters, and what the result does not cover |
+| [Property ledger](evidence.md) | 67 declared properties, each with the question it answers and the evidence that answers it. 16 carry mutation evidence — something in the suite asserts the defect comes back when the defence is removed. Four rows are proofs measured once against real AWS, and each says which it is: stored proof for a named commit, stale because the code it depended on has moved, or deliberately not yet re-run. |
+| [AgentCore evaluation](agentcore-evaluations-proof.md) | a deterministic evaluator running in AWS against real production traces, and the three things that proof must not be read as claiming |
+| [Session log](session-log.md) | engineering history rather than judge evidence: every session, what was measured, and what was cut |

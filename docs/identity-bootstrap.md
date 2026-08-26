@@ -168,8 +168,10 @@ deployed, and the seven checks below were carried out against the real CloudFron
 never the origin — on **2026-08-24**, at commit **`49630e5`**. That is the commit the claim
 certifies, and CareLoopBench renders it as exactly that:
 [`evidence/live/production-identity.json`](../evidence/live/production-identity.json), read by
-`careloopbench/ingest.py` and shown in [`evidence.md`](evidence.md) as
-`PROVEN_AT 49630e5da939 · operator-attested`.
+`careloopbench/ingest.py` and shown in [`evidence.md`](evidence.md) with the commit it names —
+`PROVEN_AT 49630e5da939 · operator-attested` while the declared surface stood unmoved, and
+`STALE` — *proven at 49630e5da939; the surface has moved since* — from the moment any of it did,
+which is what the row reads today.
 
 | # | Check | Result |
 | --- | --- | --- |
@@ -192,9 +194,13 @@ status code.
 exists for this run — it was a browser login and a sequence of requests through a CDN, and
 CareLoop's deployment publishes no build identifier on the wire, so nothing in the transcript could
 name the commit it ran against. The record therefore says a person observed this and attests to the
-commit themselves. It is deliberately not dressed up as tool output. Making it `MEASURED` would
-mean publishing a build id from `GET /api/health` or `GET /api/build`, which is a change to the
-product's own surface and is a separate decision.
+commit themselves. It is deliberately not dressed up as tool output. Since then the deploy has
+grown a build identifier the product did not have to change for — every artefact now carries
+`frontend/dist/release.json` naming its source commit, served at `/release.json` by the deployed
+tree — so a future re-run can read the commit off the wire and *corroborate* what it attests. The
+attestation itself stays `OPERATOR`: the recorder's `MEASURED` path names the local checkout, and
+a marker the deployment serves about itself is the deployment's own claim, corroboration rather
+than observation by the tool.
 
 **What the record does not carry, on purpose:** no access token, no ID token, no `Authorization`
 header, no Cognito subject and no session id. `careloopbench/ingest.py` refuses a stored proof
@@ -207,5 +213,8 @@ synthetic fixtures and appear in the committed directory already.
 dependency surface is the identity boundary itself — `careloop/identity/`, `careloop/api/auth.py`,
 `careloop/api/access.py`, `careloop/api/deps.py`, `deploy/caregivers.json` and the browser's login
 service — and not the line that decides which mode is served. Flipping that one word back is a
-one-value deploy; none of the code this proof is about has changed since it was taken, which is
-what keeps the row `PROVEN_AT` rather than `STALE`.
+one-value deploy. The surface has since moved — `careloop/api/deps.py` grew the demo-scenario
+wiring for the compromised-planner fixture — so the row now reads `STALE`, which is the model
+saying the proof stopped being about this exact code, never that anything failed. Re-attesting at
+the final pre-submission refresh is the recorded remedy, per
+[`evidence/live/README.md`](../evidence/live/README.md).

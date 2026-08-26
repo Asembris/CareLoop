@@ -226,7 +226,8 @@ What the one command does, in order:
 |---|---|
 | verify HEAD | refuses a working tree that does not match the commit; the artefact carries the commit's own blobs |
 | build the frontend | locally, so Node never goes on the server and the bundle served is the bundle tested |
-| pack the artefact | `scripts/deploy_artifact.py` — tracked tree at `HEAD`, minus the exclusions, plus `frontend/dist` |
+| stamp the release marker | `frontend/dist/release.json` naming `HEAD`, written only immediately after a successful build |
+| pack the artefact | `scripts/deploy_artifact.py` — tracked tree at `HEAD`, minus the exclusions, plus `frontend/dist`; refused if the marker is absent or names any other commit |
 | checksum and scan | a deterministic SHA-256, and a member scan that refuses anything secret |
 | upload | to the private artefact bucket, SSE-S3, after asserting the bucket blocks public access |
 | preflight | on the instance: disk, tools, download, **verify the digest**, scan the member list again, unpack nothing |
@@ -237,7 +238,7 @@ What the one command does, in order:
 | atomic swap | two renames on one filesystem, after the new tree is fully extracted and checked |
 | `bootstrap.sh` | the same idempotent script as ever, from the new tree |
 | health | both units active, both origins answering, on the instance |
-| `verify_deploy.py` | **through the distribution**, which is the only place a CDN misconfiguration is visible |
+| `verify_deploy.py` | **through the distribution**, which is the only place a CDN misconfiguration is visible; `/release.json` must name the packed commit |
 | cleanup | the transfer artefact is removed from the instance and the object deleted from S3 |
 
 **Rollback is automatic, and only for what a rollback can undo.** A failing `bootstrap.sh` or a
@@ -262,6 +263,33 @@ Everything in the store is synthetic. There is deliberately no migration and no 
 fallback: a `DONE` case booked before a booking-identity boundary and reopened after it misses
 duplicate suppression and sends a real second `POST`.
 
+### Release provenance
+
+Every deploy binds three identities together, and each link is checked rather than trusted:
+
+```
+git commit F ──▶ frontend/dist/release.json     {"git_sha": F}, stamped after the build
+             ──▶ careloop.tar.gz                one deterministic SHA-256 Y over the tracked
+                                                tree at F, the built bundle, and the marker
+             ──▶ the instance                   verifies Y before unpacking anything
+             ──▶ https://<distribution>/release.json answers {"git_sha": F}
+```
+
+The marker is stamped **only** immediately after a successful frontend build, and the artefact
+builder refuses a `dist` whose marker is absent or names any other commit. So `--no-build` can
+only deploy a bundle whose existing `release.json` already names current `HEAD`, and a stale
+bundle can never be relabelled by rewriting its marker — the only outcomes are a rebuild or a
+refusal. The instance's digest check is what makes the served marker part of the exact bytes that
+were installed, and `verify_deploy.py` reads it back through the distribution at the end of every
+deploy, where it must equal the commit that was packed. No route serves it: it travels the same
+static path as the rest of the bundle, so the application did not change.
+
+What the digest is and is not: `Y` proves the installed tree is byte-for-byte the artefact built
+here from `F` — after which `deploy/careloop.env` diverges by the documented operator-value merge,
+and nothing else does. It is deployment integrity evidence, not a reproducible-build
+certification: the bundle half of `Y` comes from the deploying machine's Node toolchain, and no
+claim is made that a third machine rebuilding `F` necessarily lands on `Y` byte for byte.
+
 ### What has to exist first
 
 Not created by the deploy, and each one an account-level decision:
@@ -281,6 +309,7 @@ run that was interrupted before it got there.
 
 ```bash
 curl -fsS https://<distribution>.cloudfront.net/api/health          # {"status":"ok"}
+curl -fsS https://<distribution>.cloudfront.net/release.json        # {"git_sha": "<the deployed commit>"}
 curl -fsSI https://<distribution>.cloudfront.net/api/health | grep -i cache-control   # no-store
 curl -fsS https://<distribution>.cloudfront.net/clinic/slots        # the seeded world
 

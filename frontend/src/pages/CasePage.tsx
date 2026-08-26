@@ -2,6 +2,7 @@ import { useScrollReveal } from "@/hooks/useScrollReveal";
 import { useNavigate, useParams } from "react-router-dom";
 import { useCareLoop } from "@/hooks/useCareLoop";
 import { caseTone } from "@/lib/tone";
+import { nextStepFor } from "@/services/presentation";
 import AdversarialNote from "@/components/cases/AdversarialNote";
 import OutcomePanel from "@/components/cases/OutcomePanel";
 import CaseTimeline from "@/components/cases/CaseTimeline";
@@ -98,6 +99,33 @@ export default function CasePage() {
             every case the backend cannot prove it about. */}
         <AdversarialNote proof={careCase.adversarial} />
         <OutcomePanel careCase={careCase} />
+        {/* The guided route's one affordance: a quiet link on the two settled demo fixtures, and
+            nothing anywhere else — `nextStepFor` reads durable identity and state and answers
+            `null` for every other case. It routes to the launcher, never runs a scenario. */}
+        {(() => {
+          const next = nextStepFor(careCase);
+          if (!next) return null;
+          return (
+            <div data-scene-exclude data-testid="next-step">
+              <button
+                className="cl-quiet"
+                onClick={() => navigate(next.to)}
+                style={{
+                  background: "transparent",
+                  border: 0,
+                  padding: "4px 0",
+                  fontSize: 14,
+                  textAlign: "left",
+                  color: "var(--nav-ink, var(--muted-foreground))",
+                  transition: "color 120ms ease",
+                  borderBottom: "1px solid color-mix(in oklab, currentColor 30%, transparent)"
+                }}
+              >
+                {next.text}
+              </button>
+            </div>
+          );
+        })()}
         <CaseTimeline careCase={careCase} />
         <EvidenceGrid evidence={careCase.evidence} />
         <DocumentStrip documents={careCase.documents ?? []} refusals={careCase.refusals ?? []} />

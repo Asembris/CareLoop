@@ -850,3 +850,50 @@ describe("a completed case", () => {
     expect(screen.getByText("Not read back")).toBeInTheDocument();
   });
 });
+
+describe("the guided route's next step", () => {
+  it("leads a settled referral to the launcher, where the next card frames itself", async () => {
+    const done = card({ case_id: "demo-referral", state: "DONE", section: "completed" });
+    serve([done], {
+      "demo-referral": [
+        entry("PLAN_PROPOSED", { tool_name: "book_appointment", args: BOOKING }),
+        entry("VERIFICATION_PASSED", { tool_name: "book_appointment", read_back: "true" })
+      ]
+    });
+    show("/case/demo-referral");
+
+    await screen.findByText("Appointment booked and confirmed");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Next: test what happens when the proposal itself is unsafe →" })
+    );
+
+    // The launcher, not a scenario endpoint: the boundary card's own framing must be read before
+    // it is pressed, so the link may never run anything itself.
+    expect(await screen.findByRole("heading", { name: "See CareLoop work." })).toBeInTheDocument();
+  });
+
+  it("offers no next step while the same case is still working", async () => {
+    const working = card({ case_id: "demo-referral", state: "EXECUTING", section: "working" });
+    serve([working], {
+      "demo-referral": [entry("PLAN_PROPOSED", { tool_name: "book_appointment", args: BOOKING })]
+    });
+    show("/case/demo-referral");
+
+    await screen.findByText("Cardiology referral");
+    expect(screen.queryByTestId("next-step")).not.toBeInTheDocument();
+  });
+
+  it("offers no next step on a case that is not a demo fixture", async () => {
+    const done = card({ case_id: "case-0042", state: "DONE", section: "completed" });
+    serve([done], {
+      "case-0042": [
+        entry("PLAN_PROPOSED", { tool_name: "book_appointment", args: BOOKING }),
+        entry("VERIFICATION_PASSED", { tool_name: "book_appointment", read_back: "true" })
+      ]
+    });
+    show("/case/case-0042");
+
+    await screen.findByText("Appointment booked and confirmed");
+    expect(screen.queryByTestId("next-step")).not.toBeInTheDocument();
+  });
+});

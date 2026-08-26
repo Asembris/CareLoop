@@ -151,8 +151,13 @@ seeded slots to two.
 provider, whose script is empty outside the test suite — the run fails at the first triage call
 with `MockScriptExhausted` and the case lands `FAILED`. That is deliberate: a process that was
 never told about a real provider cannot reach one by accident, which is what lets CI assert "$0,
-offline, no secrets" rather than hope for it. **The credential-free ways to see CareLoop work are
-the live URL and the replay above.**
+offline, no secrets" rather than hope for it. **Three things run credential-free: the live URL,
+the replay above, and CI's own end-to-end job** — which builds the frontend, starts Demo World and
+CareLoop as two real processes, and drives the referral through to a booking read back from the
+clinic and reported `MATCHED`. That job substitutes deterministic scripted proposals for the
+model's and leaves the graph, the policy engine, the store, the tool boundary, the idempotency
+keys, the clinic and the read-back real. It is CI's harness rather than a supported way to launch
+CareLoop by hand, and **what needs a real model is exactly the interactive demo above.**
 
 </details>
 

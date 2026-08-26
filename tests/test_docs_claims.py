@@ -296,6 +296,69 @@ class TestTheDocumentedEffectCountsAreDerivedFromTheDeclarations:
         )
 
 
+class TestTheParkingClaimNamesOnlyTheUnreplayableEffects:
+    """The README must not go on listing a replayable effect among the ones that park.
+
+    **This is the stale claim that motivated the guard.** ``README.md`` said *"Only
+    ``book_appointment`` can be autonomously recovered after an ambiguous outcome"* and named
+    ``upload_document`` beside ``send_email`` and ``grant_portal_access`` as parking with
+    ``EXTERNAL_OUTCOME_NOT_ESTABLISHED`` — true before the object store gained a provider, false
+    from the moment :data:`careloop.graph.recovery.RECOVERY_CLASS` declared it
+    ``IDEMPOTENT_REPLAYABLE``, and attached to nothing that could notice.
+
+    Read from the declaration rather than from a constant, so a third replayable provider turns
+    this red instead of leaving the page quietly wrong.
+    """
+
+    @staticmethod
+    def _parking_sentence(text: str) -> str:
+        """The sentence stating what parks, or ``""``. Sentence-scoped so the rest is not swept."""
+        for sentence in re.split(r"(?<=[.])\s", text):
+            if "EXTERNAL_OUTCOME_NOT_ESTABLISHED" in sentence:
+                return sentence
+        return ""
+
+    @staticmethod
+    def _unreplayable() -> frozenset[str]:
+        from careloop.graph.recovery import RECOVERY_CLASS, RecoveryClass
+
+        return frozenset(
+            name
+            for name, klass in RECOVERY_CLASS.items()
+            if klass is not RecoveryClass.IDEMPOTENT_REPLAYABLE
+        )
+
+    def test_the_readme_still_states_what_parks(self) -> None:
+        """Anti-vacuity: an absent sentence satisfies every assertion made over it."""
+        assert self._parking_sentence(README.read_text(encoding="utf-8")), (
+            "README.md no longer says which effects park with EXTERNAL_OUTCOME_NOT_ESTABLISHED. "
+            "If the sentence went deliberately, remove this test in the same commit; do not leave "
+            "an assertion that passes because there is nothing left to check."
+        )
+
+    def test_it_names_exactly_the_unreplayable_effects(self) -> None:
+        from careloop.graph.recovery import RECOVERY_CLASS
+
+        sentence = self._parking_sentence(README.read_text(encoding="utf-8"))
+        named = frozenset(name for name in RECOVERY_CLASS if name in sentence)
+
+        assert named == self._unreplayable()
+
+    def test_the_stale_sentence_is_caught(self) -> None:
+        """Vacuity from the other end: the wording this guard exists for must fail it."""
+        was_wrong = (
+            "`send_email`, `upload_document` and `grant_portal_access` park for a person with "
+            "`EXTERNAL_OUTCOME_NOT_ESTABLISHED` instead."
+        )
+        from careloop.graph.recovery import RECOVERY_CLASS
+
+        sentence = self._parking_sentence(was_wrong)
+
+        named = frozenset(name for name in RECOVERY_CLASS if name in sentence)
+
+        assert named != self._unreplayable()
+
+
 class TestTheDenominatorIsDecomposedWhereTheFrontendReadsIt:
     """``320`` is a cross product, and the document that says so is now load-bearing.
 

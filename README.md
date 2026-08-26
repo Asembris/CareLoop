@@ -296,12 +296,15 @@ there is no cookie-CSRF machinery bolted on beside it.
   timeout is not evidence about the outside world, so a case whose provider stays away goes on
   saying it is waiting rather than being marked failed or handed to a person because time passed.
   The schedule is in memory, so a restart begins it again — which the sweep is what makes safe.
-- **Only `book_appointment` can be autonomously recovered after an ambiguous outcome**, because it
-  is the only effect with a measured durable idempotency contract and an independent read-back.
-  `send_email`, `upload_document` and `grant_portal_access` park for a person with
-  `EXTERNAL_OUTCOME_NOT_ESTABLISHED` instead — an email that may or may not have been sent is not
-  something an agent may decide to send again. There is no CareLoop-wide exactly-once claim, and
-  the at-most-one-appointment guarantee is Demo World's, not CareLoop's.
+- **Only the two effects with a real provider can be autonomously recovered after an ambiguous
+  outcome.** `book_appointment` and `upload_document` are both `IDEMPOTENT_REPLAYABLE` and both are
+  independently observable, so a dispatch that got no answer is settled by re-issuing the frozen
+  identity and then reading the provider's own record — and a run with no observer bound for that
+  effect parks instead. `send_email` and `grant_portal_access` are `NOT_REPLAYABLE` and park for a
+  person with `EXTERNAL_OUTCOME_NOT_ESTABLISHED` whatever a run is wired with — an email that may
+  or may not have been sent is not something an agent may decide to send again. There is no
+  CareLoop-wide exactly-once claim, and the at-most-one-appointment guarantee is Demo World's, not
+  CareLoop's.
 - **A first-attempt refusal from the clinic still ends the case `FAILED`.** An unknown slot or a
   slot somebody else holds is the clinic *answering* that it did not make the booking, which is the
   behaviour that predates the saga and is unchanged by it. What changed is the *ambiguous* case: a

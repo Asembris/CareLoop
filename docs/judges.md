@@ -378,3 +378,8 @@ carrying one case through three separate processes.
 | [Property ledger](evidence.md) | 67 declared properties, each with the question it answers and the evidence that answers it. 16 carry mutation evidence — something in the suite asserts the defect comes back when the defence is removed. Four rows are proofs measured once against real AWS, and each says which it is: stored proof for a named commit, stale because the code it depended on has moved, or deliberately not yet re-run. |
 | [AgentCore evaluation](agentcore-evaluations-proof.md) | a deterministic evaluator running in AWS against real production traces, and the three things that proof must not be read as claiming |
 | [Session log](session-log.md) | engineering history rather than judge evidence: every session, what was measured, and what was cut |
+
+The independent read-back is not booking-specific: `upload_document` is a second effect CareLoop
+observes through a separate read of the provider rather than through its own receipt, and that
+provider's write contract was measured once against real Amazon S3 — see the
+[property ledger](evidence.md) and [deploying the second external effect](deployment-objectstore.md).

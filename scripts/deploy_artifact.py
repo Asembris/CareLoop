@@ -36,6 +36,7 @@ import argparse
 import fnmatch
 import gzip
 import hashlib
+import json
 import re
 import subprocess
 import sys
@@ -50,6 +51,19 @@ from typing import Final
 #: artefact. Node is never installed on the instance: the bundle that ships is the bundle that was
 #: built and tested here.
 FRONTEND_DIST: Final[str] = "frontend/dist"
+
+#: The release marker: the one member that says which commit the built bundle belongs to. Written
+#: by ``scripts/deploy.py`` immediately after a successful frontend build and nowhere else,
+#: validated here before anything is packed, and served by the deployed tree at ``/release.json``
+#: through the same static path as the rest of the bundle -- so the running release publicly names
+#: its source commit without any change to the application.
+RELEASE_MANIFEST: Final[str] = f"{FRONTEND_DIST}/release.json"
+
+#: The one shape the marker's commit may have: 40 lowercase hex characters, exactly as
+#: ``git rev-parse HEAD`` prints one. The marker carries this and nothing else -- no timestamp, no
+#: branch, no host, no artefact digest. Anything time- or machine-derived would make two builds of
+#: one commit two digests, and the artefact digest cannot contain itself.
+RELEASE_COMMIT: Final[re.Pattern[str]] = re.compile(r"\A[0-9a-f]{40}\Z")
 
 #: Whole directories a running host has no use for, as repository-relative prefixes.
 #:
@@ -141,6 +155,7 @@ REQUIRED_MEMBERS: Final[tuple[str, ...]] = (
     "scripts/demo_serve.py",
     "scripts/observability.py",
     f"{FRONTEND_DIST}/index.html",
+    RELEASE_MANIFEST,
 )
 
 #: The final pass. Read against the member list the artefact will actually contain, sharing no code
@@ -256,6 +271,52 @@ def built_frontend(root: Path) -> tuple[str, ...]:
     )
 
 
+def write_release_manifest(root: Path, commit: str) -> None:
+    """Stamp the built bundle with the commit it belongs to.
+
+    The one production caller is ``scripts/deploy.py``'s :func:`~scripts.deploy.build_frontend`,
+    immediately **after** a successful build -- never on a bundle that merely exists, because
+    rewriting the marker on a standing ``dist`` would relabel one commit's frontend as another's,
+    which is exactly the false provenance the marker exists to refuse. The bytes are written
+    exactly (no platform newline translation), so one commit is one marker is one artefact digest.
+    """
+    if not RELEASE_COMMIT.match(commit):
+        raise ArtifactRefused(
+            f"{commit!r} is not a 40-hex commit, so no release marker was written"
+        )
+    (root / RELEASE_MANIFEST).write_bytes(json.dumps({"git_sha": commit}).encode("ascii") + b"\n")
+
+
+def release_manifest_commit(root: Path) -> str:
+    """The commit the built bundle declares, refused rather than defaulted when it cannot say.
+
+    Raises:
+        ArtifactRefused: the marker is missing, is not JSON, is not exactly
+            ``{"git_sha": "<commit>"}``, or names something that is not a 40-hex commit.
+    """
+    path = root / RELEASE_MANIFEST
+    if not path.is_file():
+        raise ArtifactRefused(
+            f"{RELEASE_MANIFEST} does not exist. The marker is written by scripts/deploy.py "
+            "immediately after the frontend build; a dist without one was built by hand or "
+            "predates the marker, and packing it would ship a bundle no commit can be named for. "
+            "Rebuild the frontend through the deploy (drop --no-build)."
+        )
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError as broken:
+        raise ArtifactRefused(f"{RELEASE_MANIFEST} is not valid JSON: {broken}") from broken
+    if not isinstance(loaded, dict) or set(loaded) != {"git_sha"}:
+        raise ArtifactRefused(
+            f'{RELEASE_MANIFEST} must be exactly {{"git_sha": "<commit>"}} and is not. A marker '
+            "carrying anything else is a marker something other than the deploy wrote."
+        )
+    declared = loaded["git_sha"]
+    if not isinstance(declared, str) or not RELEASE_COMMIT.match(declared):
+        raise ArtifactRefused(f"{RELEASE_MANIFEST} names {declared!r}, not a 40-hex commit")
+    return declared
+
+
 def members(root: Path) -> tuple[str, ...]:
     """Exactly what the artefact contains, in the order it will contain it."""
     tracked = tuple(path for path in tracked_at_head(root) if not is_excluded(path))
@@ -351,8 +412,9 @@ def build(root: Path, out: Path, *, allow_dirty: bool = False) -> Artifact:
     """Build, check and write the artefact. Raises rather than shipping something doubtful.
 
     Raises:
-        ArtifactRefused: the tree does not match ``HEAD``, the bundle is missing, a member the host
-            needs is absent, or a member matches :data:`FORBIDDEN`.
+        ArtifactRefused: the tree does not match ``HEAD``, the bundle is missing, the release
+            marker is absent or names a commit other than ``HEAD``, a member the host needs is
+            absent, or a member matches :data:`FORBIDDEN`.
     """
     dirty = dirty_paths(root)
     if dirty and not allow_dirty:
@@ -365,6 +427,14 @@ def build(root: Path, out: Path, *, allow_dirty: bool = False) -> Artifact:
         )
 
     commit = head_commit(root)
+    declared = release_manifest_commit(root)
+    if declared != commit:
+        raise ArtifactRefused(
+            f"{RELEASE_MANIFEST} names {declared} and HEAD is {commit}. The built bundle belongs "
+            "to a different commit, and packing it would relabel that commit's frontend as this "
+            "one's. Rebuild the frontend at HEAD (drop --no-build), or check out the commit the "
+            "bundle was built for; the marker is never rewritten in place."
+        )
     names = members(root)
 
     absent = missing_required(names)

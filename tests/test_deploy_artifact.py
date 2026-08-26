@@ -121,6 +121,7 @@ MUST_SHIP: tuple[str, ...] = (
     "bench/run.py",
     "evals/replay.py",
     "frontend/dist/index.html",
+    "frontend/dist/release.json",
     "frontend/dist/assets/index-BiHL1Ob1.js",
     "frontend/src/App.tsx",
     "docs/architecture.md",
@@ -139,7 +140,7 @@ def _extract(payload: bytes) -> dict[str, bytes]:
     return found
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="module", autouse=True)
 def shipped() -> Iterator[tuple[str, ...]]:
     """The real member list, over a real bundle or a stand-in for one.
 
@@ -154,9 +155,17 @@ def shipped() -> Iterator[tuple[str, ...]]:
     never touched, never overwritten and never removed; the placeholder is deleted afterwards, and
     it lands under ``dist/``, which is gitignored.
 
+    **The release marker gets the same treatment, in both directions.** ``build(ROOT, ...)``
+    refuses a ``dist`` whose ``release.json`` is absent or names another commit, so the marker is
+    stamped for ``HEAD`` here -- and a developer's real marker, which legitimately names the last
+    *deployed* commit rather than today's ``HEAD``, is put back byte for byte afterwards.
+    ``autouse`` because the refusal tests below drive :func:`build` without asking for the member
+    list, and they need the marker standing just the same.
+
     What this deliberately does **not** paper over is the refusal itself:
     ``test_an_unbuilt_frontend_is_refused`` drives :func:`built_frontend` against a directory that
-    is not there, and ``scripts/deploy.py`` builds the bundle before packing rather than hoping.
+    is not there, ``tests/test_release_manifest.py`` drives the marker refusals, and
+    ``scripts/deploy.py`` builds the bundle before packing rather than hoping.
     """
     dist = ROOT / FRONTEND_DIST
     placeholder = dist / "index.html"
@@ -164,9 +173,16 @@ def shipped() -> Iterator[tuple[str, ...]]:
     if stood_in:
         dist.mkdir(parents=True, exist_ok=True)
         placeholder.write_bytes(b"<!doctype html><!-- stand-in for a built bundle -->")
+    marker = dist / "release.json"
+    previous = marker.read_bytes() if marker.exists() else None
+    deploy_artifact.write_release_manifest(ROOT, deploy_artifact.head_commit(ROOT))
     try:
         yield members(ROOT)
     finally:
+        if previous is None:
+            marker.unlink(missing_ok=True)
+        else:
+            marker.write_bytes(previous)
         if stood_in:
             placeholder.unlink(missing_ok=True)
             with suppress(OSError):

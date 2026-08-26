@@ -1,7 +1,7 @@
 {
   "careloopbench": {
     "tier": "core",
-    "generated_at_commit": "28601a3cbabb5bf164047a38c087815db043693c",
+    "generated_at_commit": "db7ed9d4aaa9e6d8f7e2d9b34ecc17e8cb9bcd2f",
     "registry_digest": "50388296002d6a4400c2c6879da5cd68f04d90c02409c68cc0c5612c90d1bd66",
     "tests_run": 1497
   },
@@ -1188,7 +1188,7 @@
       "domain": "SETTLEMENT_INTEGRITY",
       "level": "LIVE_DEPLOYMENT",
       "status": "NOT_RUN",
-      "detail": "no stored proof; run python scripts/evaluations_prove.py --out evidence/live/agentcore-settlement.json",
+      "detail": "no stored proof; run python scripts/evaluations_prove.py --out <raw>.json, then python -m careloopbench.record live.agentcore-settlement --raw <raw>.json --attestation <how> --environment <where>",
       "scope": "Whether the instrumented transport corroborates the claim beside it. AWS never queries the clinic, and this is not a proof that CareLoop cannot lie.",
       "mutation_backed": false,
       "evidence": [],
@@ -1196,7 +1196,7 @@
       "artifact": {
         "proof_id": "live.agentcore-settlement",
         "path": "evidence/live/agentcore-settlement.json",
-        "tool": "python scripts/evaluations_prove.py --out evidence/live/agentcore-settlement.json",
+        "tool": "python scripts/evaluations_prove.py --out <raw>.json, then python -m careloopbench.record live.agentcore-settlement --raw <raw>.json --attestation <how> --environment <where>",
         "surface": [
           "evaluators/",
           "careloop/graph/verify.py",
@@ -1220,7 +1220,7 @@
       "artifact": {
         "proof_id": "live.objectstore-contract",
         "path": "evidence/live/objectstore-contract.json",
-        "tool": "python scripts/objectstore_contract.py --bucket <scratch> --out evidence/live/objectstore-contract.json",
+        "tool": "python scripts/objectstore_contract.py --bucket <bucket> --prefix <unique> --out <raw>.json, then python -m careloopbench.record live.objectstore-contract --raw <raw>.json --attestation <how> --environment <where>",
         "surface": [
           "careloop/tools/objectstore.py",
           "objectstore/",
@@ -1234,7 +1234,7 @@
       "domain": "ADVERSARIAL_ROBUSTNESS",
       "level": "LIVE_DEPLOYMENT",
       "status": "NOT_RUN",
-      "detail": "no stored proof; run python scripts/verify_lock.py --out evidence/live/deployed-lock.json",
+      "detail": "no stored proof; run python scripts/verify_lock.py --out <raw>.json, then python -m careloopbench.record live.deployed-injection-lock --raw <raw>.json --attestation <how> --environment <where>",
       "scope": "Runs of one scenario against one model on one day. The corpus replay is the attack-agnostic measurement and is executed on every invocation.",
       "mutation_backed": false,
       "evidence": [],
@@ -1242,7 +1242,7 @@
       "artifact": {
         "proof_id": "live.deployed-injection-lock",
         "path": "evidence/live/deployed-lock.json",
-        "tool": "python scripts/verify_lock.py --out evidence/live/deployed-lock.json",
+        "tool": "python scripts/verify_lock.py --out <raw>.json, then python -m careloopbench.record live.deployed-injection-lock --raw <raw>.json --attestation <how> --environment <where>",
         "surface": [
           "careloop/",
           "demoworld/",

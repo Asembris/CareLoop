@@ -29,6 +29,7 @@ from typing import Final
 import pytest
 
 from careloopbench.claims import (
+    ARTIFACT_ROOT,
     CLAIMS,
     EVERY_CLAIM,
     LIVE_CLAIMS,
@@ -45,6 +46,7 @@ from careloopbench.ingest import (
     REQUIRED,
     ArtifactRefused,
     ingest_one,
+    live_results,
     surface_digest,
 )
 from careloopbench.levels import TIERS, Domain, ExecutionLevel, Status
@@ -244,6 +246,85 @@ class TestEachLiveSurfaceCoversWhatItsProofDependsOn:
         for claim in LIVE_CLAIMS:
             assert claim.artifact is not None
             assert surface_digest(claim.artifact.surface)
+
+
+class TestRemediationPointsThroughTheRecorder:
+    """What a ``NOT_RUN`` row tells an operator to do must be a thing that works.
+
+    ``ArtifactRef.tool`` is not decoration: :func:`~careloopbench.ingest.ingest_one` interpolates
+    it into the detail a reader of a ``NOT_RUN`` row sees, and the rendered page prints it in its
+    own column. It used to read ``--out evidence/live/<proof>.json`` -- which was truthful while a
+    record was hand-authored, and became wrong the moment ``careloopbench.record`` owned those
+    paths. Followed literally it would have written raw tool output *over* an envelope
+    destination, producing a file :func:`~careloopbench.ingest.read_envelope` refuses for missing
+    every required field. A remediation hint that breaks the thing it is meant to repair is worse
+    than no hint.
+
+    So the rule is the narrow one: a tool string may name a scratch path and must never name the
+    evidence directory, and anything that produces output has to route it through the recorder.
+    ``live.production-identity`` is prose about a login somebody performed by hand and produces no
+    file, which is why the second rule is scoped by ``--out`` rather than applied to all four.
+    """
+
+    def tool_driven(self) -> tuple[Claim, ...]:
+        return tuple(
+            claim
+            for claim in LIVE_CLAIMS
+            if claim.artifact is not None and "--out" in claim.artifact.tool
+        )
+
+    def test_no_remediation_writes_raw_output_into_the_evidence_directory(self) -> None:
+        """The defect itself. These paths belong to the recorder and to nothing else."""
+        for claim in LIVE_CLAIMS:
+            assert claim.artifact is not None
+            assert ARTIFACT_ROOT not in claim.artifact.tool, claim.artifact.proof_id
+
+    def test_everything_that_produces_output_routes_it_through_the_recorder(self) -> None:
+        for claim in self.tool_driven():
+            assert claim.artifact is not None
+            assert "careloopbench.record" in claim.artifact.tool, claim.artifact.proof_id
+            assert "--raw" in claim.artifact.tool, claim.artifact.proof_id
+
+    def test_the_recorder_is_named_with_the_proof_it_would_file(self) -> None:
+        """``proof_id`` is the recorder's one positional argument, so a hint omitting it does
+        not run."""
+        for claim in self.tool_driven():
+            assert claim.artifact is not None
+            assert claim.artifact.proof_id in claim.artifact.tool
+
+    def test_the_tool_driven_proofs_are_the_ones_that_produce_a_file(self) -> None:
+        """Vacuity, and a decision point: an empty selection would satisfy all three above.
+
+        Named rather than counted, so a fifth live proof has to be classified by somebody rather
+        than quietly falling outside the rules. ``live.production-identity`` is deliberately not
+        here -- a hosted-UI login writes nothing for a recorder to file.
+        """
+        assert {claim.artifact.proof_id for claim in self.tool_driven()} == {  # type: ignore[union-attr]
+            "live.agentcore-settlement",
+            "live.objectstore-contract",
+            "live.deployed-injection-lock",
+        }
+
+    def test_the_hint_a_reader_of_an_unrun_row_actually_sees_names_the_recorder(self) -> None:
+        """Asserted on the rendered detail, because that is the sentence somebody follows."""
+        unrun = [row for row in live_results().values() if row.status is Status.NOT_RUN]
+
+        assert unrun, "no row is NOT_RUN; this would pass vacuously"
+        for row in unrun:
+            assert "careloopbench.record" in row.detail
+            assert ARTIFACT_ROOT not in row.detail
+
+    def test_every_stored_record_is_still_one_the_reader_accepts(self) -> None:
+        """The other half: correcting the hint must not have disturbed what is already filed."""
+        stored = [
+            claim
+            for claim in LIVE_CLAIMS
+            if claim.artifact is not None and (REPO_ROOT / claim.artifact.path).exists()
+        ]
+
+        assert stored, "no live proof is stored; this would pass vacuously"
+        for claim in stored:
+            assert ingest_one(claim).status in {Status.PROVEN_AT, Status.STALE}
 
 
 class TestAMalformedClaimIsRefused:

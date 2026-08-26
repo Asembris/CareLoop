@@ -1,9 +1,9 @@
 {
   "proof_id": "live.objectstore-contract",
-  "tool": "python scripts/objectstore_contract.py --bucket <scratch> --out evidence/live/objectstore-contract.json",
+  "tool": "python scripts/objectstore_contract.py --bucket <bucket> --prefix <unique> --out <raw>.json, then python -m careloopbench.record live.objectstore-contract --raw <raw>.json --attestation <how> --environment <where>",
   "attested_commit": "28601a3cbabb5bf164047a38c087815db043693c",
   "attestation": "OPERATOR",
-  "ingested_at_commit": "28601a3cbabb5bf164047a38c087815db043693c",
+  "ingested_at_commit": "db7ed9d4aaa9e6d8f7e2d9b34ecc17e8cb9bcd2f",
   "produced_at": "2026-08-26",
   "environment": "Real Amazon S3 in AWS CloudShell, us-east-1. The measurement ran from a standalone copy of scripts/objectstore_contract.py whose SHA-256 was verified as b2336f2b2a529f61e87698838066890c259ee3a72d8c8f464143e8e6e5c5d36f against the attested commit, rather than from a git checkout of it -- which is why this record is OPERATOR-attested rather than MEASURED: a person verified the digest, no tool observed the commit. One synthetic object under a unique proof prefix, created and deleted by the run itself; an independent listing afterwards returned KeyCount 0. Bucket versioning was confirmed never enabled, which is what makes the read of a deleted key an unambiguous absence.",
   "surface_digest": "f144d342832981a680346c01f78637da212c7c87f8dc91d9effc8192e3fbfb63",

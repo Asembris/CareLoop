@@ -1012,7 +1012,9 @@ LIVE_CLAIMS: Final[tuple[Claim, ...]] = (
             proof_id="live.agentcore-settlement",
             path="evidence/live/agentcore-settlement.json",
             tool=(
-                "python scripts/evaluations_prove.py --out evidence/live/agentcore-settlement.json"
+                "python scripts/evaluations_prove.py --out <raw>.json, then "
+                "python -m careloopbench.record live.agentcore-settlement --raw <raw>.json "
+                "--attestation <how> --environment <where>"
             ),
             surface=(
                 "evaluators/",
@@ -1036,8 +1038,10 @@ LIVE_CLAIMS: Final[tuple[Claim, ...]] = (
             proof_id="live.objectstore-contract",
             path="evidence/live/objectstore-contract.json",
             tool=(
-                "python scripts/objectstore_contract.py --bucket <scratch>"
-                " --out evidence/live/objectstore-contract.json"
+                "python scripts/objectstore_contract.py --bucket <bucket> --prefix <unique> "
+                "--out <raw>.json, then "
+                "python -m careloopbench.record live.objectstore-contract --raw <raw>.json "
+                "--attestation <how> --environment <where>"
             ),
             surface=(
                 "careloop/tools/objectstore.py",
@@ -1058,7 +1062,11 @@ LIVE_CLAIMS: Final[tuple[Claim, ...]] = (
         artifact=ArtifactRef(
             proof_id="live.deployed-injection-lock",
             path="evidence/live/deployed-lock.json",
-            tool="python scripts/verify_lock.py --out evidence/live/deployed-lock.json",
+            tool=(
+                "python scripts/verify_lock.py --out <raw>.json, then "
+                "python -m careloopbench.record live.deployed-injection-lock --raw <raw>.json "
+                "--attestation <how> --environment <where>"
+            ),
             surface=(
                 "careloop/",
                 "demoworld/",

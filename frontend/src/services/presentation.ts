@@ -20,6 +20,7 @@
  */
 
 import type {
+  AdversarialProof,
   BlockedAction,
   Boundaries,
   CapabilityStanding,
@@ -1347,4 +1348,42 @@ export function boundariesFor(view: BoundariesView): Boundaries {
     })),
     refusals: view.refusals.map(refusalCopy).filter(Boolean)
   };
+}
+
+/* ------------------------------------------------------------------ *
+ * The judge spine's quiet next step
+ * ------------------------------------------------------------------ */
+
+export interface NextStep {
+  text: string;
+  /** Always the launcher. Never a scenario endpoint: the judge must read the next card's own
+   *  framing — for the boundary test, that CareLoop supplies the proposal — before pressing it,
+   *  so a link that auto-ran a scenario would spend the one disclosure the honesty rests on. */
+  to: "/demo";
+}
+
+/** The next beat of the guided demonstration, or `null` — which is almost every case.
+ *
+ *  Both gates read durable server-side identity and state, never the scenario the browser
+ *  remembers launching: the demo fixtures' fixed case ids come from `careloop/api/demo.py`, the
+ *  section comes from the store's own state, and the adversarial clause additionally requires the
+ *  proof block's audit-trail signature (`adversarialProofFor`), so the link cannot render over a
+ *  case that is still proposing — or, fail-closed, over one that somehow recorded an action.
+ *
+ *  A production case has neither id and gets nothing. A case still working gets nothing. The
+ *  recovery case gets nothing on purpose: it is the spine's last stop, and its own drill-downs
+ *  (`Why this boundary exists →`, My Boundaries) are the continuation.
+ */
+export function nextStepFor(c: {
+  id: string;
+  section: CaseSection;
+  adversarial?: AdversarialProof | null;
+}): NextStep | null {
+  if (c.id === "demo-referral" && c.section === "done") {
+    return { text: "Next: test what happens when the proposal itself is unsafe →", to: "/demo" };
+  }
+  if (c.id === "demo-adversarial" && c.section === "needs" && c.adversarial) {
+    return { text: "Next: see how CareLoop handles a lost external reply →", to: "/demo" };
+  }
+  return null;
 }

@@ -44,12 +44,32 @@ export default function ScenarioCard({ scenario, onPick, onPickAlternate, sceneZ
         transition: "border-color 120ms ease, background 120ms ease"
       }}
     >
-      <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, letterSpacing: "0.08em", color: scenario.toneVar }}>
-        {scenario.num}
+      <span style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, letterSpacing: "0.08em", color: scenario.toneVar }}>
+          {scenario.num}
+        </span>
+        {/* The one guided-journey mark the launcher carries. Text rather than colour, so it reads
+            the same to everybody, and on exactly one card — the test beside `scenarios.ts` fails
+            if a second appears. */}
+        {scenario.startHere ? (
+          <span
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: 10,
+              letterSpacing: "0.1em",
+              color: "var(--muted-foreground)",
+              border: "1px solid color-mix(in oklab, currentColor 30%, transparent)",
+              borderRadius: 999,
+              padding: "2px 8px"
+            }}
+          >
+            START HERE
+          </span>
+        ) : null}
       </span>
       <span style={{ fontSize: 17, fontWeight: 500, letterSpacing: "-0.01em" }}>{scenario.title}</span>
       <span style={{ fontSize: 14.5, lineHeight: 1.55, color: "var(--muted-foreground)" }}>{scenario.blurb}</span>
-      <span style={{ fontSize: 13.5, marginTop: 6, color: scenario.toneVar }}>Run scenario →</span>
+      <span style={{ fontSize: 13.5, marginTop: 6, color: scenario.toneVar }}>{scenario.cta}</span>
     </button>
   );
 

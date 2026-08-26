@@ -34,6 +34,36 @@ describe("the launcher keeps four primary scenarios", () => {
   });
 });
 
+describe("the launcher is a guided sequence rather than a catalog", () => {
+  it("marks exactly one card as the place to start, and it is the referral", () => {
+    const starters = SCENARIOS.filter((s) => s.startHere);
+    expect(starters).toHaveLength(1);
+    expect(starters[0]!.id).toBe("referral");
+  });
+
+  it("gives every card its own action line", () => {
+    /* Four identical "Run scenario →" labels were the catalog. Distinctness is the property —
+       exact wording is free to move, subject to the honesty sweeps. */
+    expect(new Set(SCENARIOS.map((s) => s.cta)).size).toBe(SCENARIOS.length);
+    for (const s of SCENARIOS) expect(s.cta.trim().length).toBeGreaterThan(0);
+  });
+});
+
+describe("the referral card promises only what the referral run does", () => {
+  it("no longer claims a decision is requested", () => {
+    /* The run books and verifies with nobody asked — the recovery e2e drives the same inbound
+       event to COMPLETED while asserting nothing is clicked. A card that promised a decision was
+       promising an interaction the judge would then wait for and never get. */
+    expect(card("referral")!.blurb).not.toMatch(/decision/i);
+    expect(card("referral")!.blurb).not.toMatch(/approv/i);
+    expect(card("referral")!.blurb).not.toMatch(/\bask/i);
+  });
+
+  it("still claims the external check, which the run does make", () => {
+    expect(card("referral")!.blurb).toMatch(/clinic's own record/i);
+  });
+});
+
 describe("the deterministic card says who wrote the proposal", () => {
   const blurb = card("adversarial")!.blurb;
 

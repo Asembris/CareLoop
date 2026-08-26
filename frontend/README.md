@@ -8,11 +8,11 @@ caregivers, designed so a caregiver sees calm and a judge sees rigor.
 ## Quick start
 
 ```bash
-npm install
+npm ci          # the committed lockfile, which is what CI installs
 npm run dev     # http://localhost:5173
 ```
 
-Runs entirely on mock data. No backend, no `.env` needed.
+Runs entirely on mock data. No backend, no `.env` needed. Node 24 — see `../.nvmrc`.
 
 Open `/demo` and run scenario 01 to see the full loop: gather → one human
 decision → execute → independent verification.

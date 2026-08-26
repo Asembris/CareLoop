@@ -24,7 +24,8 @@ The deploy artefact excludes this directory: test code never lands on the instan
 ## Running it
 
 The stack is started for you. Two processes, exactly as the deployment runs them — Demo World on
-8100 and CareLoop on 8010 with the built frontend served from its own origin.
+8100 and CareLoop on 8010 with the built frontend served from its own origin. Node 24, as
+everywhere else here — `../.nvmrc`, and `engines` in `package.json`.
 
 ```bash
 cd frontend && npm run build      # once; the server refuses to start without frontend/dist

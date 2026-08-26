@@ -4,6 +4,9 @@
   "version": "1.0.0",
   "type": "module",
   "description": "End-to-end and accessibility suite. Deliberately outside frontend/ — see README.md.",
+  "engines": {
+    "node": ">=24 <25"
+  },
   "scripts": {
     "test": "playwright test",
     "test:headed": "playwright test --headed",

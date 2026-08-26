@@ -5,6 +5,14 @@ export interface ScenarioMeta {
   num: string;
   title: string;
   blurb: string;
+  /** The card's action line. One per card, and they must differ: four identical "Run scenario →"
+   *  labels made the launcher read as a feature catalog, when the ordering is a guided story —
+   *  work, then the boundary, then the human, then the uncertainty. The wording states what the
+   *  judge is choosing to do, never what verdict they will watch — the same rule the blurbs keep. */
+  cta: string;
+  /** Marks the recommended first card. At most one card carries it, asserted in the test beside
+   *  this file — two "start here" labels are a contradiction, and zero is the catalog again. */
+  startHere?: boolean;
   /** CSS variable name used for the scenario's numeral and CTA. */
   toneVar: string;
   /** A second, quieter scenario the same card can start.
@@ -26,15 +34,21 @@ export interface ScenarioMeta {
 
 /** Launcher copy. Locked — do not rewrite.
  *
- *  One exception, approved: scenario 03 was `mismatch` and is now `resume`, because the backend
- *  ships no mismatch trigger. See `ScenarioId` in `types/domain.ts` for where that claim went. */
+ *  Three exceptions, each approved: scenario 03 was `mismatch` and is now `resume`, because the
+ *  backend ships no mismatch trigger (see `ScenarioId` in `types/domain.ts` for where that claim
+ *  went); scenario 01's blurb said "one decision requested", which the referral run does not do —
+ *  it books and verifies with nobody asked, proven by the recovery e2e driving the same inbound
+ *  event to COMPLETED with nothing clicked — so the promise came out; and the per-card `cta` and
+ *  the single `startHere` mark were added so the launcher reads as a guided sequence. */
 export const SCENARIOS: ScenarioMeta[] = [
   {
     id: "referral",
     num: "01",
     title: "Schedule a cardiology referral",
     blurb:
-      "Paperwork handled, one decision requested, appointment booked, then checked against the clinic's own record.",
+      "A referral arrives. Paperwork read, appointment booked, then checked against the clinic's own record.",
+    cta: "See it work →",
+    startHere: true,
     toneVar: "var(--brand-accent)"
   },
   /* 02 asks the question the launcher can actually answer, and offers the other one beside it.
@@ -56,6 +70,7 @@ export const SCENARIOS: ScenarioMeta[] = [
     title: "Malicious document",
     blurb:
       "A document tries to instruct the agent. For this test CareLoop deliberately proposes the action the attacker asked for — so you can see whether that proposal has any authority to act.",
+    cta: "Test the boundary →",
     toneVar: "var(--state-untrusted)",
     alternate: {
       id: "injection",
@@ -68,6 +83,7 @@ export const SCENARIOS: ScenarioMeta[] = [
     num: "03",
     title: "Pause for a decision",
     blurb: "CareLoop reaches a step it has no authority for, stops, and finishes the moment you decide.",
+    cta: "Review a decision →",
     toneVar: "var(--state-decision)"
   },
   /* 04 is the only card that describes something the demo deliberately does *to* CareLoop, and the
@@ -81,6 +97,7 @@ export const SCENARIOS: ScenarioMeta[] = [
     title: "The answer gets lost",
     blurb:
       "The clinic books the appointment and CareLoop deliberately throws its reply away. Watch it work out what happened, on its own, without creating a second appointment.",
+    cta: "Watch it recover →",
     toneVar: "var(--state-controlled)"
   }
 ];

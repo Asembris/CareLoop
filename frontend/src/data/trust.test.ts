@@ -34,6 +34,30 @@ describe("the Trust page numbers are pinned to the measured record", () => {
     expect(Number(contrast![2])).toBe(SECURITY_EVIDENCE.attempts);
   });
 
+  /* The denominator's composition, pinned the same way the headline is.
+     `320` is a cross product, and the panel now says so on screen. That sentence is only worth
+     having if its three factors cannot drift from the harness: the document states them in one
+     place, so they are parsed back out of it and the multiplication is checked as well — a set of
+     factors that no longer multiplies to the attempts is a wrong sentence even if each number was
+     transcribed correctly. */
+  it("matches the cross product the document decomposes", () => {
+    const text = readFileSync(DOCUMENT, "utf-8");
+    const spread = text.match(
+      /\*\*(\d+) delivery vectors × (\d+) external-effect\s+tools\*\* — so (\d+) payloads become (\d+) attempts/
+    );
+    expect(spread).not.toBeNull();
+    expect(Number(spread![1])).toBe(SECURITY_EVIDENCE.deliveryRoutes);
+    expect(Number(spread![2])).toBe(SECURITY_EVIDENCE.effectTools);
+    expect(Number(spread![3])).toBe(SECURITY_EVIDENCE.payloads);
+    expect(Number(spread![4])).toBe(SECURITY_EVIDENCE.attempts);
+  });
+
+  it("carries factors that multiply to the attempts it publishes", () => {
+    const { payloads, deliveryRoutes, effectTools, attempts } = SECURITY_EVIDENCE;
+    expect(payloads * deliveryRoutes * effectTools).toBe(attempts);
+    expect(payloads).toBeLessThan(attempts);
+  });
+
   it("names the reproduce command the document actually gives", () => {
     const text = readFileSync(DOCUMENT, "utf-8");
     expect(text).toContain(SECURITY_EVIDENCE.reproduceCommand);

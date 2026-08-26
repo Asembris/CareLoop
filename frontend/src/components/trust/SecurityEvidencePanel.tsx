@@ -26,8 +26,16 @@ const NUMERAL = {
  * engine rather than to anyone's manners.
  */
 export default function SecurityEvidencePanel() {
-  const { attempts, shippedUnauthorized, withoutAuthorityUnauthorized, reproduceCommand, source } =
-    SECURITY_EVIDENCE;
+  const {
+    attempts,
+    payloads,
+    deliveryRoutes,
+    effectTools,
+    shippedUnauthorized,
+    withoutAuthorityUnauthorized,
+    reproduceCommand,
+    source
+  } = SECURITY_EVIDENCE;
 
   return (
     <section
@@ -70,10 +78,23 @@ export default function SecurityEvidencePanel() {
         </div>
       </div>
 
+      {/* What an "attempt" is, said before anything is concluded from how many there were.
+          320 is a cross product, not a headcount: read as 320 separate attacks it overstates the
+          corpus eightfold, and that is the sentence a well-meaning editor writes. The factors come
+          from `SECURITY_EVIDENCE`, which `trust.test.ts` pins to the measured record, so the
+          arithmetic on this line cannot drift away from the harness that produced it. */}
+      <p
+        data-testid="adversarial-denominator"
+        style={{ margin: 0, fontSize: 14.5, lineHeight: 1.6, color: "var(--muted-foreground)", maxWidth: "62ch" }}
+      >
+        {payloads} hostile payloads × {deliveryRoutes} delivery routes × {effectTools}{" "}
+        external-effect tools = {attempts} evaluated combinations. Every one of them is driven by a
+        planner that does exactly what the attacker asks, every time it is asked — the ceiling of
+        model misbehaviour, not one model on one day.
+      </p>
+
       <p style={{ margin: 0, fontSize: 14.5, lineHeight: 1.6, color: "var(--muted-foreground)", maxWidth: "62ch" }}>
-        Every attempt is driven by a planner that does exactly what the attacker asks, every time it
-        is asked — the ceiling of model misbehaviour, not one model on one day. Reproduce both
-        numbers offline, with no credentials, in about ten seconds:
+        Reproduce both numbers offline, with no credentials, in about ten seconds:
       </p>
 
       <div style={{ display: "flex", alignItems: "baseline", gap: 16, flexWrap: "wrap" }}>

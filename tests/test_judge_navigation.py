@@ -51,6 +51,31 @@ SWEPT: Final[tuple[tuple[str, str], ...]] = (
 NOT_A_PRODUCT_SURFACE: Final[tuple[str, ...]] = (".test.ts", ".test.tsx")
 
 
+def without_comments(source: str) -> str:
+    """``source`` with its TypeScript comments removed.
+
+    **Copy is what the product says; a comment is what a developer says about it.** This repository
+    explains a rule by stating the false sentence it forbids — the panel below the sweep carries
+    "320 is not 320 separate attacks" as the reason the decomposition is rendered at all — and a
+    sweep that could not tell that apart from the claim itself fires on every explanation of why it
+    exists, which is how a guard gets deleted. The third copy of this helper, and deliberately a
+    copy: :mod:`tests.test_recovery_copy` and :mod:`tests.test_adversarial_copy` each carry their
+    own, and ``tests/`` is not a package, so there is nothing to import it from.
+
+    String literals and JSX text both survive, which is the whole surface a judge can read. The
+    ``(?<!:)`` is what keeps ``https://`` from being read as the start of a line comment. Markdown
+    has no comment syntax, so ``.md`` files pass through this unchanged and are swept whole.
+    """
+    without_blocks = re.sub(r"/\*.*?\*/", " ", source, flags=re.DOTALL)
+    return re.sub(r"(?<!:)//.*", " ", without_blocks)
+
+
+def prose_of(path: Path) -> str:
+    """What a reader of ``path`` can actually see, flattened so a match cannot straddle a wrap."""
+    body = path.read_text(encoding="utf-8")
+    return " ".join((without_comments(body) if path.suffix != ".md" else body).split())
+
+
 def swept_files() -> list[Path]:
     found: list[Path] = []
     for folder, pattern in SWEPT:
@@ -95,7 +120,7 @@ class TestTheAdversarialDenominatorIsNotInflated:
 
     @pytest.mark.parametrize("path", swept_files(), ids=lambda path: path.name)
     def test_no_judge_surface_counts_320_separate_attacks(self, path: Path) -> None:
-        body = path.read_text(encoding="utf-8")
+        body = prose_of(path)
         for pattern, why in INFLATED:
             found = re.search(pattern, body, re.IGNORECASE)
             assert found is None, f"{path.name}: {found.group(0)!r} {why}"  # type: ignore[union-attr]
@@ -107,6 +132,24 @@ class TestTheAdversarialDenominatorIsNotInflated:
         assert "judges.md" in names
         assert "README.md" in names
         assert len(swept_files()) > 20
+
+    def test_stripping_comments_leaves_the_copy_a_judge_reads(self) -> None:
+        """The other vacuity half, and the one that matters after :func:`without_comments`.
+
+        A stripper that ate the JSX text would silence every guard in this file while every guard
+        went on passing. So the panel's own rendered sentence has to survive it, and the reason it
+        was written has to not.
+        """
+        panel = (
+            REPO_ROOT / "frontend" / "src" / "components" / "trust" / "SecurityEvidencePanel.tsx"
+        )
+        data = REPO_ROOT / "frontend" / "src" / "data" / "trust.ts"
+
+        assert "evaluated combinations" in prose_of(panel)
+
+        explanation = "320 is not 320 separate attacks"
+        assert explanation in " ".join(data.read_text(encoding="utf-8").split())
+        assert explanation not in prose_of(data)
 
     @pytest.mark.parametrize(
         "sentence",
@@ -267,7 +310,7 @@ class TestTheLedgerCannotBeGradedOnAJudgeSurface:
 
     @pytest.mark.parametrize("path", swept_files(), ids=lambda path: path.name)
     def test_no_authored_surface_reads_it_as_a_percentage(self, path: Path) -> None:
-        body = path.read_text(encoding="utf-8")
+        body = prose_of(path)
         for pattern, why in MISREAD_LEDGER:
             found = re.search(pattern, body, re.IGNORECASE)
             assert found is None, f"{path.name}: {found.group(0)!r} {why}"  # type: ignore[union-attr]
@@ -332,7 +375,7 @@ class TestUnrunLiveProofAreNotSummarisedAsCurrent:
     def test_no_authored_surface_says_they_all_are(self, path: Path) -> None:
         if not live_proofs_without_a_stored_record():
             pytest.skip("nothing is pending, so nothing can be overclaimed about")
-        body = path.read_text(encoding="utf-8")
+        body = prose_of(path)
         for rule in CLAIMS_EVERYTHING_IS_CURRENT:
             found = rule.search(body)
             assert found is None, (
@@ -381,7 +424,7 @@ class TestTheZeroIsNeverShownAlone:
 
     @pytest.mark.parametrize("path", swept_files(), ids=lambda path: path.name)
     def test_a_surface_stating_the_zero_states_the_mutant_too(self, path: Path) -> None:
-        body = path.read_text(encoding="utf-8")
+        body = prose_of(path)
         if ZERO.search(body) is None:
             pytest.skip("this surface does not state the shipped result")
 
@@ -392,9 +435,7 @@ class TestTheZeroIsNeverShownAlone:
 
     def test_the_surfaces_that_state_it_are_the_ones_expected(self) -> None:
         """Vacuity: a skip-everything version of the test above would pass silently."""
-        stating = {
-            path.name for path in swept_files() if ZERO.search(path.read_text(encoding="utf-8"))
-        }
+        stating = {path.name for path in swept_files() if ZERO.search(prose_of(path))}
 
         assert {"judges.md", "README.md"} <= stating, stating
 

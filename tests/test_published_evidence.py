@@ -58,8 +58,16 @@ OPERATOR_MEASURED: Final[dict[str, str]] = {
     "e2e": "scripts/verify_lock.py, 25 deployed runs, 2026-08-19",
 }
 
-#: ``<n> of <m>`` or ``<n> collected`` — the two shapes the ledger's values take.
-MEASUREMENT: Final[re.Pattern[str]] = re.compile(r"^\d+ (?:of \d+|collected)$")
+#: ``<n> of <m>`` or a floor like ``6,000+`` — the two shapes the ledger's values take.
+#:
+#: The floor exists for exactly one row. Every other value is a *result*: a numerator over the
+#: attempts, fields or runs that produced it, and there is a right answer to publish. The suite
+#: size is not a result, and the exact form of it drifted twice — see
+#: :class:`TestTheRegressionRowIsMetadataAndIsCurrent`.
+MEASUREMENT: Final[re.Pattern[str]] = re.compile(r"^\d+ of \d+$|^\d{1,3}(?:,\d{3})*\+$")
+
+#: The published floor, read back out of its own value rather than restated here.
+FLOOR: Final[re.Pattern[str]] = re.compile(r"^(\d{1,3}(?:,\d{3})*)\+$")
 
 
 def ledger() -> dict[str, str]:
@@ -210,29 +218,56 @@ class TestTheVerificationRowIsTheComparisonMapsOwnSize:
 
 
 class TestTheRegressionRowIsMetadataAndIsCurrent:
-    """The row that was stale, and the reason it is now a collection count.
+    """The row that was stale twice, and the reason it is now a floor rather than a count.
 
     It is deliberately *not* a safety number and is not part of any CareLoopBench domain: a total
     test count says how much there is, never that any particular property holds. What it is, is
     reliability metadata about this repository, and metadata that is wrong is worse than metadata
-    that is absent — so it is derived from pytest's own collection rather than from a figure
-    somebody typed after a run they no longer remember.
+    that is absent.
+
+    **An exact count is metadata that goes wrong on commits that touch no test.** It read
+    ``2720 passed`` while the suite collected more than twice that; then it read ``6183 collected``
+    and drifted to 6190 across five commits whose only Python change was none at all. Three copy
+    sweeps — :mod:`tests.test_recovery_copy`, :mod:`tests.test_upload_vocabulary` and
+    :mod:`tests.test_adversarial_copy` — parametrise one case per swept file over
+    ``frontend/src/**``, so adding a React component and two Vitest files added seven collected
+    Python tests. That is the sweeps working exactly as designed, and it is also a published figure
+    being falsified by a frontend change nobody would think to re-derive it after.
+
+    So the published claim is weakened until it is stable: a **floor**, which is true of every
+    commit that does not delete a quarter of the suite, and which cannot overclaim because it
+    claims less than the truth by construction. The exact figure stays derivable — ``pytest
+    --collect-only`` is what :func:`collected` runs, and CareLoopBench prints its own
+    ``tests executed`` line — it is simply not published, because nothing a judge decides turns on
+    the last two digits.
+
+    There is deliberately **no upper bound**. A ceiling would be a second magic number with no
+    measurement behind it, and the failure it would catch — a suite that grew — is not a failure.
 
     Collection rather than "passed" on purpose. Whether the suite is *green* is established by CI
     on every push, which is what the row's own ``method`` line names; a number this file could
-    honestly produce without running 5 000 tests is how many there are.
+    honestly produce without running 6 000 tests is how many there are.
 
-    **Over the base install, not over whatever the reader happens to have installed.** The first
-    version of this asserted a bare collection and went red on CI within the hour: a machine
-    carrying the optional ``schema`` extra collects ``tests/test_api_schema.py`` and 31 tests more
-    than ``.[dev]`` does. A published figure that depends on which extras are present is not a
-    measurement of this repository, so the modules whose collection is gated behind an extra are
-    excluded — and :func:`collection_gated_modules` finds them structurally, so a second one cannot
-    appear without :class:`TestTheExclusionIsExactlyWhatItClaims` noticing.
+    **Over the base install, not over whatever the reader happens to have installed.** An earlier
+    version asserted a bare collection and went red on CI within the hour: a machine carrying the
+    optional ``schema`` extra collects ``tests/test_api_schema.py`` and 31 tests more than
+    ``.[dev]`` does. The modules whose collection is gated behind an extra are excluded, and
+    :func:`collection_gated_modules` finds them structurally, so a second one cannot appear without
+    :class:`TestTheExclusionIsExactlyWhatItClaims` noticing.
     """
 
-    def test_it_is_what_pytest_collects(self, collected: int) -> None:
-        assert ledger()["tests"] == f"{collected} collected"
+    def test_it_is_published_as_a_floor_rather_than_an_exact_count(self) -> None:
+        """The shape is the decision: an exact count here is what drifted, twice."""
+        assert FLOOR.match(ledger()["tests"]), ledger()["tests"]
+
+    def test_the_suite_really_is_at_least_that_big(self, collected: int) -> None:
+        """The only assertion the published claim needs, read out of the claim itself."""
+        floor = int(FLOOR.match(ledger()["tests"]).group(1).replace(",", ""))  # type: ignore[union-attr]
+
+        assert collected >= floor, (
+            f"the ledger publishes {ledger()['tests']!r} and pytest collects {collected}. Lower "
+            "the published floor to something true, or find out what stopped being collected."
+        )
 
     def test_the_collection_is_not_trivially_small(self, collected: int) -> None:
         """Anti-vacuity: a broken invocation collecting nothing must not satisfy the row."""

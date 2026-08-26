@@ -1,3 +1,4 @@
+import { useNavigate } from "react-router-dom";
 import type { CareCase } from "@/types/domain";
 import { eventToneColor } from "@/lib/tone";
 import { useUi } from "@/hooks/useUi";
@@ -7,7 +8,8 @@ import { useUi } from "@/hooks/useUi";
  * as an inline citation; a blocked branch is a dashed offshoot that simply stops.
  */
 export default function CaseTimeline({ careCase }: { careCase: CareCase }) {
-  const { openLens, toggleHood } = useUi();
+  const { openLens } = useUi();
+  const navigate = useNavigate();
 
   return (
     <section data-scene-exclude style={{ display: "flex", flexDirection: "column", gap: 18 }}>
@@ -108,9 +110,15 @@ export default function CaseTimeline({ careCase }: { careCase: CareCase }) {
                           <span style={{ fontSize: 12.5, color: "var(--state-denied)" }}>Blocked</span>
                         </span>
                       ))}
+                      {/* To My Boundaries, not to the Under-the-hood drawer. This is the most
+                          likely "explain this" press on the page, and the drawer answers it with
+                          rule ids and idempotency keys — the engineer's altitude. `/trust` states
+                          the same boundary in the caregiver's words, derived from the ruleset that
+                          just refused these calls, and the drawer stays one header press away for
+                          whoever wants the raw record. */}
                       <button
                         className="cl-quiet"
-                        onClick={toggleHood}
+                        onClick={() => navigate("/trust")}
                         style={{
                           alignSelf: "flex-start",
                           background: "transparent",

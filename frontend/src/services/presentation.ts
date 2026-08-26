@@ -816,6 +816,16 @@ export function observationCopy(observation: string): string {
   return OBSERVATION_COPY[observation] ?? "";
 }
 
+/** The one-line contrast a cold judge needs at the moment MATCHED lands, and only then.
+ *
+ *  Rendered **only** when the projected observation is `MATCHED` — an independent read happened
+ *  and agreed. Every other outcome, a closed-loop `NOT_OBSERVED` included, gets nothing: a case
+ *  that verified against its own record making this claim would be the exact confusion the seal
+ *  rule already refuses, and `behaviours.test.tsx` kills the mutant that renders it on every
+ *  settled case. */
+export const INDEPENDENT_OF_OWN_REPORT =
+  "This is based on the clinic's record, not CareLoop's own report.";
+
 /** Why the observed *values* never render, stated where a reader will wonder.
  *
  *  The backend withholds read-back text wholesale

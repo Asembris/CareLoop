@@ -1,9 +1,9 @@
 {
   "careloopbench": {
     "tier": "core",
-    "generated_at_commit": "14ef6ef5dbd4548d1cc03ed574fda86085aab3ec",
+    "generated_at_commit": "407a98a909972678db26583219424b3da0db40c4",
     "registry_digest": "50388296002d6a4400c2c6879da5cd68f04d90c02409c68cc0c5612c90d1bd66",
-    "tests_run": 1491
+    "tests_run": 1497
   },
   "domains": [
     {
@@ -46,7 +46,7 @@
       "mutation_backed": 1,
       "by_status": {
         "PROVEN": 12,
-        "PROVEN_AT": 1
+        "STALE": 1
       }
     },
     {
@@ -1162,8 +1162,8 @@
       "question": "Has a real OIDC access token ever been verified by the deployed build?",
       "domain": "IDENTITY_AND_ISOLATION",
       "level": "LIVE_DEPLOYMENT",
-      "status": "PROVEN_AT",
-      "detail": "proven at 49630e5da939 · operator-attested",
+      "status": "STALE",
+      "detail": "proven at 49630e5da939; careloop/identity/, careloop/api/auth.py, careloop/api/access.py, careloop/api/deps.py, deploy/caregivers.json, frontend/src/services/auth.ts has moved since",
       "scope": "The identity boundary when production mode is served. The public URL serves demo mode today, which deploy/careloop.env states and a test asserts.",
       "mutation_backed": false,
       "evidence": [],
@@ -1199,6 +1199,7 @@
         "tool": "python scripts/evaluations_prove.py --out evidence/live/agentcore-settlement.json",
         "surface": [
           "evaluators/",
+          "careloop/graph/verify.py",
           "careloop/graph/witness.py",
           "scripts/witness_span.py",
           "scripts/observability.py"
@@ -1245,7 +1246,8 @@
         "surface": [
           "careloop/",
           "demoworld/",
-          "frontend/src/"
+          "deploy/careloop.env",
+          "scripts/verify_lock.py"
         ]
       }
     }

@@ -315,3 +315,23 @@ secret stored in a page anybody can read is not a secret.
 
 The committed file ships `CARELOOP_AUTH_MODE=demo`, so a redeploy of this file never switches
 production identity on by accident.
+
+
+## Tearing it down
+
+For whoever is keeping this running. It is here rather than in `docs/judges.md`, where it used to
+sit: a judge's guide should not end with the commands that destroy the thing they were reading
+about.
+
+**After judging closes (2026-10-08), terminate the instance — do not stop it.** A stopped EC2
+instance still bills its EBS volume every month, and the Elastic-IP-equivalent charge for a public
+IPv4 address continues too. Stopping looks like turning it off and is not.
+
+```
+aws ec2 terminate-instances --instance-ids i-0aeb7e7150cd7524b
+aws cloudfront delete-distribution --id E33IXQBGGBMTTV --if-match <etag>   # disable first
+```
+
+The CloudFront distribution must be **disabled and fully deployed** before it can be deleted; the
+S3 bucket holding AgentCore deployment packages has a 30-day object expiry and needs nothing.
+Everything in the store is synthetic, so nothing needs preserving before teardown.

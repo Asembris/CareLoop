@@ -313,21 +313,3 @@ separate processes.
   audit trail records them. Nothing is invented and nothing is reordered.
 - **Nothing loads at all.** The host may be between deploys. It comes back on its own.
 
----
-
-## Operating notes
-
-For whoever is keeping this running, not for judges.
-
-**After judging closes (2026-10-08), terminate the instance — do not stop it.** A stopped EC2
-instance still bills its EBS volume every month, and the Elastic-IP-equivalent charge for a public
-IPv4 address continues too. Stopping looks like turning it off and is not.
-
-```
-aws ec2 terminate-instances --instance-ids i-0aeb7e7150cd7524b
-aws cloudfront delete-distribution --id E33IXQBGGBMTTV --if-match <etag>   # disable first
-```
-
-The CloudFront distribution must be **disabled and fully deployed** before it can be deleted; the
-S3 bucket holding AgentCore deployment packages has a 30-day object expiry and needs nothing.
-Everything in the store is synthetic, so nothing needs preserving before teardown.

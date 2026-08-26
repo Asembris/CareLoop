@@ -1016,6 +1016,7 @@ LIVE_CLAIMS: Final[tuple[Claim, ...]] = (
             ),
             surface=(
                 "evaluators/",
+                "careloop/graph/verify.py",
                 "careloop/graph/witness.py",
                 "scripts/witness_span.py",
                 "scripts/observability.py",
@@ -1058,7 +1059,12 @@ LIVE_CLAIMS: Final[tuple[Claim, ...]] = (
             proof_id="live.deployed-injection-lock",
             path="evidence/live/deployed-lock.json",
             tool="python scripts/verify_lock.py --out evidence/live/deployed-lock.json",
-            surface=("careloop/", "demoworld/", "frontend/src/"),
+            surface=(
+                "careloop/",
+                "demoworld/",
+                "deploy/careloop.env",
+                "scripts/verify_lock.py",
+            ),
         ),
         scope=(
             "Runs of one scenario against one model on one day. The corpus replay is the "

@@ -142,6 +142,110 @@ class TestTheShippedRegistryIsWellFormed:
             assert claim.level in ExecutionLevel
 
 
+def surface_covers(surface: tuple[str, ...], path: str) -> bool:
+    """Would a commit touching ``path`` change ``surface_digest(surface)``?
+
+    Asked of ``git ls-tree`` rather than of the tuple, because that is the question
+    :func:`~careloopbench.ingest.surface_digest` itself asks: the digest is taken over the listing,
+    so a path the listing names is a path whose change moves the digest, and a path it does not
+    name is one whose change never will. Comparing prefixes by hand here would be a second, weaker
+    implementation of ``git``'s own path matching -- and the surfaces mix directories with files.
+    """
+    listing = subprocess.run(
+        ["git", "ls-tree", "-r", "HEAD", "--name-only", "--", *surface],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return path in listing.split()
+
+
+def surface_of(proof_id: str) -> tuple[str, ...]:
+    return next(
+        claim.artifact.surface
+        for claim in LIVE_CLAIMS
+        if claim.artifact is not None and claim.artifact.proof_id == proof_id
+    )
+
+
+class TestEachLiveSurfaceCoversWhatItsProofDependsOn:
+    """A surface is what makes staleness mean something, and two of them were factually wrong.
+
+    They are declared per proof because the scopes genuinely differ, which means each one is a
+    claim about *what this measurement depended on* and can be true or false. Two were false. The
+    deployed lock declared ``frontend/src/`` -- but ``scripts/verify_lock.py`` drives the API with
+    ``urllib`` and never fetches the shell or the bundle, so a stylesheet edit staled a proof it
+    could not have affected, and the row would have been born stale on the next frontend commit.
+    It did *not* declare ``deploy/careloop.env``, which pins the triage and planner models four of
+    its five matrix rows depend on, or the script holding the assertions themselves. The AgentCore
+    proof did not declare ``careloop/graph/verify.py``, whose ``OBSERVABLE_STATE`` decides
+    ``careloop.effect.fields`` -- the exact tuple the frozen evaluator matches ``EXPECTED_FIELDS``
+    against. A change there invalidates the proof and staled nothing.
+
+    Each assertion below is one path and the answer ``git`` gives for it, so this stays a statement
+    about coverage rather than a copy of the tuple next door.
+    """
+
+    def test_the_deployed_lock_does_not_depend_on_the_frontend(self) -> None:
+        """The correction. The verifier opens no page and parses no bundle."""
+        assert not surface_covers(
+            surface_of("live.deployed-injection-lock"), "frontend/src/App.tsx"
+        )
+
+    def test_the_deployed_lock_depends_on_the_models_the_deployment_runs(self) -> None:
+        assert surface_covers(surface_of("live.deployed-injection-lock"), "deploy/careloop.env")
+
+    def test_the_deployed_lock_depends_on_the_assertions_it_makes(self) -> None:
+        assert surface_covers(surface_of("live.deployed-injection-lock"), "scripts/verify_lock.py")
+
+    def test_the_deployed_lock_still_depends_on_the_whole_application(self) -> None:
+        """Not narrowed. It exercises triage, planning, policy, execution and verification."""
+        surface = surface_of("live.deployed-injection-lock")
+
+        assert surface_covers(surface, "careloop/policy/rules.yaml")
+        assert surface_covers(surface, "demoworld/app.py")
+
+    def test_the_agentcore_proof_depends_on_the_fields_the_evaluator_matches(self) -> None:
+        """``OBSERVABLE_STATE`` is upstream of ``careloop.effect.fields``."""
+        assert surface_covers(surface_of("live.agentcore-settlement"), "careloop/graph/verify.py")
+
+    def test_the_agentcore_proof_is_not_widened_to_the_whole_application(self) -> None:
+        """Narrow on purpose: a rule edit does not invalidate a measurement of trace delivery."""
+        surface = surface_of("live.agentcore-settlement")
+
+        assert surface_covers(surface, "evaluators/contract.py")
+        assert not surface_covers(surface, "careloop/policy/rules.yaml")
+
+    def test_the_object_store_surface_is_the_assertions_client_and_substitute(self) -> None:
+        """Unchanged, and checked so that leaving it alone is a decision somebody can see."""
+        surface = surface_of("live.objectstore-contract")
+
+        assert surface_covers(surface, "scripts/objectstore_contract.py")
+        assert surface_covers(surface, "careloop/tools/objectstore.py")
+        assert surface_covers(surface, "objectstore/store.py")
+
+    def test_the_identity_surface_still_covers_where_ownership_is_decided(self) -> None:
+        """Unchanged too, and deliberately broad: ``deps.py`` holds the workspace-owner refusal
+        and ``patient_authority_for``. It also holds the composition root, which is why an
+        unrelated wiring commit staled this proof -- a truthful false positive, and better than a
+        narrow surface that would let the ownership check move without anybody noticing."""
+        surface = surface_of("live.production-identity")
+
+        assert surface_covers(surface, "careloop/api/deps.py")
+        assert surface_covers(surface, "careloop/identity/oidc.py")
+
+    def test_the_detector_answers_no_for_something_genuinely_outside(self) -> None:
+        """Vacuity: a detector that said yes to everything would satisfy every assertion above."""
+        assert not surface_covers(surface_of("live.objectstore-contract"), "careloop/api/app.py")
+
+    def test_every_declared_surface_still_matches_something(self) -> None:
+        """A mistyped path digests an empty listing, which is a proof that never goes stale."""
+        for claim in LIVE_CLAIMS:
+            assert claim.artifact is not None
+            assert surface_digest(claim.artifact.surface)
+
+
 class TestAMalformedClaimIsRefused:
     """Every shape the registry will not accept, and what each would otherwise have allowed."""
 
@@ -721,6 +825,44 @@ class TestThePublishedPairAgreesWithItself:
         rows = {row["id"] for row in self.payload()["claims"]}  # type: ignore[union-attr]
 
         assert rows == {claim.id for claim in EVERY_CLAIM}
+
+    def test_every_live_row_renders_the_surface_the_registry_declares(self) -> None:
+        """The one part of a live row the registry digest does not cover.
+
+        ``registry_digest`` hashes each claim's id, domain, level, question, scope, evidence and
+        proof id -- not its dependency surface, and not the path or tool beside it. The rendered
+        page shows all three, so correcting a surface changes what a reader is told while leaving
+        the digest, and therefore the sibling assertion above, perfectly green. Found by making
+        exactly that edit and watching nothing go red.
+
+        Asserted here rather than folded into the digest: what the digest covers is a decision
+        about the anti-drift mechanism, and this is the narrower true statement -- the published
+        pair must describe the surfaces this repository declares today.
+        """
+        declared = {
+            claim.artifact.proof_id: {
+                "path": claim.artifact.path,
+                "tool": claim.artifact.tool,
+                "surface": list(claim.artifact.surface),
+            }
+            for claim in EVERY_CLAIM
+            if claim.artifact is not None
+        }
+        rendered = {
+            row["artifact"]["proof_id"]: {  # type: ignore[index]
+                "path": row["artifact"]["path"],  # type: ignore[index]
+                "tool": row["artifact"]["tool"],  # type: ignore[index]
+                "surface": row["artifact"]["surface"],  # type: ignore[index]
+            }
+            for row in self.payload()["claims"]  # type: ignore[union-attr]
+            if row["artifact"]  # type: ignore[index]
+        }
+
+        assert rendered == declared
+
+    def test_there_are_live_rows_to_compare(self) -> None:
+        """Vacuity: two empty mappings agree, and would say nothing about anything."""
+        assert [row for row in self.payload()["claims"] if row["artifact"]]  # type: ignore[index]
 
 
 def a_ref(**overrides: object) -> ArtifactRef:

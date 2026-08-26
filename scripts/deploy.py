@@ -57,7 +57,13 @@ from typing import Any, Final
 if __package__ in (None, ""):  # pragma: no cover - only when run as a file rather than imported
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scripts.deploy_artifact import Artifact, ArtifactRefused, build
+from scripts.deploy_artifact import (
+    Artifact,
+    ArtifactRefused,
+    build,
+    head_commit,
+    write_release_manifest,
+)
 
 REGION: Final[str] = "us-east-1"
 
@@ -231,7 +237,8 @@ aws s3 cp "s3://{bucket}/{key}" {TRANSFER}/careloop.tar.gz --region {region} --o
 echo "{sha256}  {TRANSFER}/careloop.tar.gz" | sha256sum -c -
 
 tar -tzf {TRANSFER}/careloop.tar.gz > {TRANSFER}/manifest.txt
-for required in ./deploy/bootstrap.sh ./deploy/careloop.env ./frontend/dist/index.html; do
+for required in ./deploy/bootstrap.sh ./deploy/careloop.env ./frontend/dist/index.html \\
+    ./frontend/dist/release.json; do
     grep -qxF "$required" {TRANSFER}/manifest.txt || die "the artefact has no $required"
 done
 
@@ -713,6 +720,12 @@ def build_frontend(root: Path) -> None:
     The artefact that gets served is then the bundle that was tested, and a host that cannot build
     one cannot accidentally serve a different one. That reasoning is ``deploy/push.sh``'s and it did
     not change when the transport did.
+
+    **The release marker is stamped here, after the build succeeds, and nowhere else.** The build
+    replaces ``dist``, so stamping first would hand the marker to Vite to delete; stamping anywhere
+    but beside the build would relabel a bundle that was not just built. ``--no-build`` therefore
+    never rewrites a marker: it deploys a ``dist`` whose existing ``release.json`` already names
+    ``HEAD``, or the artefact builder refuses it.
     """
     import subprocess
 
@@ -725,6 +738,7 @@ def build_frontend(root: Path) -> None:
         raise DeploymentRefused("the frontend build failed; nothing was sent")
     if not (root / "frontend" / "dist" / "index.html").exists():
         raise DeploymentRefused("the frontend build produced no frontend/dist/index.html")
+    write_release_manifest(root, head_commit(root))
 
 
 def remove_staged_artifact(s3: Any, bucket: str, key: str, report: Report) -> None:

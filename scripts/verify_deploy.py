@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 import urllib.error
@@ -33,6 +34,10 @@ import urllib.request
 from typing import Any, Final
 
 DEFAULT_BASE: Final[str] = "https://d2heuwvhvrdyig.cloudfront.net"
+
+#: The public release marker's one field: 40 lowercase hex characters, exactly as
+#: ``git rev-parse HEAD`` prints a commit.
+RELEASE_COMMIT: Final[re.Pattern[str]] = re.compile(r"\A[0-9a-f]{40}\Z")
 
 #: How long to allow one graph run. Generous on purpose: the slowest run observed against this
 #: deployment is 14.6s, minutes after a redeploy — which is exactly when this runs.
@@ -106,7 +111,7 @@ def settled_case(base: str, session: str, case_id: str) -> dict[str, Any]:
     return body
 
 
-def verify(base: str) -> None:
+def verify(base: str, expected_commit: str | None = None) -> None:
     """Assert what this deployment claims to be, and then assert that claim.
 
     **The mode is read rather than assumed, and it decides which properties are askable at all.**
@@ -146,6 +151,7 @@ def verify(base: str) -> None:
         verify_demo(base, published)
 
     verify_the_shipped_frontend(base)
+    verify_the_release_marker(base, expected_commit)
 
 
 def verify_production(base: str, published: dict[str, Any]) -> None:
@@ -338,14 +344,67 @@ def verify_the_shipped_frontend(base: str) -> None:
     )
 
 
+def verify_the_release_marker(base: str, expected_commit: str | None = None) -> None:
+    """The deployment says which commit it was built from, and the claim is checked.
+
+    ``frontend/dist/release.json`` is stamped by the deploy immediately after the frontend build
+    and packed into the artefact whose digest the instance verifies before unpacking -- so the file
+    served here is part of the exact bytes that were installed, and no route was added to serve it:
+    it travels the same static path as the rest of the bundle.
+
+    A missing marker does not answer 404. The SPA fallback serves the shell with a 200, which is
+    why the shape check rather than the status is what catches absence.
+
+    ``expected_commit`` is supplied when this runs at the end of a deploy, where the driver knows
+    exactly which commit it packed. The standalone and scheduled runs check the shape alone -- a
+    checker holding no checkout has no commit to expect, and inventing one would be attesting to
+    something nothing observed.
+    """
+    print("\nthe deployment says which commit it was built from")
+    status, body, headers = call(base, "/release.json")
+    check("GET /release.json is 200", status == 200, f"got {status}")
+    check(
+        "and it is revalidated rather than cached hard",
+        headers.get("cache-control") == "no-cache",
+        headers.get("cache-control", "<none>"),
+    )
+    check(
+        "it is exactly a git_sha object",
+        isinstance(body, dict) and set(body) == {"git_sha"},
+        "the SPA shell answered instead, so no marker is deployed"
+        if body is None
+        else json.dumps(body),
+    )
+    sha = body["git_sha"] if isinstance(body, dict) and "git_sha" in body else None
+    check(
+        "the commit is well-formed 40-hex",
+        isinstance(sha, str) and bool(RELEASE_COMMIT.match(sha)),
+        repr(sha),
+    )
+    if expected_commit is not None:
+        check(
+            "it names the commit that was packed",
+            sha == expected_commit,
+            f"deployed {sha}, packed {expected_commit}",
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Assert the deployed demo's properties.")
     parser.add_argument("base", nargs="?", default=DEFAULT_BASE, help="the distribution's URL")
+    parser.add_argument(
+        "--expected-commit",
+        default=None,
+        help=(
+            "the 40-hex commit /release.json must name; omitted, the marker's shape is checked "
+            "and its commit is whatever the deployment says"
+        ),
+    )
     arguments = parser.parse_args()
     base = arguments.base.rstrip("/")
 
     try:
-        verify(base)
+        verify(base, arguments.expected_commit)
     except Failed as broken:
         print(f"\nDEPLOY VERIFICATION FAILED: {broken}\n", file=sys.stderr)
         return 1

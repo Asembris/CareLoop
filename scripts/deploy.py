@@ -754,12 +754,16 @@ def verify_through_the_cdn(demo_url: str, report: Report) -> str:
 
     Through the distribution and never the origin: the release step already asked ``127.0.0.1``, and
     a check against the origin passes in exactly the situations this exists to catch.
+
+    The commit the artefact was packed from is handed over, so the deployed ``/release.json`` is
+    required to name **this** deploy's commit rather than merely a well-formed one -- the last link
+    of the chain that started at ``git archive HEAD``.
     """
     from scripts.verify_deploy import DEFAULT_BASE, Failed, verify
 
     base = (demo_url or DEFAULT_BASE).rstrip("/")
     try:
-        verify(base)
+        verify(base, expected_commit=report.commit or None)
     except Failed as broken:
         report.notes.append(f"deploy verification failed: {broken}")
         return "failed"

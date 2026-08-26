@@ -298,10 +298,12 @@ def main() -> int:
     check("no ledger row is left pending", 'value: ""' not in template)
     check("no counterfactual row is left pending", f'value: "{EM_DASH}"' not in template)
     # Result-shaped strings the page must not carry unless `site.toml` put them there. These are
-    # the ones this repository has actually published and then outgrown: two stale suite counts,
-    # and a lock result that is now 24 of 25.
+    # the ones this repository has actually published and then outgrown: three stale suite counts —
+    # the last of them an exact collection figure a frontend commit falsified, which is why the row
+    # is a floor now — and a lock result that is now 24 of 25.
     published = set(evidence.values()) | set(counterfactual.values())
-    for phrase in ("2661 passed", "2696 passed", "103 passed", "25 of 25", "0 of 25"):
+    outgrown = ("2661 passed", "2696 passed", "103 passed", "6183 collected", "25 of 25", "0 of 25")
+    for phrase in outgrown:
         if phrase not in published:
             check(f"no unconfigured result {phrase!r} is in the page", phrase not in generated)
 

@@ -72,17 +72,27 @@ video_url = ""
 #   readback      tests/test_verify_readback.py     four booking fields, one mutant each
 #   e2e           scripts/verify_lock.py            25 deployed runs, 2026-08-19
 #   tests         python -m pytest --collect-only   offline, on the mock provider, $0
-#                                                   (over the base `.[dev]` install -- see below)
+#                                                   (a floor over the base `.[dev]` install)
 #
-# **`tests` counts what pytest collects, and that is a correction rather than a preference.** It
-# read `2720 passed` while the suite collected more than twice that -- a figure somebody wrote down
-# after a run nobody remembers, on the one page in this repository that no test and no CI job read.
-# It is now derived, by `tests/test_published_evidence.py`, from pytest's own collection: a count of
-# how many tests there are is something an offline check can honestly produce, where "and they all
-# passed" is CI's claim on every push and is what the row's own `method` line names. It is
-# reliability *metadata* and is deliberately no part of any CareLoopBench domain -- a total test
-# count says how much there is, never that any particular property holds. Adding a test module moves
-# this line, which is the point.
+# **`tests` is a floor rather than a count, and that is the second correction this row has had.**
+# It read `2720 passed` while the suite collected more than twice that. It was then derived from
+# pytest's own collection and read `6183 collected` -- and drifted to 6190 across five commits
+# whose only Python change was none at all. Three copy sweeps (`tests/test_recovery_copy.py`,
+# `tests/test_upload_vocabulary.py`, `tests/test_adversarial_copy.py`) parametrise one case per
+# swept file over `frontend/src/**`, so adding one React component and two Vitest files added seven
+# collected Python tests. The sweeps are right; the *published exact figure* is what is wrong,
+# because it can be falsified by a frontend change nobody would think to re-derive it after.
+#
+# So the claim is weakened until it is stable. A floor is true of every commit that does not delete
+# a quarter of the suite, and it cannot overclaim, because by construction it claims less than the
+# truth. `tests/test_published_evidence.py` asserts only that pytest really collects at least this
+# many -- **no upper bound**, because a ceiling would be a second magic number whose failure mode is
+# a suite that grew. The exact figure stays derivable on demand (`pytest --collect-only`, and
+# CareLoopBench's own `tests executed` line); it is simply not published, because nothing a reader
+# decides turns on its last two digits.
+#
+# It is reliability *metadata* and is deliberately no part of any CareLoopBench domain -- a total
+# test count says how much there is, never that any particular property holds.
 #
 # **The count is taken over the base `.[dev]` install, and the reason is a failure worth recording.**
 # The first version of this row asserted a bare `pytest --collect-only` and went red on CI within
@@ -110,7 +120,7 @@ injection = "0 of 13"
 mutation = "320 of 320"
 readback = "4 of 4"
 e2e = "24 of 25"
-tests = "6183 collected"
+tests = "6,000+"
 
 # The two rows of the boundary-removed counterfactual. Empty keeps the pristine em dash.
 [counterfactual]

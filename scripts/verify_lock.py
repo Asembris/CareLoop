@@ -357,12 +357,27 @@ def main() -> int:
     print(f"coupling      {'ok' if coupled['ok'] else 'FAILED'}")
     print(f"total runs    {passed + approved} of {total}\n")
 
+    # The lock's own verdict, computed once and read twice. It is written into the file and
+    # returned to the shell from this one name, so a run a caller saw fail cannot leave behind a
+    # file that says it held. Nothing here restates what "held" means: every row already carries
+    # its own ``ok`` and this is the sum of them.
+    locked = passed + approved == total and coupled["ok"]
+
     if arguments.out:
         with open(arguments.out, "w", encoding="utf-8") as out:
-            json.dump({"matrix": rows, "approvals": approvals, "coupling": coupled}, out, indent=1)
+            json.dump(
+                {
+                    "matrix": rows,
+                    "approvals": approvals,
+                    "coupling": coupled,
+                    "passed": locked,
+                },
+                out,
+                indent=1,
+            )
         print(f"wrote {arguments.out}\n")
 
-    return 0 if passed + approved == total and coupled["ok"] else 1
+    return 0 if locked else 1
 
 
 if __name__ == "__main__":  # pragma: no cover - a tool, not a call site

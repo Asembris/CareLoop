@@ -55,6 +55,17 @@ ATTR_OBSERVATION_RESOURCE_ID: Final[str] = "careloop.observation.resource_id"
 
 CLINIC_PATH: Final[tuple[str, ...]] = ("clinic", "appointments")
 
+#: What comparing a result against its scenario's stated expectation can conclude.
+#:
+#: Three values and not two, because "the tool was not asked" is not "the tool was asked and the
+#: answer was wrong". :func:`main` reads both distinctions and reads them for different purposes:
+#: only :data:`NOT_MET` is a *failure* of this process, and only :data:`MET` is a *proof*. A run
+#: with no ``--expect``, and a ``--no-evaluate`` discovery run, are neither -- they exit zero and
+#: record ``passed: false``, which is the honest pair for a diagnostic that asserted nothing.
+MET: Final[str] = "met"
+NOT_MET: Final[str] = "NOT MET"
+NOT_ASSERTED: Final[str] = "not asserted"
+
 
 class ProofRefused(Exception):
     """The evidence is not in a shape this script is willing to draw a conclusion from."""
@@ -330,19 +341,19 @@ def evaluate(evaluator_id: str, trace_id: str, spans: list[dict[str, Any]]) -> d
 def check_expectation(expected: str | None, outcome: dict[str, Any]) -> str:
     """Compare the recorded result against what the scenario said it would be."""
     if expected is None:
-        return "not asserted"
+        return NOT_ASSERTED
     label = outcome.get("label")
     explanation = outcome.get("explanation") or ""
     if expected == "PASS":
-        return "met" if label == "PASS" and outcome.get("value") == 1.0 else "NOT MET"
+        return MET if label == "PASS" and outcome.get("value") == 1.0 else NOT_MET
     if expected == "NOT_APPLICABLE":
         met = label == "NOT_APPLICABLE" and not outcome.get("value_present")
-        return "met" if met else "NOT MET"
+        return MET if met else NOT_MET
     if expected.startswith("FAIL:"):
         wanted = expected.split(":", 1)[1]
         met = label == "FAIL" and outcome.get("value") == 0.0 and explanation.startswith(wanted)
-        return "met" if met else "NOT MET"
-    return "NOT MET"
+        return MET if met else NOT_MET
+    return NOT_MET
 
 
 # ---------------------------------------------------------------------------------------------
@@ -400,6 +411,10 @@ def main() -> int:
     else:
         start_ms = end_ms - int(arguments.window_minutes * 60_000)
 
+    # What comparing this run against its scenario concluded, held outside the block that
+    # produces it so the exit code below has something to read on every path out of it.
+    verdict = NOT_ASSERTED
+
     try:
         if arguments.list:
             summarise(logs, start_ms=start_ms, end_ms=end_ms)
@@ -443,7 +458,8 @@ def main() -> int:
                 raise ProofRefused("--evaluator-id is required unless --no-evaluate is given")
             outcome = evaluate(arguments.evaluator_id, trace_id, spans)
             record["result"] = outcome
-            record["expectation"] = check_expectation(arguments.expect, outcome)
+            verdict = check_expectation(arguments.expect, outcome)
+            record["expectation"] = verdict
             print(
                 f"result       {outcome['label']}  value_present={outcome['value_present']}  "
                 f"value={outcome['value']}"
@@ -451,13 +467,25 @@ def main() -> int:
             print(f"explanation  {outcome['explanation']}")
             print(f"expectation  {record['expectation']}")
 
+        # Whether this run is a *proof*, recorded beside what it observed. Only an expectation
+        # that was stated and met earns it: a discovery run and an unasserted evaluation both
+        # leave ``expectation`` absent or ``not asserted``, and neither is something a recorder
+        # should be able to publish as live evidence. Derived from the one field that already
+        # decided it -- there is no second comparison here.
+        record["passed"] = verdict == MET
+
         if arguments.out:
             Path(arguments.out).write_text(json.dumps(record, indent=2), encoding="utf-8")
             print(f"written      {arguments.out}")
     except ProofRefused as refusal:
         print(f"refused: {refusal}", file=sys.stderr)
         return 1
-    return 0
+
+    # A stated expectation that was not met is this process failing, and it used to exit zero --
+    # so a scripted operator saw success over a result that contradicted the scenario. Only
+    # ``NOT MET`` is a failure: ``not asserted`` and a discovery run asserted nothing and are not
+    # wrong about anything.
+    return 1 if verdict == NOT_MET else 0
 
 
 if __name__ == "__main__":

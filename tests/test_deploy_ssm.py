@@ -597,7 +597,7 @@ class TestTheDeployIsOnlyDoneWhenTheDistributionAgrees:
     def test_a_failed_property_is_reported_as_failed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import scripts.verify_deploy as verifier
 
-        def refuse(_: str) -> None:
+        def refuse(_: str, expected_commit: str | None = None) -> None:
             raise verifier.Failed("the session header did not reach the origin")
 
         monkeypatch.setattr(verifier, "verify", refuse)
@@ -610,7 +610,7 @@ class TestTheDeployIsOnlyDoneWhenTheDistributionAgrees:
     ) -> None:
         import scripts.verify_deploy as verifier
 
-        def unreachable(_: str) -> None:
+        def unreachable(_: str, expected_commit: str | None = None) -> None:
             raise OSError("connection refused")
 
         monkeypatch.setattr(verifier, "verify", unreachable)
@@ -624,12 +624,38 @@ class TestTheDeployIsOnlyDoneWhenTheDistributionAgrees:
         import scripts.verify_deploy as verifier
 
         asked: list[str] = []
-        monkeypatch.setattr(verifier, "verify", asked.append)
+        monkeypatch.setattr(
+            verifier,
+            "verify",
+            lambda base, expected_commit=None: asked.append(base),
+        )
         assert deploy.verify_through_the_cdn("", deploy.Report()) == "passed"
 
         assert asked == [verifier.DEFAULT_BASE]
         assert asked[0].startswith("https://")
         assert "127.0.0.1" not in asked[0]
+
+    def test_the_packed_commit_is_what_the_marker_is_checked_against(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The driver hands over the commit it packed, not a guess and not nothing.
+
+        Without this handover, `/release.json` would only be required to be *well-formed*, and a
+        deploy that somehow served a previous release would verify clean -- the exact confusion
+        the marker exists to make impossible.
+        """
+        import scripts.verify_deploy as verifier
+
+        seen: dict[str, str | None] = {}
+
+        def record(base: str, expected_commit: str | None = None) -> None:
+            seen["expected"] = expected_commit
+
+        monkeypatch.setattr(verifier, "verify", record)
+        report = deploy.Report(commit="c" * 40)
+
+        assert deploy.verify_through_the_cdn("", report) == "passed"
+        assert seen["expected"] == "c" * 40
 
 
 # ---------------------------------------------------------------------------------------------

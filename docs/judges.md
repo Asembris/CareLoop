@@ -23,13 +23,19 @@ workspace whose owner must match the verified principal, and possession of the i
 
 ## The sixty seconds
 
-1. Open the URL. You land on the dashboard, which is empty.
-2. Click **Run a scenario**.
-3. Click **01 — Schedule a cardiology referral**.
-4. Watch. A case appears and moves: *Just arrived* → *Working out the next step* → *Making the
+1. Open the URL. You land on the dashboard, which is empty — and says what you are looking at:
+   CareLoop handles care administration for family caregivers, and the model itself has no
+   authority to act. *Model proposes → policy authorizes → external system verifies.* Press
+   **See CareLoop work →**.
+2. Click **01 — Schedule a cardiology referral**, the card marked **START HERE**.
+3. Watch. A case appears and moves: *Just arrived* → *Working out the next step* → *Making the
    arrangement…* → *Confirming with the clinic…* → **Done · independently verified**, in a few
    seconds.
-5. Click the case, then **Under the hood**.
+4. Click the case. The outcome names the observation — *confirmed by an independent read*, based
+   on the clinic's record rather than CareLoop's own report — and the rule that authorized the
+   booking, with **Under the hood** in the header for the raw record.
+5. Follow **Next: test what happens when the proposal itself is unsafe →** and run **02 —
+   Malicious document**. The settled cases lead you: 01 links to 02, and 02 links onward to 04.
 
 That is the whole loop: a document arrived, an agent read it, proposed one action, a policy engine
 allowed it, the action was performed against a real external service, and the result was verified
@@ -38,9 +44,9 @@ by reading that service back.
 **You never need to press reset.** Pressing a scenario resets the world first, automatically, in
 the same request.
 
-**If you only have time for two, make the second one 04.** Scenario 01 is the loop working; 04 is
-the loop surviving an outcome it could not read, which is the harder thing and the one nothing else
-on the page shows.
+**If you only have time for two, make the second one 02** — the boundary is the claim worth
+checking, and its case explains itself. Keep **04** for the minute after: the loop surviving an
+outcome it could not read, which is the harder thing and the one nothing else on the page shows.
 
 **You have your own world.** Opening the URL mints you one — your own cases, your own clinic — so
 another judge reading this page at the same moment cannot see your cases, reset them, or take the

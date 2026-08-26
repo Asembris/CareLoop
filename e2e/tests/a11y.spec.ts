@@ -14,7 +14,7 @@
  *
  * ---
  *
- * **All fourteen run. Nothing is withheld for contrast.** Three real `color-contrast` defects at
+ * **Every state runs. Nothing is withheld for contrast.** Three real `color-contrast` defects at
  * `serious` impact were found here and repaired at their source; the numbers below are what they
  * measured before and after, so a regression is recognisable rather than merely red.
  *
@@ -86,6 +86,19 @@ const DECORATIVE_GLYPHS: Allowance[] = [
   }
 ];
 
+/** The cold landing's thesis strip separates its three steps with aria-hidden arrows. */
+const THESIS_ARROWS: Allowance[] = [
+  {
+    rule: "color-contrast",
+    why:
+      'The framing block joins MODEL PROPOSES / POLICY AUTHORIZES / EXTERNAL SYSTEM VERIFIES with ' +
+      'aria-hidden "→" spans, and axe reports "element content contains only non-text characters" ' +
+      "— the same decorative-glyph shape as My Boundaries' refusal dashes, allowed for the same " +
+      "reason: the marks are hidden from assistive technology and carry nothing a contrast ratio " +
+      "would protect, while the mono labels beside them are real text and are scanned normally."
+  }
+];
+
 /** The evidence lens sits over the page it was opened from. */
 const OVER_THE_PAGE: Allowance[] = [
   {
@@ -114,6 +127,15 @@ for (const theme of THEMES) {
     await useTheme(page, theme);
     await page.getByText("COMPLETED", { exact: true }).waitFor();
     await scan(page, `dashboard (${theme})`, NONE);
+  });
+
+  scanState(`cold landing (${theme})`, async (page) => {
+    // The judge's true first screen: a live, empty dashboard carrying the one thesis treatment.
+    // Not the seeded dashboard above — the framing block renders only when nothing else does.
+    await page.goto("/");
+    await useTheme(page, theme);
+    await page.getByTestId("judge-intro").waitFor();
+    await scan(page, `cold landing (${theme})`, THESIS_ARROWS);
   });
 
   scanState(`decision card (${theme})`, async (page, request) => {

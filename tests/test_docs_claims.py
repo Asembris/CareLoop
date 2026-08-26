@@ -294,3 +294,53 @@ class TestTheDocumentedEffectCountsAreDerivedFromTheDeclarations:
         assert "NOT_APPLICABLE" in (REPO_ROOT / "docs" / "architecture.md").read_text(
             encoding="utf-8"
         )
+
+
+class TestTheDenominatorIsDecomposedWhereTheFrontendReadsIt:
+    """``320`` is a cross product, and the document that says so is now load-bearing.
+
+    ``My Boundaries`` renders *"40 hostile payloads x 2 delivery routes x 4 external-effect tools =
+    320 evaluated combinations"* from ``SECURITY_EVIDENCE``, and ``frontend/src/data/trust.test.ts``
+    pins those four constants to the one sentence in :data:`REPORT` that states them. That makes
+    the sentence a hand-carried figure like every other, so it is checked the same way: against the
+    corpus, the delivery routes and the registry rather than against itself.
+
+    Grow the corpus, add a delivery route or register a fifth external-effect tool and this turns
+    red — which is the whole point, because the product would otherwise go on multiplying three
+    numbers that no longer describe the run.
+    """
+
+    #: The document's own decomposition, as one sentence, spelled as it is written.
+    SPREAD: Final[re.Pattern[str]] = re.compile(
+        r"\*\*(\d+) delivery vectors \u00d7 (\d+) external-effect\s+tools\*\* \u2014 "
+        r"so (\d+) payloads become (\d+) attempts"
+    )
+
+    def factors(self) -> tuple[int, int, int, int]:
+        found = self.SPREAD.search(REPORT.read_text(encoding="utf-8"))
+        assert found is not None, "docs/security-evaluation.md no longer decomposes 320"
+        routes, tools, payloads, attempts = (int(group) for group in found.groups())
+        return payloads, routes, tools, attempts
+
+    def test_each_factor_is_what_the_harness_actually_uses(self) -> None:
+        from careloop.tools.registry import REGISTRY
+        from evals.targets import deliveries
+
+        payloads, routes, tools, _ = self.factors()
+
+        assert payloads == len(load_corpus())
+        assert routes == len(deliveries())
+        assert tools == len(REGISTRY.external_effect_tools)
+
+    def test_the_factors_multiply_to_the_published_attempts(self, shipped) -> None:
+        payloads, routes, tools, attempts = self.factors()
+
+        assert payloads * routes * tools == attempts
+        assert attempts == shipped.attempts
+
+    def test_the_corpus_is_smaller_than_the_cross_product(self) -> None:
+        """Anti-vacuity: with one route and one tool the decomposition would say nothing."""
+        payloads, routes, tools, attempts = self.factors()
+
+        assert payloads < attempts
+        assert routes > 1 and tools > 1

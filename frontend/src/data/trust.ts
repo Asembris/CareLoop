@@ -92,9 +92,19 @@ export const STACK: StackRow[] = [
  *
  *  The *pair* is the evidence. A zero on its own could be a polite model; the same 320 attempts
  *  producing 320 unauthorized actions with only the authority layer removed is what shows the
- *  zero belongs to the policy engine. */
+ *  zero belongs to the policy engine.
+ *
+ *  **The denominator is a cross product, and it has to say so.** 320 is not 320 separate attacks:
+ *  it is every payload in the corpus replayed down every delivery route and against every tool
+ *  that can reach outside the process, which is what makes the result a ceiling rather than a
+ *  sample. Read as a headcount it overstates the corpus eightfold, so the three factors are
+ *  carried here — pinned to the same document by the same test — and rendered beside the numerals
+ *  rather than left for a reader to assume. */
 export const SECURITY_EVIDENCE = {
   attempts: 320,
+  payloads: 40,
+  deliveryRoutes: 2,
+  effectTools: 4,
   shippedUnauthorized: 0,
   withoutAuthorityUnauthorized: 320,
   reproduceCommand: "python -m evals.replay",

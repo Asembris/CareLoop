@@ -15,6 +15,14 @@ import { expect, test, type ConsoleMessage, type Page, type Request, type Respon
 
 const ORIGIN = "http://127.0.0.1";
 
+/**
+ * The frozen executable release every source receipt pins to, and the value the deployed
+ * build reports at `/release.json`. Not the commit that publishes this page: the cited
+ * implementation paths are identical in both, and a receipt should name the build a reader
+ * is actually running.
+ */
+const PINNED_RELEASE = "199f09a422c783c6d63f142f8e225ed9acdc9352";
+
 /** Everything that went wrong while the page was open, collected per test. */
 type Faults = {
   pageErrors: string[];
@@ -326,24 +334,51 @@ test.describe("the dossier under the GitHub project path", () => {
     expect(unsafe).toEqual([]);
   });
 
-  test("no source receipt is clickable while the repository is private", async ({ page }) => {
+  test("every source receipt is a permalink pinned to the released commit", async ({ page }) => {
     await open(page);
 
-    // The receipts are configured and validated, but the switch is off: nothing in the page may
-    // offer a judge a GitHub permalink they cannot open. Asserted on rendered links rather than on
-    // config, so a receipt that leaked through the transform would fail here too.
+    // A receipt renders inside the panel that cites it, so the page has to be driven to where a
+    // reader would actually meet one. This is the substance of the inversion: the switched-off
+    // form of this test asserted an *absence* over a closed page, which it would have satisfied
+    // just as happily had it never searched anything.
+    const metric = page.locator("button.cl-metric").first();
+    await metric.scrollIntoViewIfNeeded();
+    await metric.click();
+    await expect(metric).toHaveAttribute("aria-expanded", "true");
+
+    // Asserted on rendered links rather than on config, so a receipt that failed to survive the
+    // transform fails here too — and over every permalink rather than a sampled one, so a single
+    // mapping that slipped back to a branch is caught.
     const permalinks = await page.evaluate(() =>
       [...document.querySelectorAll("a")]
         .map((a) => a.getAttribute("href") ?? "")
         .filter((href) => /github\.com\/[^/]+\/[^/]+\/(?:blob|tree)\//.test(href)),
     );
-    expect(permalinks).toEqual([]);
+    expect(permalinks.length).toBeGreaterThan(0);
 
-    // The architecture inspector still says so in its own words.
+    const commits = [
+      ...new Set(permalinks.map((href) => href.split(/\/(?:blob|tree)\//)[1].split("/")[0])),
+    ];
+    expect(commits).toEqual([PINNED_RELEASE]);
+
+    // A moving branch reference is the exact failure pinning exists to prevent: it resolves today
+    // and drifts off the line it was citing tomorrow.
+    expect(permalinks.filter((href) => /\/(?:blob|tree)\/main\//.test(href))).toEqual([]);
+
+    // The open panel says so in its own words where it used to read "Source pending".
+    await expect(page.getByText("Source pending")).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(metric).toHaveAttribute("aria-expanded", "false");
+
+    // The architecture inspector's SOURCE row names a repository path now. Asserted as the
+    // positive, because a missing inspector would satisfy the absence of the old copy just as
+    // well as a working one.
     const chip = page.locator("button.cl-chip[data-atlas]").first();
     await chip.scrollIntoViewIfNeeded();
     await chip.click();
-    await expect(page.getByText("Source pending").first()).toBeVisible();
+    await expect(chip).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByText(/careloop\/[a-z]/).first()).toBeVisible();
+    await expect(page.getByText("Source pending")).toHaveCount(0);
     await page.keyboard.press("Escape");
   });
 

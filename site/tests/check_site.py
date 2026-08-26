@@ -50,6 +50,11 @@ CONFIG: Final = SITE / "site.toml"
 #: A mismatch means the vendored artifact was edited, which is the one thing it must never be.
 PRISTINE_SHA256: Final = "91667270152fc76e6d46b6b19db23672b762545d4b32a76b976e1a7c717896ef"
 
+#: The frozen executable release every source receipt pins to. Not the commit that publishes
+#: this page: the cited implementation paths are identical in both, and the deployed build
+#: reports this same value at /release.json, so it is the one a reader can corroborate.
+PINNED_RELEASE: Final = "199f09a422c783c6d63f142f8e225ed9acdc9352"
+
 #: Hosts the page is allowed to *mention*. Nothing here is fetched: these are outbound hyperlinks
 #: and an XML namespace, which is why the check below distinguishes references from destinations.
 ALLOWED_TEXT_HOSTS: Final = ("http://www.w3.org/2000/svg", "http://www.w3.org/1999/xhtml")
@@ -312,15 +317,23 @@ def main() -> int:
     # page the checker never actually searched.
     check("the search would find one if it were there", "0 of 320" in generated)
 
+    # Receipts live inside the EVIDENCE array and nowhere else, enabled or not.
     before_evidence = template.split("EVIDENCE")[0]
-    check("evidence source links are still pending", "sourceUrl" not in before_evidence)
+    check("no source link appears before the EVIDENCE array", "sourceUrl" not in before_evidence)
 
-    print("\nsource receipts are prepared but switched off")
+    print("\nsource receipts are enabled and pinned to the submitted release")
     receipts = config.get("source_receipts", {})
     repo_root = SITE.parent
     enabled = receipts.get("enabled")
-    check("the switch exists and is off", enabled is False, str(enabled))
-    check("no commit is pinned yet", receipts.get("sha", "") == "")
+    check("the switch exists and is on", enabled is True, str(enabled))
+    sha = receipts.get("sha", "")
+    # Pinned to the frozen executable release, and deliberately not to the evidence commit that
+    # publishes this page: the cited implementation paths are byte-identical between the two, and
+    # naming the build a judge is actually running says more than naming the one that carries the
+    # citation. The shape is asserted as well as the value, because a truncated or upper-case sha
+    # resolves to nothing while still looking like a commit.
+    check("a commit is pinned", sha == PINNED_RELEASE, sha)
+    check("the pin is 40 lowercase hex", bool(re.fullmatch(r"[0-9a-f]{40}", sha)), sha)
     check(
         "the receipt repo is the real one",
         receipts.get("repo") == "https://github.com/Asembris/CareLoop",
@@ -344,48 +357,76 @@ def main() -> int:
             )
             check(f"{path} is tracked by git", tracked.returncode == 0)
 
-    # Nothing a judge could click while the repository is private.
-    check("no receipt URL is in the page", "sourceUrl:" not in template)
-    check("no subsystem receipt is in the page", "sourceReceipt" not in template)
+    # Asserted on the page this build actually emits, rather than on an armed copy of the config.
+    # Once the switch is on, the real generated page is the artifact a judge reads.
     check(
-        "no GitHub permalink is in the page",
-        not re.search(r"github\.com/\S+/(?:blob|tree)/", template),
-    )
-    check("the architecture SOURCE row still reads as pending", '"Source pending"' in template)
-    # Disabled must be indistinguishable from the section not existing at all, so that switching it
-    # on is the only thing that can ever make a receipt appear.
-    without = {k: v for k, v in config.items() if k != "source_receipts"}
-    check(
-        "with receipts off the page is byte-identical to having no receipt config",
-        adapt(vendor, without, source_page) == generated,
-    )
-
-    print("\nand they would resolve if the switch were flipped")
-    armed = tomllib.loads(_read(CONFIG))
-    armed["source_receipts"]["enabled"] = True
-    armed["source_receipts"]["sha"] = "0" * 40
-    lit = _template(adapt(vendor, armed, source_page))
-    check(
-        "every ledger receipt becomes a link",
-        lit.count("sourceUrl:") == len(receipts["evidence"]),
+        "every ledger receipt is a link",
+        template.count("sourceUrl:") == len(receipts["evidence"]),
     )
     check(
-        "every subsystem receipt becomes a path",
-        lit.count("sourceReceipt:") == len(receipts["subsystems"]),
+        "every subsystem receipt is a path",
+        template.count("sourceReceipt:") == len(receipts["subsystems"]),
     )
     wired_row = 'v: y.sourceReceipt || "Source pending"'
-    check("the SOURCE row reads the selected subsystem", wired_row in lit)
+    check("the SOURCE row reads the selected subsystem", wired_row in template)
     # Ledger receipts are the clickable ones, so those carry the pinned URL. Subsystem receipts
-    # land in a row the design draws as text, so those resolve to repository paths — asserted here
+    # land in a row the design draws as text, so those resolve to repository paths -- asserted here
     # as the two different renderings they are, rather than pretending they are one.
-    pinned = f"https://github.com/Asembris/CareLoop/blob/{'0' * 40}/docs/security-evaluation.md"
-    check("a ledger receipt is a pinned permalink", f'sourceUrl: "{pinned}"' in lit)
+    pinned = f"https://github.com/Asembris/CareLoop/blob/{sha}/docs/security-evaluation.md"
+    check("a ledger receipt is a pinned permalink", f'sourceUrl: "{pinned}"' in template)
     rules_receipt = 'sourceReceipt: "careloop/policy/rules.yaml"'
-    check("a subsystem receipt is a repository path", rules_receipt in lit)
+    check("a subsystem receipt is a repository path", rules_receipt in template)
     check(
         "a paired subsystem receipt names both halves",
-        'sourceReceipt: "careloop/graph/verify.py · tests/test_verify_readback.py"' in lit,
+        'sourceReceipt: "careloop/graph/verify.py · tests/test_verify_readback.py"' in template,
     )
+    # Every permalink in the page resolves against the pinned commit and nothing else. Asserted
+    # over all of them rather than over the one sampled above, so a single mapping that slipped
+    # back to a branch, or to some other commit, is caught here.
+    permalinks = re.findall(r"github\.com/\S+?/(?:blob|tree)/([^/]+)/", template)
+    check("the page carries permalinks", bool(permalinks), str(len(permalinks)))
+    check(
+        "every permalink names the pinned commit",
+        set(permalinks) == {sha},
+        str(sorted(set(permalinks))),
+    )
+    no_branch = "/blob/main/" not in template and "/tree/main/" not in template
+    check("no receipt points at a moving branch", no_branch)
+    check(
+        "the receipts leave the manifest alone",
+        manifest_digest(generated) == manifest_digest(vendor),
+    )
+
+    print("\nand the switch is the only thing producing them")
+    # Anti-vacuity, and the property the switch exists for: with receipts off the page must be
+    # byte-identical to one built with this whole section deleted, and must carry no receipt at
+    # all. Asserted against a disabled copy of the live config, so the checks above are known to
+    # be measuring the switch rather than something the vendored bundle always had.
+    disabled = tomllib.loads(_read(CONFIG))
+    disabled["source_receipts"]["enabled"] = False
+    disabled["source_receipts"]["sha"] = ""
+    dark = adapt(vendor, disabled, source_page)
+    dark_template = _template(dark)
+    check("with receipts off no receipt URL is in the page", "sourceUrl:" not in dark_template)
+    check(
+        "with receipts off no subsystem receipt is in the page",
+        "sourceReceipt" not in dark_template,
+    )
+    check(
+        "with receipts off no GitHub permalink is in the page",
+        not re.search(r"github\.com/\S+/(?:blob|tree)/", dark_template),
+    )
+    check(
+        "with receipts off the architecture SOURCE row reads as pending",
+        '"Source pending"' in dark_template,
+    )
+    without = {k: v for k, v in disabled.items() if k != "source_receipts"}
+    check(
+        "with receipts off the page is byte-identical to having no receipt config",
+        adapt(vendor, without, source_page) == dark,
+    )
+    check("and enabling them is what changes the page", dark != generated)
+
     # The blob/tree distinction is a property of the URL builder, and no evidence receipt is a
     # directory today, so it is exercised directly rather than through the page.
     check(
@@ -398,13 +439,10 @@ def main() -> int:
         _receipt_url("https://x/r", "abc", "careloop/agents/")
         == "https://x/r/tree/abc/careloop/agents",
     )
-    no_branch = "/blob/main/" not in lit and "/tree/main/" not in lit
-    check("no receipt points at a moving branch", no_branch)
-    armed_digest = manifest_digest(adapt(vendor, armed, source_page))
-    check("the armed build leaves the manifest alone", armed_digest == manifest_digest(vendor))
-    # Arming without pinning must fail loudly rather than emit a branch link.
+    # Arming without pinning must still fail loudly rather than emit a branch link.
     unpinned = tomllib.loads(_read(CONFIG))
     unpinned["source_receipts"]["enabled"] = True
+    unpinned["source_receipts"]["sha"] = ""
     try:
         adapt(vendor, unpinned, source_page)
         check("enabling without a sha is refused", False, "it was accepted")

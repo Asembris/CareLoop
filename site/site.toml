@@ -130,23 +130,31 @@ boundary_removed = "320 of 320"
 
 # Source receipts — where each claim on the page can be checked in the repository.
 #
-# **Disabled, deliberately, and this is the whole point of the switch.** The repository is private,
-# so a receipt rendered today would be a link a judge cannot open: a 404 under a claim is worse
-# than no link at all, and worse than the page's own honest "Source pending". While `enabled` is
-# false `adapt.py` emits nothing — the generated page is byte-identical to one built with this
-# whole section deleted, which `tests/check_site.py` asserts rather than assumes.
+# **Enabled, and pinned to the submitted executable release.** It was off for as long as the
+# repository was private, because a receipt rendered then would have been a link a judge cannot
+# open: a 404 under a claim is worse than no link at all, and worse than the page's own honest
+# "Source pending". The switch was a two-value change and touched no markup — every mapping below
+# was already written and already validated against the working tree, so all the flip added was
+# the ability to resolve.
 #
-# Flipping this on is a two-value change and touches no markup: set `enabled = true` and `sha` to
-# the submission commit. Every mapping below is already written and already validated against the
-# working tree, so the only thing the flip adds is the ability to resolve.
+# While `enabled` was false `adapt.py` emitted nothing, and the generated page was byte-identical
+# to one built with this whole section deleted. That equivalence is still asserted by
+# `tests/check_site.py` against a disabled copy of this config, because it is what proves the
+# switch is the only thing that can ever make a receipt appear.
 #
-# **`sha` is empty on purpose and must stay empty until the submission is locked.** `adapt.py`
-# refuses to build a receipt without one rather than falling back to a branch name: `blob/main`
-# moves, and a receipt that drifts off the line it was citing is a false citation with a working
-# link, which is the worst of both.
+# **`sha` is the frozen executable release F, and deliberately not the evidence commit that
+# publishes this page.** The receipts cite implementation paths, and those paths are byte-identical
+# between the two: the later commit adds recorded live proofs, the generated evidence pair and this
+# file, and changes no executable surface. Pinning the commit that merely *carries the citation*
+# would be self-referential and says less about what a judge is running than naming the build that
+# is actually deployed — which `/release.json` independently reports as this same value.
+#
+# `adapt.py` refuses to build a receipt with an empty `sha` rather than falling back to a branch
+# name: `blob/main` moves, and a receipt that drifts off the line it was citing is a false citation
+# with a working link, which is the worst of both.
 [source_receipts]
-enabled = false
-sha = ""
+enabled = true
+sha = "199f09a422c783c6d63f142f8e225ed9acdc9352"
 repo = "https://github.com/Asembris/CareLoop"
 
 # Subsystem receipts, keyed by the `atlas` id the page's SYSTEMS array uses.

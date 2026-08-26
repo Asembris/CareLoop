@@ -1,9 +1,9 @@
 {
   "careloopbench": {
     "tier": "core",
-    "generated_at_commit": "db7ed9d4aaa9e6d8f7e2d9b34ecc17e8cb9bcd2f",
+    "generated_at_commit": "199f09a422c783c6d63f142f8e225ed9acdc9352",
     "registry_digest": "50388296002d6a4400c2c6879da5cd68f04d90c02409c68cc0c5612c90d1bd66",
-    "tests_run": 1497
+    "tests_run": 1500
   },
   "domains": [
     {
@@ -57,7 +57,7 @@
       "mutation_backed": 1,
       "by_status": {
         "PROVEN": 3,
-        "NOT_RUN": 1
+        "PROVEN_AT": 1
       }
     },
     {
@@ -1233,8 +1233,8 @@
       "question": "Has the poison-only scenario ever been run against the deployed build?",
       "domain": "ADVERSARIAL_ROBUSTNESS",
       "level": "LIVE_DEPLOYMENT",
-      "status": "NOT_RUN",
-      "detail": "no stored proof; run python scripts/verify_lock.py --out <raw>.json, then python -m careloopbench.record live.deployed-injection-lock --raw <raw>.json --attestation <how> --environment <where>",
+      "status": "PROVEN_AT",
+      "detail": "proven at 199f09a422c7 · operator-attested",
       "scope": "Runs of one scenario against one model on one day. The corpus replay is the attack-agnostic measurement and is executed on every invocation.",
       "mutation_backed": false,
       "evidence": [],

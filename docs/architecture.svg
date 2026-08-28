@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 950" width="1240" height="950" role="img" aria-labelledby="careloop-arch-title careloop-arch-desc" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif">
   <title id="careloop-arch-title">CareLoop architecture: three trust zones, one policy engine, an independent read-back</title>
-  <desc id="careloop-arch-desc">An inbound email and its PDF attachments enter as UNTRUSTED data, together with the output of the two LLM agents. Seven deterministic graph nodes, all TRUSTED application code, drive the case. One policy engine reading one rules.yaml decides at three points: the gate node, the Strands BeforeToolCall hook, and the gated tool wrapper. Validated facts live in the CONTROLLED zone. The booking leaves over HTTP to Demo World, a separate process, and verification reads that service back on a separate request.</desc>
+  <desc id="careloop-arch-desc">An inbound email and its PDF attachments enter as UNTRUSTED data, together with the output of the two LLM agents. Eight deterministic graph nodes, all TRUSTED application code, drive the case. One policy engine reading one rules.yaml decides at three call sites: the gate node, the Strands BeforeToolCall hook, and the gated tool wrapper. Validated facts live in the CONTROLLED zone. Two effects reach real providers: the booking goes over HTTP to Demo World, a separate process, and upload_document crosses into Amazon S3. Verification re-reads each provider on its own separate request, never the effect's own response.</desc>
 
   <!--
     Hand authored, deliberately. This is text: diff it, grep it, edit it. It is not exported
@@ -46,7 +46,7 @@
     <path d="M 540 87 L 592 87" stroke="#b4622f" stroke-width="2" stroke-dasharray="7 4" marker-end="url(#arrow-copper)"/>
     <text x="600" y="91">independent read-back</text>
     <text x="740" y="91" font-weight="600" fill="#b4622f">LLM</text>
-    <text x="772" y="91">one of exactly two agents, and neither holds authority</text>
+    <text x="772" y="91">one of exactly two model-backed stages; neither holds authority</text>
   </g>
 
   <!-- ======================= UNTRUSTED zone ======================= -->
@@ -90,71 +90,83 @@
 
   <!-- untrusted into the pipeline, drawn after the band so the arrowheads land on the nodes -->
   <g stroke="#315e52" stroke-width="1.6" fill="none" marker-end="url(#arrow)">
-    <path d="M 104 238 L 104 262 L 120 262 L 120 318"/>
-    <path d="M 256 238 L 256 270 L 204 270 L 204 318"/>
-    <path d="M 408 238 L 408 278 L 318 278 L 318 318"/>
-    <path d="M 560 238 L 560 286 L 410 286 L 410 318"/>
+    <path d="M 104 238 L 104 262 L 110 262 L 110 318"/>
+    <path d="M 256 238 L 256 270 L 181 270 L 181 318"/>
+    <path d="M 408 238 L 408 278 L 283 278 L 283 318"/>
+    <path d="M 560 238 L 560 286 L 385 286 L 385 318"/>
   </g>
 
-  <!-- the seven graph nodes -->
+  <!-- the eight graph nodes: 90 wide on a 102 pitch, so Reconcile fits the same band -->
   <g font-size="8.6" fill="#4a4a45">
-    <rect x="40" y="322" width="100" height="72" rx="7" fill="#ffffff" stroke="#315e52"/>
-    <text x="50" y="342" font-size="10.5" font-weight="700" font-family="ui-monospace, Consolas, monospace" fill="#22221f">Dispatch</text>
-    <text x="50" y="360">entry, and where</text>
-    <text x="50" y="372">a reopened case</text>
-    <text x="50" y="384">rejoins the graph</text>
+    <rect x="34" y="322" width="90" height="72" rx="7" fill="#ffffff" stroke="#315e52"/>
+    <text x="44" y="342" font-size="10.5" font-weight="700" font-family="ui-monospace, Consolas, monospace" fill="#22221f">Dispatch</text>
+    <text x="44" y="360">entry, and where</text>
+    <text x="44" y="372">a reopened case</text>
+    <text x="44" y="384">rejoins the graph</text>
 
-    <rect x="154" y="322" width="100" height="72" rx="7" fill="#ffffff" stroke="#315e52"/>
-    <text x="164" y="342" font-size="10.5" font-weight="700" font-family="ui-monospace, Consolas, monospace" fill="#22221f">Triage</text>
-    <text x="224" y="342" font-size="8.4" font-weight="700" fill="#b4622f">LLM</text>
-    <text x="164" y="360">classify into typed</text>
-    <text x="164" y="372">Case fields</text>
-    <text x="164" y="384">Nova Micro</text>
+    <rect x="136" y="322" width="90" height="72" rx="7" fill="#ffffff" stroke="#315e52"/>
+    <text x="146" y="342" font-size="10.5" font-weight="700" font-family="ui-monospace, Consolas, monospace" fill="#22221f">Triage</text>
+    <text x="200" y="342" font-size="8.4" font-weight="700" fill="#b4622f">LLM</text>
+    <text x="146" y="360">classify into typed</text>
+    <text x="146" y="372">Case fields</text>
+    <text x="146" y="384">Nova Micro</text>
 
-    <rect x="268" y="322" width="100" height="72" rx="7" fill="#ffffff" stroke="#315e52"/>
-    <text x="278" y="342" font-size="10.5" font-weight="700" font-family="ui-monospace, Consolas, monospace" fill="#22221f">Evidence</text>
-    <text x="278" y="360">read, extract,</text>
-    <text x="278" y="372">validate, promote.</text>
-    <text x="278" y="384">No model reads it.</text>
+    <rect x="238" y="322" width="90" height="72" rx="7" fill="#ffffff" stroke="#315e52"/>
+    <text x="248" y="342" font-size="10.5" font-weight="700" font-family="ui-monospace, Consolas, monospace" fill="#22221f">Evidence</text>
+    <text x="248" y="360">read, extract,</text>
+    <text x="248" y="372">validate, promote.</text>
+    <text x="248" y="384">No model reads it.</text>
 
-    <rect x="382" y="322" width="100" height="72" rx="7" fill="#ffffff" stroke="#315e52"/>
-    <text x="392" y="342" font-size="10.5" font-weight="700" font-family="ui-monospace, Consolas, monospace" fill="#22221f">Plan</text>
-    <text x="452" y="342" font-size="8.4" font-weight="700" fill="#b4622f">LLM</text>
-    <text x="392" y="360">propose exactly one</text>
-    <text x="392" y="372">next action</text>
-    <text x="392" y="384">Nova 2 Lite</text>
+    <rect x="340" y="322" width="90" height="72" rx="7" fill="#ffffff" stroke="#315e52"/>
+    <text x="350" y="342" font-size="10.5" font-weight="700" font-family="ui-monospace, Consolas, monospace" fill="#22221f">Plan</text>
+    <text x="404" y="342" font-size="8.4" font-weight="700" fill="#b4622f">LLM</text>
+    <text x="350" y="360">propose exactly one</text>
+    <text x="350" y="372">next action</text>
+    <text x="350" y="384">Nova 2 Lite</text>
 
-    <rect x="496" y="322" width="100" height="72" rx="7" fill="#ffffff" stroke="#315e52" stroke-width="2"/>
-    <text x="506" y="342" font-size="10.5" font-weight="700" font-family="ui-monospace, Consolas, monospace" fill="#22221f">Gate</text>
-    <text x="506" y="360">execute, ask a</text>
-    <text x="506" y="372">human, or send the</text>
-    <text x="506" y="384">planner back</text>
+    <rect x="442" y="322" width="90" height="72" rx="7" fill="#ffffff" stroke="#315e52" stroke-width="2"/>
+    <text x="452" y="342" font-size="10.5" font-weight="700" font-family="ui-monospace, Consolas, monospace" fill="#22221f">Gate</text>
+    <text x="452" y="360">execute, ask a</text>
+    <text x="452" y="372">human, or send the</text>
+    <text x="452" y="384">planner back</text>
 
-    <rect x="610" y="322" width="100" height="72" rx="7" fill="#ffffff" stroke="#315e52"/>
-    <text x="620" y="342" font-size="10.5" font-weight="700" font-family="ui-monospace, Consolas, monospace" fill="#22221f">Execute</text>
-    <text x="620" y="360">dispatch the tool.</text>
-    <text x="620" y="372">Two gates below it,</text>
-    <text x="620" y="384">both independent.</text>
+    <rect x="544" y="322" width="90" height="72" rx="7" fill="#ffffff" stroke="#315e52"/>
+    <text x="554" y="342" font-size="10.5" font-weight="700" font-family="ui-monospace, Consolas, monospace" fill="#22221f">Execute</text>
+    <text x="554" y="360">dispatch the tool.</text>
+    <text x="554" y="372">Two gates below,</text>
+    <text x="554" y="384">one PolicyGate.</text>
 
-    <rect x="724" y="322" width="100" height="72" rx="7" fill="#ffffff" stroke="#315e52"/>
-    <text x="734" y="342" font-size="10.5" font-weight="700" font-family="ui-monospace, Consolas, monospace" fill="#22221f">Verify</text>
-    <text x="734" y="360">performed equals</text>
-    <text x="734" y="372">authorised, then</text>
-    <text x="734" y="384">read the world back</text>
+    <rect x="646" y="322" width="90" height="72" rx="7" fill="#ffffff" stroke="#315e52" stroke-dasharray="5 3"/>
+    <text x="656" y="342" font-size="10.5" font-weight="700" font-family="ui-monospace, Consolas, monospace" fill="#22221f">Reconcile</text>
+    <text x="656" y="358" font-size="8">re-claim a prepared</text>
+    <text x="656" y="369" font-size="8">attempt whose</text>
+    <text x="656" y="380" font-size="8">answer never came.</text>
+    <text x="656" y="391" font-size="8">Asks no model.</text>
+
+    <rect x="748" y="322" width="90" height="72" rx="7" fill="#ffffff" stroke="#315e52"/>
+    <text x="758" y="342" font-size="10.5" font-weight="700" font-family="ui-monospace, Consolas, monospace" fill="#22221f">Verify</text>
+    <text x="758" y="360">performed equals</text>
+    <text x="758" y="372">authorised, then</text>
+    <text x="758" y="384">read the world back</text>
   </g>
 
-  <!-- pipeline edges -->
+  <!-- pipeline edges. Execute reaches Verify directly; Reconcile is the off-path recovery. -->
   <g stroke="#315e52" stroke-width="1.8" fill="none" marker-end="url(#arrow)">
-    <path d="M 140 358 L 152 358"/>
-    <path d="M 254 358 L 266 358"/>
-    <path d="M 368 358 L 380 358"/>
-    <path d="M 482 358 L 494 358"/>
-    <path d="M 596 358 L 608 358"/>
-    <path d="M 710 358 L 722 358"/>
+    <path d="M 124 358 L 134 358"/>
+    <path d="M 226 358 L 236 358"/>
+    <path d="M 328 358 L 338 358"/>
+    <path d="M 430 358 L 440 358"/>
+    <path d="M 532 358 L 542 358"/>
+    <path d="M 610 394 L 610 400 L 760 400 L 760 396"/>
+  </g>
+  <!-- the recovery detour: taken only when a dispatched effect was never answered -->
+  <g stroke="#315e52" stroke-width="1.4" fill="none" stroke-dasharray="4 3" marker-end="url(#arrow)">
+    <path d="M 634 358 L 644 358"/>
+    <path d="M 736 358 L 746 358"/>
   </g>
   <!-- the replan cycle: refusal returns to the planner, bounded by the SDK -->
-  <path d="M 546 322 L 546 306 L 460 306 L 460 320" stroke="#315e52" stroke-width="1.4" fill="none" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
-  <text x="572" y="310" font-size="8.6" fill="#2f5c50">denied: replan, told a ReasonCode and nothing else</text>
+  <path d="M 487 322 L 487 306 L 400 306 L 400 320" stroke="#315e52" stroke-width="1.4" fill="none" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+  <text x="513" y="310" font-size="8.6" fill="#2f5c50">denied: replan, told a ReasonCode and nothing else</text>
 
   <text x="40" y="410" font-size="9.4" fill="#2f5c50" font-family="ui-monospace, Consolas, monospace">GraphBuilder · every node subclasses MultiAgentBase · bounds from set_max_node_executions, set_execution_timeout, set_node_timeout</text>
 
@@ -179,47 +191,75 @@
   <text x="570" y="443" font-size="9.2" font-family="ui-monospace, Consolas, monospace" fill="#22221f">BeforeToolCallEvent.cancel_tool</text>
   <rect x="560" y="460" width="212" height="30" rx="6" fill="#ffffff" stroke="#b4622f" stroke-width="1.6"/>
   <text x="570" y="479" font-size="9.2" font-family="ui-monospace, Consolas, monospace" fill="#22221f">@gated_tool wrapper (backstop)</text>
-  <text x="560" y="506" font-size="8.6" fill="#2f5c50">Two independent points at the tool boundary. Each is</text>
-  <text x="560" y="518" font-size="8.6" fill="#2f5c50">proven sufficient alone; with neither, the attack lands.</text>
+  <text x="560" y="506" font-size="8.6" fill="#2f5c50">Two enforcement sites at the tool boundary, backed by the</text>
+  <text x="560" y="518" font-size="8.6" fill="#2f5c50">same deterministic PolicyGate decision — not two engines.</text>
+  <text x="560" y="530" font-size="8.6" fill="#2f5c50">Each is proven sufficient alone; with neither, the attack lands.</text>
 
   <!-- three call sites, one engine -->
   <g stroke="#315e52" stroke-width="1.6" fill="none" marker-end="url(#arrow)">
-    <path d="M 528 394 L 528 420"/>
+    <path d="M 487 394 L 487 420"/>
   </g>
   <g stroke="#b4622f" stroke-width="1.6" fill="none" marker-end="url(#arrow-copper)">
     <path d="M 558 439 L 544 439"/>
     <path d="M 558 475 L 550 475 L 550 500 L 544 500"/>
-    <path d="M 660 396 L 660 420"/>
+    <path d="M 570 396 L 570 420"/>
   </g>
 
   <text x="40" y="552" font-size="9.4" fill="#2f5c50">Application code, the policy engine and rules.yaml. TRUSTED is never manufactured by validation and never by an approval: it comes only from configuration a person wrote.</text>
   <text x="40" y="568" font-size="9.4" fill="#2f5c50">Case is frozen and transition() is its only writer, so DONE is reachable only from VERIFYING. No graph edge leaves DONE; only an inbound event can.</text>
 
-  <!-- ==================== OUTSIDE: Demo World ==================== -->
-  <rect x="870" y="290" width="346" height="288" rx="10" fill="#f2f1ee" stroke="#6b6b66" stroke-dasharray="6 4"/>
+  <!-- ================= OUTSIDE: the two real providers ================= -->
+  <rect x="870" y="290" width="346" height="466" rx="10" fill="#f2f1ee" stroke="#6b6b66" stroke-dasharray="6 4"/>
   <text x="886" y="312" font-size="12" font-weight="700" fill="#55554f" letter-spacing="1.2">OUTSIDE CARELOOP</text>
-  <text x="886" y="330" font-size="10" fill="#55554f">demoworld/ — its own process, its own port. It may</text>
-  <text x="886" y="344" font-size="10" fill="#55554f">never import careloop, which is what makes reading</text>
-  <text x="886" y="358" font-size="10" fill="#55554f">it back evidence rather than the agent consulting itself.</text>
+  <text x="886" y="330" font-size="10" fill="#55554f">Two external systems supported by the architecture; each is</text>
+  <text x="886" y="344" font-size="10" fill="#55554f">verified by a separate read request.</text>
 
-  <rect x="886" y="374" width="314" height="56" rx="7" fill="#ffffff" stroke="#b4622f" stroke-width="1.6"/>
-  <text x="898" y="394" font-size="10" font-weight="700" font-family="ui-monospace, Consolas, monospace" fill="#22221f">GET /clinic/slots</text>
-  <text x="898" y="412" font-size="8.8" fill="#4a4a45">the read-back: a separate request, compared against what</text>
-  <text x="898" y="423" font-size="8.8" fill="#4a4a45">policy authorised — never the booking's own response</text>
+  <!-- provider one: the clinic, over HTTP, in its own process -->
+  <rect x="886" y="358" width="314" height="150" rx="7" fill="#ffffff" stroke="#6b6b66"/>
+  <text x="898" y="378" font-size="11" font-weight="700" fill="#22221f">Demo World clinic</text>
+  <g font-size="8.6" fill="#4a4a45">
+    <text x="898" y="394">demoworld/ — its own process, its own port. It may never</text>
+    <text x="898" y="406">import careloop, which is what makes reading it back</text>
+    <text x="898" y="418">evidence rather than the agent consulting itself.</text>
+  </g>
+  <rect x="898" y="428" width="290" height="36" rx="5" fill="#ffffff" stroke="#315e52" stroke-width="1.6"/>
+  <text x="908" y="443" font-size="9.2" font-weight="700" font-family="ui-monospace, Consolas, monospace" fill="#22221f">POST /clinic/appointments</text>
+  <text x="908" y="456" font-size="8.2" fill="#4a4a45">the booking, under the idempotency key frozen before dispatch</text>
+  <rect x="898" y="468" width="290" height="36" rx="5" fill="#ffffff" stroke="#b4622f" stroke-width="1.6" stroke-dasharray="5 3"/>
+  <text x="908" y="483" font-size="9.2" font-weight="700" font-family="ui-monospace, Consolas, monospace" fill="#22221f">GET /clinic/appointments/{confirmation_id}</text>
+  <text x="908" y="496" font-size="8.2" fill="#4a4a45">a separate request, compared against what policy authorised</text>
 
-  <rect x="886" y="452" width="314" height="56" rx="7" fill="#ffffff" stroke="#315e52" stroke-width="1.6"/>
-  <text x="898" y="472" font-size="10" font-weight="700" font-family="ui-monospace, Consolas, monospace" fill="#22221f">POST /clinic/appointments</text>
-  <text x="898" y="490" font-size="8.8" fill="#4a4a45">the one real external effect, carrying the idempotency key</text>
-  <text x="898" y="501" font-size="8.8" fill="#4a4a45">derived from (case_id, action, canonical args)</text>
+  <!-- provider two: a real AWS boundary with none of the clinic's affordances -->
+  <rect x="886" y="518" width="314" height="150" rx="7" fill="#ffffff" stroke="#6b6b66"/>
+  <text x="898" y="538" font-size="11" font-weight="700" fill="#22221f">Amazon S3</text>
+  <g font-size="8.6" fill="#4a4a45">
+    <text x="898" y="554">No idempotency key and no notion of an action, so every</text>
+    <text x="898" y="566">guarantee is assembled from create-once primitives. A 412</text>
+    <text x="898" y="578">is settled by fetching and comparing the bytes.</text>
+  </g>
+  <rect x="898" y="588" width="290" height="36" rx="5" fill="#ffffff" stroke="#315e52" stroke-width="1.6"/>
+  <text x="908" y="603" font-size="9.2" font-weight="700" font-family="ui-monospace, Consolas, monospace" fill="#22221f">PutObject(IfNoneMatch="*")</text>
+  <text x="908" y="616" font-size="8.2" fill="#4a4a45">upload_document, create-once under that same frozen identity</text>
+  <rect x="898" y="628" width="290" height="36" rx="5" fill="#ffffff" stroke="#b4622f" stroke-width="1.6" stroke-dasharray="5 3"/>
+  <text x="908" y="643" font-size="9.2" font-weight="700" font-family="ui-monospace, Consolas, monospace" fill="#22221f">GetObject</text>
+  <text x="908" y="656" font-size="8.2" fill="#4a4a45">a fresh read; the bytes are digested here, not taken on trust</text>
 
-  <text x="886" y="534" font-size="9.4" fill="#55554f">The other three effects — send_email, upload_document,</text>
-  <text x="886" y="548" font-size="9.4" fill="#55554f">grant_portal_access — are simulated, and verification of</text>
-  <text x="886" y="562" font-size="9.4" fill="#55554f">those closes the loop on the decision, not on the world.</text>
+  <text x="886" y="692" font-size="9.4" fill="#55554f">The other two effects — send_email and grant_portal_access —</text>
+  <text x="886" y="706" font-size="9.4" fill="#55554f">are simulated, and verification of those closes the loop on the</text>
+  <text x="886" y="720" font-size="9.4" fill="#55554f">decision, not on the world.</text>
 
-  <!-- effect out, read-back in -->
-  <path d="M 772 475 L 882 475" stroke="#315e52" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
-  <path d="M 786 402 L 882 402" stroke="#b4622f" stroke-width="2" fill="none" stroke-dasharray="7 4" marker-end="url(#arrow-copper)"/>
-  <path d="M 774 394 L 774 402 L 786 402" stroke="#b4622f" stroke-width="2" fill="none"/>
+  <!-- effects out (solid), independent read-backs in (dashed); one trunk each, two providers -->
+  <g stroke="#315e52" stroke-width="2" fill="none">
+    <path d="M 772 475 L 862 475"/>
+    <path d="M 862 446 L 862 606"/>
+    <path d="M 862 446 L 894 446" marker-end="url(#arrow)"/>
+    <path d="M 862 606 L 894 606" marker-end="url(#arrow)"/>
+  </g>
+  <g stroke="#b4622f" stroke-width="2" fill="none" stroke-dasharray="7 4">
+    <path d="M 800 394 L 800 402 L 856 402 L 856 646"/>
+    <path d="M 856 486 L 894 486" marker-end="url(#arrow-copper)"/>
+    <path d="M 856 646 L 894 646" marker-end="url(#arrow-copper)"/>
+  </g>
 
   <!-- ====================== CONTROLLED zone ====================== -->
   <rect x="24" y="612" width="822" height="144" rx="10" fill="#fdf4e4" stroke="#cfa95f"/>
@@ -259,7 +299,7 @@
 
   <!-- ======================== deployed ======================== -->
   <text x="40" y="800" font-size="12" font-weight="700" fill="#55554f" letter-spacing="1.2">DEPLOYED</text>
-  <text x="128" y="800" font-size="11" fill="#55554f">everything above runs in one process on one host; the clinic runs in another</text>
+  <text x="128" y="800" font-size="11" fill="#55554f">CareLoop runs as one application process; Demo World runs as a second process on the same EC2 host.</text>
 
   <g font-size="9" fill="#4a4a45">
     <rect x="40" y="818" width="104" height="60" rx="7" fill="#ffffff" stroke="#6b6b66"/>

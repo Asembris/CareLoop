@@ -23,12 +23,12 @@ confirms what happened.**
 
 <sub>Live, nothing to install, nothing to sign into.</sub>
 
-[![CI](https://github.com/Asembris/CareLoop/actions/workflows/ci.yml/badge.svg)](https://github.com/Asembris/CareLoop/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/Asembris/CareLoop/ci.yml?branch=main&logo=githubactions&logoColor=white&label=CI)](https://github.com/Asembris/CareLoop/actions/workflows/ci.yml)
 [![unauthorized actions 0 / 320](https://img.shields.io/badge/unauthorized%20actions-0%20%2F%20320-315e52)](docs/security-evaluation.md)
-[![python 3.12](https://img.shields.io/badge/python-3.12-55554f)](pyproject.toml)
+[![python 3.12](https://img.shields.io/badge/python-3.12-55554f?logo=python&logoColor=white)](pyproject.toml)
 [![built on Strands Agents](https://img.shields.io/badge/built%20on-Strands%20Agents-55554f)](https://github.com/strands-agents/sdk-python)
-[![AWS AgentCore Evaluations](https://img.shields.io/badge/AWS-AgentCore%20Evaluations-55554f)](docs/agentcore-evaluations-proof.md)
-[![license Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-55554f)](LICENSE)
+[![AWS AgentCore Evaluations](https://img.shields.io/badge/AgentCore%20Evaluations-55554f)](docs/agentcore-evaluations-proof.md)
+[![license Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-55554f?logo=apache&logoColor=white)](LICENSE)
 
 </div>
 

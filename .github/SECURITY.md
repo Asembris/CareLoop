@@ -6,7 +6,7 @@ CareLoop is an open-source demonstration project, built for a hackathon. It is n
 carries no long-term support: no maintained release branches, no backports, no security
 certification. Work happens on `main`, and that is the only place a fix will appear. What has been
 evaluated, and what deliberately has not, is maintained in
-[`docs/security-evaluation.md`](../docs/security-evaluation.md) — read its own section on what the
+[`docs/security-evaluation.md`](https://github.com/Asembris/CareLoop/blob/main/docs/security-evaluation.md) — read its own section on what the
 evaluation does not cover before deciding whether something is in scope.
 
 ## Reporting a vulnerability
@@ -26,7 +26,7 @@ agreed that publishing is safe.
 - the smallest set of steps that reproduces it;
 - whether it happened locally or against the public demo;
 - which documented invariant you believe is broken, if you can name one — they are numbered in
-  [`CLAUDE.md`](../CLAUDE.md);
+  [`CLAUDE.md`](https://github.com/Asembris/CareLoop/blob/main/CLAUDE.md);
 - the impact as you understand it.
 
 Reproducible offline evidence — a failing test, or steps against a local checkout — is the most
@@ -57,7 +57,7 @@ Several behaviours look like weaknesses and are deliberate, measured and documen
 `X-Caregiver` being an audit identity rather than authentication, and `?session=` being an isolation
 namespace rather than a credential, are two of them. The maintained scope lives in the README's
 *What this does not claim* and *Honest limits* sections and in
-[`docs/security-evaluation.md`](../docs/security-evaluation.md) — please check there first.
+[`docs/security-evaluation.md`](https://github.com/Asembris/CareLoop/blob/main/docs/security-evaluation.md) — please check there first.
 
 **But:** if a documented invariant does not actually hold, or one of these behaviours turns out to
 be reachable in a materially different way from the way it is documented, that is a real security
@@ -70,4 +70,4 @@ CVE process, and no promise of a published advisory for every report — this is
 and saying otherwise would be a promise nobody can keep. If a report leads to a fix and you would
 like to be credited, say so and you will be.
 
-For anything that is not a security issue, see [CONTRIBUTING.md](CONTRIBUTING.md).
+For anything that is not a security issue, see [CONTRIBUTING.md](https://github.com/Asembris/CareLoop/blob/main/.github/CONTRIBUTING.md).

@@ -1,13 +1,13 @@
 # Contributing to CareLoop
 
 CareLoop is an autonomous administrative agent for family caregivers, built for the AWS
-*Agents for Humans* hackathon and licensed [Apache-2.0](../LICENSE). Its position is that the
+*Agents for Humans* hackathon and licensed [Apache-2.0](https://github.com/Asembris/CareLoop/blob/main/LICENSE). Its position is that the
 model proposes, deterministic code authorises, and a separate read of an external system confirms
 what happened. Contributions are welcome on those terms.
 
 ## Before you start
 
-Read [`CLAUDE.md`](../CLAUDE.md). It carries the architecture invariants, the trust model and the
+Read [`CLAUDE.md`](https://github.com/Asembris/CareLoop/blob/main/CLAUDE.md). It carries the architecture invariants, the trust model and the
 reasoning behind both.
 
 **Those invariants are correctness constraints, not style preferences.** They are what the security
@@ -18,7 +18,7 @@ around it locally.
 ## Local setup
 
 Python **3.12** and Node **24** (`.nvmrc`). The full quickstart is in the
-[README](../README.md#quickstart); the short form is:
+[README](https://github.com/Asembris/CareLoop/blob/main/README.md#quickstart); the short form is:
 
 ```bash
 python -m venv .venv
@@ -36,8 +36,8 @@ python -m evals.replay
 
 The suite runs offline on a mock model provider, so all four are free and need nothing configured.
 
-For the frontend and the end-to-end suite, follow [`frontend/README.md`](../frontend/README.md)
-and [`e2e/README.md`](../e2e/README.md) rather than a copy of their commands here.
+For the frontend and the end-to-end suite, follow [`frontend/README.md`](https://github.com/Asembris/CareLoop/blob/main/frontend/README.md)
+and [`e2e/README.md`](https://github.com/Asembris/CareLoop/blob/main/e2e/README.md) rather than a copy of their commands here.
 
 **CI runs more than the Python suite.** The schema, frontend and end-to-end jobs are separate and
 every one of them blocks a merge. Check the workflow run on your pull request rather than assuming
@@ -55,7 +55,7 @@ and CI asserts that rather than assuming it. Please keep it that way:
 
 ## What a change must not weaken
 
-Kept deliberately high-level; [`CLAUDE.md`](../CLAUDE.md) is the source of truth for each of these.
+Kept deliberately high-level; [`CLAUDE.md`](https://github.com/Asembris/CareLoop/blob/main/CLAUDE.md) is the source of truth for each of these.
 
 - **Deny-by-default authority.** The model never holds authority, and every tool call is decided by
   the deterministic policy engine.

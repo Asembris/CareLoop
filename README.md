@@ -16,10 +16,12 @@
 confirms what happened.**
 
 [![Live demo](https://img.shields.io/badge/Live%20demo-315e52?style=for-the-badge)](https://d2heuwvhvrdyig.cloudfront.net)
+[![Demo video](https://img.shields.io/badge/Demo%20video-315e52?style=for-the-badge)](https://youtu.be/d96tKDk2p-M)
 [![Guided tour](https://img.shields.io/badge/Guided%20tour-975529?style=for-the-badge)](docs/judges.md)
 [![Architecture](https://img.shields.io/badge/Architecture-55554f?style=for-the-badge)](docs/architecture.md)
 [![Security evaluation](https://img.shields.io/badge/Security%20evaluation-55554f?style=for-the-badge)](docs/security-evaluation.md)
 [![AgentCore proof](https://img.shields.io/badge/AgentCore%20proof-55554f?style=for-the-badge)](docs/agentcore-evaluations-proof.md)
+[![Devpost submission](https://img.shields.io/badge/Devpost%20submission-55554f?style=for-the-badge)](https://devpost.com/software/careloop-ec67bo)
 
 <sub>Live, nothing to install, nothing to sign into.</sub>
 

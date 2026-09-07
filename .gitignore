@@ -62,3 +62,4 @@ Thumbs.db
 # 63 KB binary nothing in the build reads and nothing here can regenerate.
 careloop-motion.zip
 careloop-site.zip
+artifacts/

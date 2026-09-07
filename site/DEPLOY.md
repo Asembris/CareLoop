@@ -1,11 +1,12 @@
 # Deploying to GitHub Pages
 
 The dossier deploys from this repository as a **GitHub project site**, at
-`https://<owner>.github.io/CareLoop/`. What is published is `site/`, and what is
-served is `site/index.html`, which `adapt.py` generates from the vendored bundle.
+`https://<owner>.github.io/CareLoop/`. What is published is the generated
+`index.html` — which `adapt.py` produces from the vendored bundle — together with
+`assets/` and `.nojekyll`, committed to the root of the orphan `gh-pages` branch.
 
 Nothing here is hand-assembled, so the deployment procedure is: run `adapt.py`,
-pass the gates, publish the directory.
+pass the gates, publish the generated artifact.
 
 ## The project path is the only path
 
@@ -23,10 +24,22 @@ If you add an asset later, keep the reference relative.
 **No Pages workflow exists yet, and publishing is a manual act.**
 `.github/workflows/` carries CI and the demo health check and nothing that
 builds or publishes this directory — so today the procedure is by hand: run
-`adapt.py`, pass the two gates, and upload `site/` as the Pages artifact
-(Settings → Pages → Build and deployment: source `GitHub Actions`). When the
-workflow is written it should do exactly that from `main` only, with pull
-requests validating without publishing — a failed gate uploads nothing, so the
+`adapt.py`, pass the two gates, and commit the generated artifact to the orphan
+`gh-pages` branch, which is what Pages serves (Settings → Pages → Build and
+deployment: **Deploy from a branch**, `gh-pages` / `(root)`).
+
+**What is published is the *contents* of `site/` at the branch root** —
+`index.html`, `assets/` and `.nojekyll`, and nothing else. The vendored bundle,
+`src/`, `tests/`, `docs/`, `adapt.py` and `site.toml` stay on `main` and are
+never published. `gh-pages` is an orphan branch sharing no history with `main`,
+so it is a published artifact rather than a parallel copy of the project: its
+`index.html` reproduces byte for byte from `adapt.py`, and keeping that true is
+the point of publishing generated output rather than hand-edited output.
+
+**Do not switch the source to `GitHub Actions`.** That is a different Pages
+topology, and selecting it takes down the branch-served site. When a workflow is
+eventually written it should publish to `gh-pages` from `main` only, with pull
+requests validating without publishing — a failed gate publishes nothing, so the
 previously deployed version stays exactly as it was.
 
 Two things must be true before the first deploy, and neither is about this

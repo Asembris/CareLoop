@@ -293,24 +293,42 @@ test.describe("the dossier under the GitHub project path", () => {
     await expect(page.getByText("Repository pending")).toHaveCount(0);
   });
 
-  test("the absent video and Devpost destinations stay pending, not broken", async ({ page }) => {
+  test("the demo film is linked, and Devpost renders nowhere at all", async ({ page }) => {
     await open(page);
 
-    // No film exists, so the demo panel stays a same-page jump and "Play film" is never offered.
-    await expect(page.getByRole("link", { name: /Play film/ })).toHaveCount(0);
+    const FILM = "https://youtu.be/d96tKDk2p-M";
+
+    // The film exists, so the pending pill is gone and "Play film" is offered exactly once.
+    await expect(page.getByText("Demo film coming soon")).toHaveCount(0);
+    const film = page.getByRole("link", { name: /Play film/ });
+    await expect(film).toHaveCount(1);
+    await expect(film).toHaveAttribute("href", FILM);
+    await expect(film).toHaveAttribute("target", "_blank");
+    expect(await film.getAttribute("rel")).toContain("noopener");
+
+    // "Watch demo" is two different things and stays two different things. The hero and closing
+    // rows are hardcoded same-page jumps to the demo chapter; only the three-minutes panel is
+    // driven by `videoUrl`, so exactly one of them leaves the page.
     const demoPanel = await page.evaluate(() =>
       [...document.querySelectorAll("a")]
         .filter((a) => (a.textContent ?? "").includes("Watch demo"))
         .map((a) => ({ href: a.getAttribute("href") ?? "", target: a.getAttribute("target") ?? "" })),
     );
-    expect(demoPanel.length).toBeGreaterThan(0);
-    for (const panel of demoPanel) {
-      // A same-page jump to the demo chapter. Some carry an explicit `_self` and some carry no
-      // target at all, which are the same behaviour; what matters is that none opens a new tab.
-      expect(panel.href).toBe("#demo");
-      expect(panel.target).not.toBe("_blank");
+    const inPage = demoPanel.filter((a) => a.href === "#demo");
+    const toFilm = demoPanel.filter((a) => a.href === FILM);
+    expect(inPage.length).toBeGreaterThan(0);
+    expect(toFilm.length).toBe(1);
+    expect(inPage.length + toFilm.length).toBe(demoPanel.length);
+    for (const anchor of inPage) {
+      // Some carry an explicit `_self` and some carry no target at all, which are the same
+      // behaviour; what matters is that a same-page jump never opens a new tab.
+      expect(anchor.target).not.toBe("_blank");
     }
+    expect(toFilm[0].target).toBe("_blank");
+
     // Devpost is read by no markup at all, so it must render nowhere rather than render empty.
+    // The submission exists and is reachable from README.md; `devpost_url` stays unconfigured
+    // because a value here would go nowhere, and this is the assertion that says so.
     // Asserted on rendered text and on link destinations, not on innerHTML: the prop is declared
     // in the runtime's `data-props` attribute, so its *name* is in the DOM whether or not
     // anything uses it, and matching that would be testing the declaration rather than the page.

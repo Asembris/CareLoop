@@ -15,7 +15,8 @@ The properties, in the order they would fail if the adaptation broke:
 * every local asset the head and the lightbox name actually exists on disk
 * nothing points at an origin the page does not serve itself
 * no path is root-absolute, which would 404 under ``/<repo>/``
-* every destination and every result is still empty, because Phase 1 publishes no claims
+* every published destination and result is exactly what is configured, and Devpost — which no
+  markup reads — is still empty
 * the substitution machinery is not vacuous — a temporary config proves it lands
 * nothing that looks like a secret or a local filesystem path was introduced
 
@@ -207,7 +208,11 @@ def main() -> int:
     # The two destinations that exist, asserted as exact strings rather than by substring: a
     # truncated or trailing-slash variant would still "contain" the host and would still be wrong.
     destinations = config["destinations"]
-    for prop, key in (("liveUrl", "live_url"), ("githubUrl", "github_url")):
+    for prop, key in (
+        ("liveUrl", "live_url"),
+        ("githubUrl", "github_url"),
+        ("videoUrl", "video_url"),
+    ):
         expected = destinations[key]
         check(f"PROJECT.{prop} is exactly the configured URL", f'{prop}: "{expected}"' in template)
         # The prop default is the one the runtime actually reads: the page resolves
@@ -227,11 +232,17 @@ def main() -> int:
         destinations["github_url"] == "https://github.com/Asembris/CareLoop",
         destinations["github_url"],
     )
-    # The two that do not exist. No video and no Devpost entry are recorded anywhere in the
-    # repository, so these stay empty and the page's own fallbacks stay in charge.
-    for prop in ("devpostUrl", "videoUrl"):
-        check(f"PROJECT.{prop} is still empty", f'{prop}: ""' in template)
-    check("no invented video URL", "videoUrl" in template and 'videoUrl: ""' in template)
+    check(
+        "the demo film is the submitted one",
+        destinations["video_url"] == "https://youtu.be/d96tKDk2p-M",
+        destinations["video_url"],
+    )
+    # Devpost is the one destination that stays empty, and not because the entry is missing: no
+    # markup reads `devpostUrl`, so a value would render nowhere and claim a call to action the
+    # design does not have. Asserted here so filling it is a deliberate act taken together with
+    # the markup that would consume it, rather than a value quietly going nowhere.
+    check("PROJECT.devpostUrl is still empty", 'devpostUrl: ""' in template)
+    check("and nothing is configured for it", not destinations["devpost_url"])
 
     print("\nthe page describes the product this repository actually contains")
     # Session W. Every pair in `COPY_CORRECTIONS` replaces a claim a judge could falsify by reading

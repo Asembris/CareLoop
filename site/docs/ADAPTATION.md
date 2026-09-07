@@ -128,9 +128,10 @@ URLs sitting in `PROJECT`, all seven call-to-action anchors still rendered "Depl
 well and keeps `PROJECT` in step with it, and `tests/check_site.py` asserts both, so a URL that
 reaches only one of them fails the gate instead of quietly rendering as pending.
 
-Empty stays empty in both places, which is what keeps the absent video and Devpost destinations
-correct: an empty `video_url` leaves the demo panel a same-page jump to the demo chapter and hides
-"Play film", and `devpost_url` is read by no markup at all.
+Empty stays empty in both places, which is what keeps an absent destination correct: an empty
+`video_url` would leave the demo panel a same-page jump to the demo chapter and hide "Play film".
+`video_url` is now filled, so both open the film. `devpost_url` is read by no markup at all, which
+is why it stays empty even though the submission exists.
 
 ### 6. The mobile stylesheet, carried from `src/`
 

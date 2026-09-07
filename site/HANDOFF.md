@@ -108,8 +108,8 @@ Each of these was built to solve a specific problem and is easy to regress:
 |---|---|---|
 | Deployment URL | `liveUrl` prop | The running app's URL |
 | Repository URL | `githubUrl` prop | The public repo |
-| Demo film URL | `videoUrl` prop | The submission video |
-| Devpost URL | `devpostUrl` prop | The submission page |
+| ~~Demo film URL~~ | `videoUrl` prop | **Filled, the submission video** |
+| Devpost URL | `devpostUrl` prop | Nothing — no markup reads it; the entry is linked from README.md |
 | ~~Six metric results~~ | `[evidence]` in `site.toml` | **Filled, session W** |
 | Source links | Architecture detail, `SOURCE` rows | Repository file paths |
 

@@ -75,9 +75,13 @@ the page, and no unconfigured result-shaped string does.
 unsafe happened and nothing was performed, and publishing `25 of 25` would be exactly the
 dishonesty this ledger exists to refuse.
 
-The two empty *destinations* — the submission video and the Devpost entry — stay empty, because
-neither exists. An empty destination renders "Deployment pending" / "Repository pending" and falls
-back to an in-page anchor, so nothing is ever a dead link.
+The submission film is configured and needs no markup change: the bundle already carries the
+conditional, so the demo panel opens the film in a new tab and "Play film" replaces the pending
+pill. **The Devpost entry stays empty, and not because it is missing** — no markup reads
+`devpostUrl`, so a value would render nowhere and claim a call to action the design does not have.
+Adding one means new markup in the vendored bundle, which is locked; the entry is exposed from the
+repository README instead. An empty destination renders "Deployment pending" / "Repository pending"
+and falls back to an in-page anchor, so nothing is ever a dead link.
 
 ## Provenance
 

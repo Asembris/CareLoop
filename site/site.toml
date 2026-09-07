@@ -48,15 +48,21 @@ favicon = "assets/careloop-mark.svg"
 # visibility decision rather than a wrong value, and it is the reason the evidence SOURCE rows are
 # still left pending.
 #
-# The other two stay empty on purpose. No submission video and no Devpost entry exist in the
-# repository, and the page's fallbacks are designed for exactly that: an empty `video_url` turns
-# the demo panel into a same-page jump to the demo chapter and hides "Play film", and
-# `devpost_url` is read by no markup at all.
+# `video_url` is the submitted demo film. Filling it needs no markup change: the bundle already
+# carries the conditional, so the demo panel stops being a same-page jump, "Demo film coming soon"
+# is replaced by "Play film" and both open the film in a new tab.
+#
+# `devpost_url` stays empty, and the reason is not that the entry is missing — the submission
+# exists. **No markup reads it.** `devpostUrl` occurs twice in the page, as a prop declaration and
+# as a `PROJECT` field, and nothing consumes either, so a value here would render nowhere and only
+# claim a call to action the design does not have. Adding one means new markup in the vendored
+# bundle, which is the fidelity surface and may not be rebuilt here. The Devpost entry is exposed
+# from README.md instead, and this stays empty until the page has somewhere to put it.
 [destinations]
 live_url = "https://d2heuwvhvrdyig.cloudfront.net"
 github_url = "https://github.com/Asembris/CareLoop"
 devpost_url = ""
-video_url = ""
+video_url = "https://youtu.be/d96tKDk2p-M"
 
 # The six proof-ledger results, by their id in the page's EVIDENCE array.
 #

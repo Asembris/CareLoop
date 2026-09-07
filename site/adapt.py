@@ -401,7 +401,8 @@ def _fill_project_config(text: str, destinations: dict[str, str]) -> str:
     So the prop default is set as well, and ``PROJECT`` is kept in step with it rather than left
     behind — the two disagreeing would be a trap for whoever reads this next. An empty value is
     still left exactly as it was in both places, so the dossier's pending states survive byte for
-    byte, which is what keeps the absent video and Devpost destinations correct.
+    byte, which is what keeps an absent destination correct — ``devpost_url``, which no markup
+    reads, is the one that stays that way.
     """
     for key, prop in (
         ("live_url", "liveUrl"),
